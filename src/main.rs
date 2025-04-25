@@ -12,6 +12,44 @@ use {
     }, std::{cmp::max, path::Path, u32}
 };
 
+struct Plando {
+    game_data: GameData,
+    room_data: Vec<RoomData>,
+    atlas_tex: FBox<graphics::Texture>,
+    maps_vanilla: MapRepository,
+    maps_standard: MapRepository,
+    maps_wild: MapRepository,
+    map: Map
+}
+
+impl Plando {
+    fn new() -> Self {
+        let game_data = load_game_data().unwrap();
+        let (atlas_image, room_data) = load_room_sprites(&game_data).unwrap();
+        let atlas_tex = graphics::Texture::from_image(&atlas_image, graphics::Rect::default()).unwrap();
+
+        let vanilla_map_path = Path::new("../maps/vanilla");
+        let standard_maps_path = Path::new("../maps/v117c-standard");
+        let wild_maps_path = Path::new("../maps/v117c-wild");
+    
+        let maps_vanilla = MapRepository::new("Vanilla", vanilla_map_path).unwrap();
+        let maps_standard = MapRepository::new("Standard", standard_maps_path).unwrap();
+        let maps_wild = MapRepository::new("Wild", wild_maps_path).unwrap();
+
+        let map = roll_map(&maps_vanilla, &game_data).unwrap();
+
+        Plando {
+            game_data,
+            room_data,
+            atlas_tex,
+            maps_vanilla,
+            maps_standard,
+            maps_wild,
+            map
+        }
+    }
+}
+
 fn load_game_data() -> Result<GameData> {
     let sm_json_data_path = Path::new("../sm-json-data");
     let room_geometry_path = Path::new("../room_geometry.json");
@@ -173,7 +211,7 @@ fn get_explored_color(value: u8, area: usize) -> graphics::Color {
 }
 
 // Creates a texture atlas and maps all rooms into it
-fn load_room_sprites(game_data: &GameData) -> Result<(sfml::cpp::FBox<graphics::Image>, Vec<RoomData>)> {
+fn load_room_sprites(game_data: &GameData) -> Result<(FBox<graphics::Image>, Vec<RoomData>)> {
     let mut image_mappings = Vec::new();
 
     for map_tile_data in &game_data.map_tile_data {
@@ -480,26 +518,17 @@ fn roll_map(repo: &MapRepository, game_data: &GameData) -> Result<Map> {
 
 fn main() {
 
-    let game_data = load_game_data().unwrap();
-
-    let vanilla_map_path = Path::new("../maps/vanilla");
-    let standard_maps_path = Path::new("../maps/v117c-standard");
-    let wild_maps_path = Path::new("../maps/v117c-wild");
+    let mut plando = Plando::new();
 
     //let rom_path = Path::new("C:/Users/Loptr/Desktop/Super Metroid/Original ROM/Super Metroid (JU) [!].smc");
     //let rom_original = load_vanilla_rom(rom_path).unwrap();
 
-    let maps_vanilla = MapRepository::new("Vanilla", vanilla_map_path).unwrap();
-    let maps_standard = MapRepository::new("Standard", standard_maps_path).unwrap();
-    let maps_wild = MapRepository::new("Wild", wild_maps_path).unwrap();
-
-    let mut map = roll_map(&maps_vanilla, &game_data).unwrap();
-
     let preset_path = Path::new("./data/presets/full-settings/Community Race Season 3 (No animals).json");
     let mut randomizer_settings = load_preset(preset_path).unwrap();
 
-    let (atlas_image, room_data) = load_room_sprites(&game_data).unwrap();
-    let atlas_tex = graphics::Texture::from_image(&atlas_image, graphics::Rect::default()).unwrap();
+    let game_data = &plando.game_data;
+    let atlas_tex = &plando.atlas_tex;
+    let room_data = &plando.room_data;
     //let difficulty_tiers = maprando::randomize::get_difficulty_tiers(&randomizer_settings, game_data.p, &game_data, implicit_tech, implicit_notables);
 
     /*let randomization = Randomization {
@@ -606,7 +635,7 @@ fn main() {
         // Draw the entire map
         for i in 0..room_data.len() {
             let data = &room_data[i];
-            let (x, y) = map.rooms[data.room_idx];
+            let (x, y) = plando.map.rooms[data.room_idx];
             let room_geometry = &game_data.room_geometry[data.room_idx];
 
             // Draw the background color
@@ -618,7 +647,7 @@ fn main() {
                     let cell_x = (local_x + x) * 8;
                     let cell_y = (local_y + y) * 8;
                     let color_value = if room_geometry.heated { 2 } else { 1 };
-                    let cell_color = get_explored_color(color_value, map.area[data.room_idx]);
+                    let cell_color = get_explored_color(color_value, plando.map.area[data.room_idx]);
                     let mut bg_rect = graphics::RectangleShape::with_size(Vector2f::new(8.0, 8.0));
                     bg_rect.set_position(Vector2f::new(cell_x as f32, cell_y as f32));
                     bg_rect.set_fill_color(cell_color);
@@ -700,15 +729,15 @@ fn main() {
                     });
                     ui.menu_button("Map", |ui| {
                         if ui.button("Reroll Map (Vanilla)").clicked() {
-                            map = roll_map(&maps_vanilla, &game_data).unwrap();
+                            plando.map = roll_map(&plando.maps_vanilla, &game_data).unwrap();
                             ui.close_menu();
                         }
                         if ui.button("Reroll Map (Standard)").clicked() {
-                            map = roll_map(&maps_standard, &game_data).unwrap();
+                            plando.map = roll_map(&plando.maps_standard, &game_data).unwrap();
                             ui.close_menu();
                         }
                         if ui.button("Reroll Map (Wild)").clicked() {
-                            map = roll_map(&maps_wild, &game_data).unwrap();
+                            plando.map = roll_map(&plando.maps_wild, &game_data).unwrap();
                         }
                     });
                 });
