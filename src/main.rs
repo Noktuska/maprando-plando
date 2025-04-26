@@ -1,7 +1,7 @@
 use {
-    anyhow::{bail, Result}, egui_sfml::{egui::{self, Id}, SfEgui}, hashbrown::HashMap, maprando::{
+    anyhow::{bail, Result}, egui_sfml::{egui::{self, Color32, Id}, SfEgui}, hashbrown::HashMap, maprando::{
         map_repository::MapRepository, patch::Rom, preset::PresetData, randomize::{DifficultyConfig, Randomization, Randomizer}, settings::RandomizerSettings, traverse::LockedDoorData
-    }, maprando_game::{GameData, LinksDataGroup, Map, MapTileEdge, MapTileInterior, MapTileSpecialType}, rand::{
+    }, maprando_game::{GameData, HubLocation, Item, LinksDataGroup, Map, MapTileEdge, MapTileInterior, MapTileSpecialType, StartLocation}, rand::{
         RngCore, SeedableRng
     }, sfml::{
         cpp::FBox, graphics::{
@@ -9,7 +9,7 @@ use {
         }, system::Vector2f, window::{
             mouse, ContextSettings, Event, Style
         }
-    }, std::{cmp::max, path::Path, u32}
+    }, std::{cmp::{max, min}, path::Path, u32}
 };
 
 struct Plando {
@@ -19,7 +19,9 @@ struct Plando {
     maps_vanilla: MapRepository,
     maps_standard: MapRepository,
     maps_wild: MapRepository,
-    map: Map
+    map: Map,
+
+    valid_start_locations: Vec<(StartLocation, HubLocation)>,
 }
 
 impl Plando {
@@ -45,8 +47,13 @@ impl Plando {
             maps_vanilla,
             maps_standard,
             maps_wild,
-            map
+            map,
+            valid_start_locations: Vec::new(),
         }
+    }
+
+    fn calc_valid_start_locations(&mut self) {
+
     }
 }
 
@@ -468,8 +475,7 @@ fn load_room_sprites(game_data: &GameData) -> Result<(FBox<graphics::Image>, Vec
 }
 
 fn roll_map(repo: &MapRepository, game_data: &GameData) -> Result<Map> {
-    let rng_seed = [0u8; 32];
-    let mut rng = rand::rngs::StdRng::from_seed(rng_seed);
+    let mut rng = rand::rngs::StdRng::from_entropy();
 
     let map_seed = (rng.next_u64() & 0xFFFFFFFF) as usize;
     repo.get_map(1, map_seed, game_data)
@@ -567,6 +573,7 @@ fn main() {
     let tex_item_width = (tex_items.size().x / 24) as i32;
 
     let mut x_sidebar = window.size().x - 320;
+    let sidebar_height = 64.0;
 
     let mut sfegui = SfEgui::new(&window);
 
@@ -574,15 +581,23 @@ fn main() {
     let mut modal_load_preset_path = "".to_string();
     let mut error_modal_message: Option<String> = None;
 
+    let mut sidebar_selection = 0;
+    let max_sidebar_selection = 31;
+
     while window.is_open() {
         while let Some(ev) = window.poll_event() {
             sfegui.add_event(&ev);
 
             match ev {
                 Event::Closed => { window.close(); }
-                Event::MouseButtonPressed { button, .. } => {
+                Event::MouseButtonPressed { button, x, y } => {
                     if button == mouse::Button::Left {
                         is_mouse_down = true;
+
+                        if x > x_sidebar as i32 {
+                            sidebar_selection = (y as f32 / sidebar_height).floor() as i32;
+                            sidebar_selection = min(max(sidebar_selection, 0), max_sidebar_selection);
+                        }
                     } else if button == mouse::Button::Middle {
                         zoom = 1.0;
                     }
@@ -703,11 +718,24 @@ fn main() {
 
         // Draw GUI
         // Draw Item/Door Select Sidebar
-        let mut sidebar_rect = graphics::RectangleShape::new();
+        /*let mut sidebar_rect = graphics::RectangleShape::new();
         sidebar_rect.set_position((x_sidebar as f32, 0.0));
         sidebar_rect.set_size((320.0, window.size().y as f32));
         sidebar_rect.set_fill_color(graphics::Color::rgb(0x0F, 0x0F, 0x0F));
         window.draw(&sidebar_rect);
+
+        // Highlight selected sidebar element
+        sidebar_rect.set_position((x_sidebar as f32 + 2.0, 2.0 + sidebar_selection as f32 * sidebar_height));
+        sidebar_rect.set_size((x_sidebar as f32 - 4.0, sidebar_height - 4.0));
+        sidebar_rect.set_fill_color(graphics::Color::rgb(0x2F, 0x2F, 0x2F));
+        window.draw(&sidebar_rect);
+
+        // Draw sidebar elements
+        for i in 0..max_sidebar_selection {
+            let mut text = graphics::Text::new(&i.to_string(), &font_default, 16);
+            text.set_position((x_sidebar as f32 + 16.0, i as f32 * sidebar_height));
+            window.draw(&text);
+        }*/
 
         // Draw Menu Bar
         let gui = sfegui.run(&mut window, |_rt, ctx| {
@@ -741,6 +769,20 @@ fn main() {
                         }
                     });
                 });
+            });
+
+            egui::SidePanel::right("panel_item_select").show(ctx, |ui| {
+                egui::Grid::new("grid_item_select")
+                    .with_row_color(|val, style| {
+                        Some(Color32::from_rgb((val * 255 / 31) as u8, 0, 0))
+                    }).show(ui, |ui| {
+                        for row in 0..max_sidebar_selection {
+                            for col in 0..3 {
+                                ui.label(format!("({row}, {col})"));
+                            }
+                            ui.end_row();
+                        }
+                    });
             });
 
             if show_load_preset_modal {
