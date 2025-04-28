@@ -1,15 +1,15 @@
 use {
-    anyhow::{bail, Context, Result}, egui_sfml::{egui::{self, Color32, Id, Sense, Widget}, SfEgui, UserTexSource}, hashbrown::HashMap, maprando::{
-        map_repository::MapRepository, patch::Rom, preset::PresetData, randomize::{DifficultyConfig, Randomization, Randomizer}, settings::RandomizerSettings, traverse::LockedDoorData
-    }, maprando_game::{GameData, HubLocation, Item, LinksDataGroup, Map, MapTileEdge, MapTileInterior, MapTileSpecialType, StartLocation}, rand::{
+    anyhow::{bail, Context, Result}, egui_sfml::{egui::{self, Color32, Id, Sense, TextureId, Ui, Vec2}, SfEgui, UserTexSource}, hashbrown::HashMap, maprando::{
+        map_repository::MapRepository, patch::Rom, preset::PresetData, settings::{DoorsMode, ItemCount, RandomizerSettings, WallJump}
+    }, maprando_game::{GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType}, rand::{
         RngCore, SeedableRng
     }, sfml::{
         cpp::FBox, graphics::{
-            self, Color, FloatRect, IntRect, RectangleShape, RenderTarget, RenderTexture, RenderWindow, Shape, Text, Transformable
-        }, system::{Vector2f, Vector2i}, window::{
-            mouse, ContextSettings, Event, Style
+            self, Color, IntRect, RenderTarget, RenderWindow, Shape, Transformable
+        }, system::Vector2f, window::{
+            mouse, Event, Style
         }
-    }, std::{cmp::{max, min}, hash::Hash, path::Path, u32}
+    }, std::{cmp::max, path::Path, u32}
 };
 
 struct Plando {
@@ -20,8 +20,6 @@ struct Plando {
     maps_standard: MapRepository,
     maps_wild: MapRepository,
     map: Map,
-
-    valid_start_locations: Vec<(StartLocation, HubLocation)>,
 }
 
 impl Plando {
@@ -48,12 +46,7 @@ impl Plando {
             maps_standard,
             maps_wild,
             map,
-            valid_start_locations: Vec::new(),
         }
-    }
-
-    fn calc_valid_start_locations(&mut self) {
-
     }
 }
 
@@ -474,11 +467,153 @@ fn load_room_sprites(game_data: &GameData) -> Result<(FBox<graphics::Image>, Vec
     Ok((atlas, room_data))
 }
 
+fn generate_door_sprites() -> Result<FBox<graphics::Image>> {
+    let mut img_doors = graphics::Image::new_solid(3 * 8, 8, Color::TRANSPARENT).unwrap();
+    for x in 0..8 {
+        let door_color_index = match x {
+            0 | 5 => 7,
+            1 | 7 => 14,
+            2 | 6 => 6,
+            3 => 15,
+            4 => 8,
+            _ => 15
+        };
+        
+        img_doors.set_pixel(3 * x + 2, 3, get_explored_color(12, 0))?;
+        img_doors.set_pixel(3 * x + 2, 4, get_explored_color(12, 0))?;
+        
+        img_doors.set_pixel(3 * x, 3, get_explored_color(door_color_index, 0))?;
+        img_doors.set_pixel(3 * x + 1, 3, get_explored_color(door_color_index, 0))?;
+        img_doors.set_pixel(3 * x, 4, get_explored_color(door_color_index, 0))?;
+        img_doors.set_pixel(3 * x + 1, 4, get_explored_color(door_color_index, 0))?;
+        
+        if x < 3 {
+            img_doors.set_pixel(3 * x, 2, get_explored_color(12, 0))?;
+            img_doors.set_pixel(3 * x + 1, 1, get_explored_color(12, 0))?;
+            img_doors.set_pixel(3 * x + 2, 2, get_explored_color(12, 0))?;
+            img_doors.set_pixel(3 * x + 2, 5, get_explored_color(12, 0))?;
+            img_doors.set_pixel(3 * x + 1, 6, get_explored_color(12, 0))?;
+            img_doors.set_pixel(3 * x, 5, get_explored_color(12, 0))?;
+            img_doors.set_pixel(3 * x + 1, 2, get_explored_color(door_color_index, 0))?;
+            img_doors.set_pixel(3 * x + 1, 5, get_explored_color(door_color_index, 0))?;
+        } else {
+            img_doors.set_pixel(3 * x + 1, 2, get_explored_color(13, 0))?;
+            img_doors.set_pixel(3 * x + 1, 5, get_explored_color(3, 0))?;
+        }
+    }
+    Ok(img_doors)
+}
+
 fn roll_map(repo: &MapRepository, game_data: &GameData) -> Result<Map> {
     let mut rng = rand::rngs::StdRng::from_entropy();
 
     let map_seed = (rng.next_u64() & 0xFFFFFFFF) as usize;
     repo.get_map(1, map_seed, game_data)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Placeable {
+    Helm = 0,
+    ETank,
+    Missile,
+    SuperMissile,
+    PowerBomb,
+    Bombs,
+    Charge,
+    Ice,
+    HighJump,
+    SpeedBooster,
+    Wave,
+    Spazer,
+    Springball,
+    Varia,
+    Gravity,
+    XRay,
+    Plasma,
+    Grapple,
+    SpaceJump,
+    ScrewAttack,
+    Morph,
+    ReserveTank,
+    WalljumpBoots,
+    DoorMissile,
+    DoorSuper,
+    DoorPowerBomb,
+    DoorCharge,
+    DoorIce,
+    DoorWave,
+    DoorSpazer,
+    DoorPlasma
+}
+
+impl Placeable {
+    const VALUES: [Self; 31] = [Self::Helm,
+    Self::ETank,
+    Self::Missile,
+    Self::SuperMissile,
+    Self::PowerBomb,
+    Self::Bombs,
+    Self::Charge,
+    Self::Ice,
+    Self::HighJump,
+    Self::SpeedBooster,
+    Self::Wave,
+    Self::Spazer,
+    Self::Springball,
+    Self::Varia,
+    Self::Gravity,
+    Self::XRay,
+    Self::Plasma,
+    Self::Grapple,
+    Self::SpaceJump,
+    Self::ScrewAttack,
+    Self::Morph,
+    Self::ReserveTank,
+    Self::WalljumpBoots,
+    Self::DoorMissile,
+    Self::DoorSuper,
+    Self::DoorPowerBomb,
+    Self::DoorSpazer,
+    Self::DoorWave,
+    Self::DoorIce,
+    Self::DoorPlasma,
+    Self::DoorCharge];
+
+    fn to_string(self) -> String {
+        match self {
+            Placeable::Helm => "Starting Position",
+            Placeable::ETank => "Energy Tank",
+            Placeable::Missile => "Missile",
+            Placeable::SuperMissile => "Super Missile",
+            Placeable::PowerBomb => "Power Bomb",
+            Placeable::Bombs => "Bombs",
+            Placeable::Charge => "Charge",
+            Placeable::Ice => "Ice",
+            Placeable::HighJump => "High Jump Boots",
+            Placeable::SpeedBooster => "Speed Booster",
+            Placeable::Wave => "Wave",
+            Placeable::Spazer => "Spazer",
+            Placeable::Springball => "Springball",
+            Placeable::Varia => "Varia",
+            Placeable::Gravity => "Gravity",
+            Placeable::XRay => "XRay",
+            Placeable::Plasma => "Plasma",
+            Placeable::Grapple => "Grapple",
+            Placeable::SpaceJump => "Space Jump",
+            Placeable::ScrewAttack => "Screw Attack",
+            Placeable::Morph => "Morph",
+            Placeable::ReserveTank => "Reserve Tank",
+            Placeable::WalljumpBoots => "Walljump Boots",
+            Placeable::DoorMissile => "Missile Door",
+            Placeable::DoorSuper => "Super Door",
+            Placeable::DoorPowerBomb => "Power Bomb Door",
+            Placeable::DoorSpazer => "Spazer Door",
+            Placeable::DoorWave => "Wave Door",
+            Placeable::DoorIce => "Ice Door",
+            Placeable::DoorPlasma => "Plasma Door",
+            Placeable::DoorCharge => "Charge Door",
+        }.to_string()
+    }
 }
 
 /*fn get_randomizer<'a>(map: &'a Map, settings: &'a RandomizerSettings, preset_data: PresetData, game_data: &'a GameData) -> Randomizer<'a> {
@@ -569,18 +704,33 @@ fn main() {
     let mut local_mouse_x = 0.0;
     let mut local_mouse_y = 0.0;
 
-    let tex_items = graphics::Texture::from_file("../visualizer/items.png").unwrap();
+    let img_items = graphics::Image::from_file("../visualizer/items.png").unwrap();
+    let tex_items = graphics::Texture::from_image(&img_items, IntRect::default()).unwrap();
     let tex_item_width = (tex_items.size().x / 24) as i32;
+
+    let img_doors = generate_door_sprites().unwrap();
+    let img_door_width = (img_doors.size().x / 8) as i32;
 
     let tex_helm = graphics::Texture::from_file("../visualizer/helm.png").unwrap();
     let mut user_tex_source = ImplUserTexSource::new();
-    enum UserTexId {
-        Helm = 1,
-    }
-    user_tex_source.add_texture(UserTexId::Helm as u64, &tex_helm);
+    
+    user_tex_source.add_texture(Placeable::Helm as u64, tex_helm);
 
-    let sidebar_width = 320.0;
-    let sidebar_height = 64.0;
+    // Add item textures to egui
+    for i in 0..22 {
+        let source_rect = IntRect::new(i * tex_item_width, 0, tex_item_width, img_items.size().y as i32);
+        let tex = graphics::Texture::from_image(&img_items, source_rect).unwrap();
+        user_tex_source.add_texture(Placeable::ETank as u64 + i as u64, tex);
+    }
+    // Add Door textures to egui
+    for i in 0..8 {
+        let source_rect = IntRect::new(i * img_door_width, 0, img_door_width, img_doors.size().y as i32);
+        let tex = graphics::Texture::from_image(&img_doors, source_rect).unwrap();
+        user_tex_source.add_texture(Placeable::DoorMissile as u64 + i as u64, tex);
+    }
+
+    let mut sidebar_width = 0.0;
+    let sidebar_height = 32.0;
 
     let mut sfegui = SfEgui::new(&window);
 
@@ -589,7 +739,7 @@ fn main() {
     let mut error_modal_message: Option<String> = None;
 
     let mut sidebar_selection = 0;
-    let max_sidebar_selection = 31;
+    let max_sidebar_selection = 23;
 
     while window.is_open() {
         while let Some(ev) = window.poll_event() {
@@ -597,11 +747,13 @@ fn main() {
 
             match ev {
                 Event::Closed => { window.close(); }
-                Event::MouseButtonPressed { button, x, y } => {
-                    if button == mouse::Button::Left {
-                        is_mouse_down = true;
-                    } else if button == mouse::Button::Middle {
-                        zoom = 1.0;
+                Event::MouseButtonPressed { button, x, .. } => {
+                    if x < window.size().x as i32 - sidebar_width as i32 {
+                        if button == mouse::Button::Left {
+                            is_mouse_down = true;
+                        } else if button == mouse::Button::Middle {
+                            zoom = 1.0;
+                        }
                     }
                 },
                 Event::MouseButtonReleased { button, .. } => {
@@ -609,16 +761,18 @@ fn main() {
                         is_mouse_down = false;
                     }
                 },
-                Event::MouseWheelScrolled { wheel: _, delta, .. } => {
-                    let factor = 1.1;
-                    if delta > 0.0 && zoom < 20.0 {
-                        zoom *= factor;
-                        x_offset -= (factor - 1.0) * (mouse_x as f32 - x_offset);
-                        y_offset -= (factor - 1.0) * (mouse_y as f32 - y_offset);
-                    } else if delta < 0.0 && zoom > 0.1 {
-                        zoom /= factor;
-                        x_offset += (1.0 - 1.0 / factor) * (mouse_x as f32 - x_offset);
-                        y_offset += (1.0 - 1.0 / factor) * (mouse_y as f32 - y_offset);
+                Event::MouseWheelScrolled { wheel: _, delta, x, .. } => {
+                    if x < window.size().x as i32 - sidebar_width as i32 {
+                        let factor = 1.1;
+                        if delta > 0.0 && zoom < 20.0 {
+                            zoom *= factor;
+                            x_offset -= (factor - 1.0) * (mouse_x as f32 - x_offset);
+                            y_offset -= (factor - 1.0) * (mouse_y as f32 - y_offset);
+                        } else if delta < 0.0 && zoom > 0.1 {
+                            zoom /= factor;
+                            x_offset += (1.0 - 1.0 / factor) * (mouse_x as f32 - x_offset);
+                            y_offset += (1.0 - 1.0 / factor) * (mouse_y as f32 - y_offset);
+                        }
                     }
                 },
                 Event::MouseMoved { x, y } => {
@@ -717,27 +871,6 @@ fn main() {
             window.draw(&text);
         }
 
-        // Draw GUI
-        // Draw Item/Door Select Sidebar
-        /*let mut sidebar_rect = graphics::RectangleShape::new();
-        sidebar_rect.set_position((x_sidebar as f32, 0.0));
-        sidebar_rect.set_size((320.0, window.size().y as f32));
-        sidebar_rect.set_fill_color(graphics::Color::rgb(0x0F, 0x0F, 0x0F));
-        window.draw(&sidebar_rect);
-
-        // Highlight selected sidebar element
-        sidebar_rect.set_position((x_sidebar as f32 + 2.0, 2.0 + sidebar_selection as f32 * sidebar_height));
-        sidebar_rect.set_size((x_sidebar as f32 - 4.0, sidebar_height - 4.0));
-        sidebar_rect.set_fill_color(graphics::Color::rgb(0x2F, 0x2F, 0x2F));
-        window.draw(&sidebar_rect);
-
-        // Draw sidebar elements
-        for i in 0..max_sidebar_selection {
-            let mut text = graphics::Text::new(&i.to_string(), &font_default, 16);
-            text.set_position((x_sidebar as f32 + 16.0, i as f32 * sidebar_height));
-            window.draw(&text);
-        }*/
-
         // Draw Menu Bar
         let gui = sfegui.run(&mut window, |_rt, ctx| {
             egui::TopBottomPanel::top("menu_file_main").show(ctx, |ui| {
@@ -772,27 +905,58 @@ fn main() {
                 });
             });
 
-            egui::SidePanel::right("panel_item_select").exact_width(sidebar_width).show(ctx, |ui| {
-                egui::Grid::new("grid_item_select")
+            sidebar_width = egui::SidePanel::right("panel_item_select").resizable(false).show(ctx, |ui| {
+                egui::scroll_area::ScrollArea::vertical().show(ui, |ui| {
+                    egui::Grid::new("grid_item_select")
                     .with_row_color(move |val, _style| {
                         if val as i32 == sidebar_selection { Some(Color32::from_rgb(255, 0, 0)) } else { None }
-                    }).show(ui, |ui| {
-                        for row in 0..max_sidebar_selection {
-                            let img = SfmlImage::new(UserTexId::Helm as u64, IntRect::from_vecs(Vector2i::default(), tex_helm.size().as_other())).sense(Sense::click());
-                            if ui.add(img).clicked() {
-                                sidebar_selection = row;
+                    }).min_row_height(sidebar_height).show(ui, |ui| {
+                        for (row, placeable) in Placeable::VALUES.iter().enumerate() {
+                            // If settigs don't allow ammo or beam doors, we don't allow their placement
+                            if (*placeable >= Placeable::DoorMissile && randomizer_settings.doors_mode == DoorsMode::Blue)
+                                || (*placeable >= Placeable::DoorCharge && randomizer_settings.doors_mode == DoorsMode::Ammo) {
+                                break;
                             }
-                            for col in 1..3 {
-                                let label = egui::Label::new(format!("({row}, {col})")).sense(Sense::click());
-                                if ui.add(label).clicked() {
-                                    sidebar_selection = row;
-                                }
+
+                            // Load image
+                            let img = egui::Image::new(user_tex_source.get_image_source(*placeable as u64)).sense(Sense::click())
+                                .fit_to_exact_size(Vec2::new(sidebar_height, sidebar_height));
+                            let img_resp = ui.add(img);
+                            if img_resp.clicked() {
+                                sidebar_selection = row as i32;
+                            }
+
+                            // Calculate how many items of this type can be placed, default 1
+                            let mut item_count = 1;
+                            // Based on item pool settings
+                            if let Some(item) = randomizer_settings.item_progression_settings.item_pool.iter().find(|elem| {
+                                elem.item as i32 == (row as i32 - Placeable::ETank as i32)
+                            }) {
+                                item_count = item.count;
+                            }
+
+                            // Based on collectible Walljump settings
+                            if *placeable == Placeable::WalljumpBoots && randomizer_settings.other_settings.wall_jump == WallJump::Vanilla {
+                                item_count = 0;
+                            }
+                            let label_name = egui::Label::new(placeable.to_string());
+                            if /*ui.add_sized(Vec2::new(sidebar_width - img_resp.rect.width() - 32.0, sidebar_height), |ui: &mut Ui| {*/
+                                ui.add(label_name)
+                            /*})*/.clicked() {
+                                sidebar_selection = row as i32;
+                            }
+                            let label_count_str = if *placeable < Placeable::DoorMissile { format!("0 / {item_count}") } else { "0".to_string() };
+                            let label_count = egui::Label::new(label_count_str).sense(Sense::click());
+                            if /*ui.add_sized(Vec2::new(32.0, sidebar_height), |ui: &mut Ui| {*/
+                                ui.add(label_count)
+                            /*})*/.clicked() {
+                                sidebar_selection = row as i32;
                             }
                             ui.end_row();
                         }
                     });
-                
-            });
+                });
+            }).response.rect.width();
 
             if show_load_preset_modal {
                 let modal = egui::Modal::new(Id::new("modal_load_preset")).show(ctx, |ui| {
@@ -841,61 +1005,26 @@ fn main() {
 
 
 
-
-struct SfmlImage {
-    texture_id: u64,
-    tex_rect: graphics::IntRect,
-    sense_list: Sense
+struct ImplUserTexSource {
+    tex_map: HashMap<u64, FBox<graphics::Texture>>
 }
 
-impl SfmlImage {
-    fn new(texture_id: u64, tex_rect: graphics::IntRect) -> Self {
-        SfmlImage { texture_id, tex_rect, sense_list: Sense::empty() }
-    }
-
-    fn sense(mut self, sense: Sense) -> Self {
-        self.sense_list.insert(sense);
-        self
-    }
-}
-
-impl Widget for SfmlImage {
-    fn ui(self, ui: &mut egui::Ui) -> egui::Response {
-        let size = ui.available_size();
-
-        let tex_rect: FloatRect = self.tex_rect.as_other();
-        let scale_x = size.x / tex_rect.width;
-        let scale_y = size.y / tex_rect.height;
-        let scale = if scale_x < scale_y { scale_x } else { scale_y };
-        let img_size = egui::pos2(tex_rect.width, tex_rect.height) * scale;
-        let (rect, response) = ui.allocate_exact_size(img_size.to_vec2(), self.sense_list);
-
-        let uv = egui::Rect::from_min_max(egui::pos2(tex_rect.left / tex_rect.width, tex_rect.top / tex_rect.height),
-            egui::pos2((tex_rect.left + tex_rect.width) / tex_rect.width, (tex_rect.top + tex_rect.height) / tex_rect.height));
-
-        if ui.is_rect_visible(rect) {
-            ui.painter().image(egui::TextureId::User(self.texture_id), rect, uv, Color32::WHITE);
-        }
-
-        response
-    }
-}
-
-struct ImplUserTexSource<'a> {
-    tex_map: HashMap<u64, &'a FBox<graphics::Texture>>
-}
-
-impl<'a> ImplUserTexSource<'a> {
+impl ImplUserTexSource {
     fn new() -> Self {
         ImplUserTexSource { tex_map: HashMap::new() }
     }
 
-    fn add_texture(&mut self, id: u64, tex: &'a FBox<graphics::Texture>) {
+    fn add_texture(&mut self, id: u64, tex: FBox<graphics::Texture>) {
         self.tex_map.insert(id, tex);
+    }
+
+    fn get_image_source(&mut self, tex_id: u64) -> (TextureId, egui::Vec2) {
+        let (x, y, _tex) = self.get_texture(tex_id);
+        (TextureId::User(tex_id), egui::Vec2::new(x, y))
     }
 }
 
-impl<'a> UserTexSource for ImplUserTexSource<'a> {
+impl UserTexSource for ImplUserTexSource {
     fn get_texture(&mut self, id: u64) -> (f32, f32, &graphics::Texture) {
         let tex = self.tex_map.get(&id).context("Invalid texture id provided").unwrap();
         (tex.size().x as f32, tex.size().y as f32, tex)
