@@ -1,15 +1,15 @@
 use {
-    anyhow::{bail, Result}, egui_sfml::{egui::{self, Color32, Id}, SfEgui}, hashbrown::HashMap, maprando::{
+    anyhow::{bail, Context, Result}, egui_sfml::{egui::{self, Color32, Id, Sense, Widget}, SfEgui, UserTexSource}, hashbrown::HashMap, maprando::{
         map_repository::MapRepository, patch::Rom, preset::PresetData, randomize::{DifficultyConfig, Randomization, Randomizer}, settings::RandomizerSettings, traverse::LockedDoorData
     }, maprando_game::{GameData, HubLocation, Item, LinksDataGroup, Map, MapTileEdge, MapTileInterior, MapTileSpecialType, StartLocation}, rand::{
         RngCore, SeedableRng
     }, sfml::{
         cpp::FBox, graphics::{
-            self, Color, RectangleShape, RenderTarget, RenderTexture, RenderWindow, Shape, Text, Transformable
-        }, system::Vector2f, window::{
+            self, Color, FloatRect, IntRect, RectangleShape, RenderTarget, RenderTexture, RenderWindow, Shape, Text, Transformable
+        }, system::{Vector2f, Vector2i}, window::{
             mouse, ContextSettings, Event, Style
         }
-    }, std::{cmp::{max, min}, path::Path, u32}
+    }, std::{cmp::{max, min}, hash::Hash, path::Path, u32}
 };
 
 struct Plando {
@@ -572,7 +572,14 @@ fn main() {
     let tex_items = graphics::Texture::from_file("../visualizer/items.png").unwrap();
     let tex_item_width = (tex_items.size().x / 24) as i32;
 
-    let mut x_sidebar = window.size().x - 320;
+    let tex_helm = graphics::Texture::from_file("../visualizer/helm.png").unwrap();
+    let mut user_tex_source = ImplUserTexSource::new();
+    enum UserTexId {
+        Helm = 1,
+    }
+    user_tex_source.add_texture(UserTexId::Helm as u64, &tex_helm);
+
+    let sidebar_width = 320.0;
     let sidebar_height = 64.0;
 
     let mut sfegui = SfEgui::new(&window);
@@ -593,11 +600,6 @@ fn main() {
                 Event::MouseButtonPressed { button, x, y } => {
                     if button == mouse::Button::Left {
                         is_mouse_down = true;
-
-                        if x > x_sidebar as i32 {
-                            sidebar_selection = (y as f32 / sidebar_height).floor() as i32;
-                            sidebar_selection = min(max(sidebar_selection, 0), max_sidebar_selection);
-                        }
                     } else if button == mouse::Button::Middle {
                         zoom = 1.0;
                     }
@@ -634,7 +636,6 @@ fn main() {
                 },
                 Event::Resized { width, height } => {
                     window.set_view(&graphics::View::from_rect(graphics::Rect::new(0.0, 0.0, width as f32, height as f32)).unwrap());
-                    x_sidebar = width - 320;
                 },
                 _ => {}
             }
@@ -771,18 +772,26 @@ fn main() {
                 });
             });
 
-            egui::SidePanel::right("panel_item_select").show(ctx, |ui| {
+            egui::SidePanel::right("panel_item_select").exact_width(sidebar_width).show(ctx, |ui| {
                 egui::Grid::new("grid_item_select")
-                    .with_row_color(|val, style| {
-                        Some(Color32::from_rgb((val * 255 / 31) as u8, 0, 0))
+                    .with_row_color(move |val, _style| {
+                        if val as i32 == sidebar_selection { Some(Color32::from_rgb(255, 0, 0)) } else { None }
                     }).show(ui, |ui| {
                         for row in 0..max_sidebar_selection {
-                            for col in 0..3 {
-                                ui.label(format!("({row}, {col})"));
+                            let img = SfmlImage::new(UserTexId::Helm as u64, IntRect::from_vecs(Vector2i::default(), tex_helm.size().as_other())).sense(Sense::click());
+                            if ui.add(img).clicked() {
+                                sidebar_selection = row;
+                            }
+                            for col in 1..3 {
+                                let label = egui::Label::new(format!("({row}, {col})")).sense(Sense::click());
+                                if ui.add(label).clicked() {
+                                    sidebar_selection = row;
+                                }
                             }
                             ui.end_row();
                         }
                     });
+                
             });
 
             if show_load_preset_modal {
@@ -824,8 +833,71 @@ fn main() {
                 }
             }
         }).unwrap();
-        sfegui.draw(gui, &mut window, None);
+        sfegui.draw(gui, &mut window, Some(&mut user_tex_source));
 
         window.display();
+    }
+}
+
+
+
+
+struct SfmlImage {
+    texture_id: u64,
+    tex_rect: graphics::IntRect,
+    sense_list: Sense
+}
+
+impl SfmlImage {
+    fn new(texture_id: u64, tex_rect: graphics::IntRect) -> Self {
+        SfmlImage { texture_id, tex_rect, sense_list: Sense::empty() }
+    }
+
+    fn sense(mut self, sense: Sense) -> Self {
+        self.sense_list.insert(sense);
+        self
+    }
+}
+
+impl Widget for SfmlImage {
+    fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+        let size = ui.available_size();
+
+        let tex_rect: FloatRect = self.tex_rect.as_other();
+        let scale_x = size.x / tex_rect.width;
+        let scale_y = size.y / tex_rect.height;
+        let scale = if scale_x < scale_y { scale_x } else { scale_y };
+        let img_size = egui::pos2(tex_rect.width, tex_rect.height) * scale;
+        let (rect, response) = ui.allocate_exact_size(img_size.to_vec2(), self.sense_list);
+
+        let uv = egui::Rect::from_min_max(egui::pos2(tex_rect.left / tex_rect.width, tex_rect.top / tex_rect.height),
+            egui::pos2((tex_rect.left + tex_rect.width) / tex_rect.width, (tex_rect.top + tex_rect.height) / tex_rect.height));
+
+        if ui.is_rect_visible(rect) {
+            ui.painter().image(egui::TextureId::User(self.texture_id), rect, uv, Color32::WHITE);
+        }
+
+        response
+    }
+}
+
+struct ImplUserTexSource<'a> {
+    tex_map: HashMap<u64, &'a FBox<graphics::Texture>>
+}
+
+impl<'a> ImplUserTexSource<'a> {
+    fn new() -> Self {
+        ImplUserTexSource { tex_map: HashMap::new() }
+    }
+
+    fn add_texture(&mut self, id: u64, tex: &'a FBox<graphics::Texture>) {
+        self.tex_map.insert(id, tex);
+    }
+}
+
+impl<'a> UserTexSource for ImplUserTexSource<'a> {
+    fn get_texture(&mut self, id: u64) -> (f32, f32, &graphics::Texture) {
+        let tex = self.tex_map.get(&id).context("Invalid texture id provided").unwrap();
+        (tex.size().x as f32, tex.size().y as f32, tex)
     }
 }
