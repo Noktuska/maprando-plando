@@ -1,9 +1,7 @@
 use {
-    anyhow::{anyhow, bail, Context, Result}, egui_sfml::{egui::{self, layers::GraphicLayers, Color32, Id, Sense, TextureId, Ui, Vec2}, SfEgui, UserTexSource}, hashbrown::HashMap, maprando::{
-        map_repository::MapRepository, patch::Rom, preset::PresetData, settings::{DoorsMode, ItemCount, RandomizerSettings, WallJump}
-    }, maprando_game::{GameData, Item, ItemLocationId, Map, MapTileEdge, MapTileInterior, MapTileSpecialType, StartLocation}, rand::{
-        RngCore, SeedableRng
-    }, sfml::{
+    anyhow::{bail, Context, Result}, egui_sfml::{egui::{self, Color32, Id, Sense, TextureId, Vec2}, SfEgui, UserTexSource}, hashbrown::HashMap, maprando::{
+        patch::Rom, preset::PresetData, settings::DoorsMode
+    }, maprando_game::{GameData, Item, MapTileEdge, MapTileInterior, MapTileSpecialType}, plando::{DoubleItemPlacement, MapRepositoryType, Placeable, Plando, TileInfo}, sfml::{
         cpp::FBox, graphics::{
             self, Color, IntRect, RenderTarget, RenderWindow, Shape, Transformable
         }, system::Vector2f, window::{
@@ -12,211 +10,17 @@ use {
     }, std::{cmp::max, path::Path, u32}
 };
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
-enum DoubleItemPlacement {
-    Middle, Left, Right
-}
+mod plando;
 
 #[derive(Clone)]
-struct ItemPlacement {
-    item: Item,
-    room_idx: usize,
-    tile_x: usize,
-    tile_y: usize,
-    double_item_placement: DoubleItemPlacement
-}
-
-struct TileInfo {
+struct RoomData {
     room_id: usize,
     room_idx: usize,
-    tile_x: usize,
-    tile_y: usize
-}
-
-struct Plando {
-    game_data: GameData,
-    room_data: Vec<RoomData>,
-    atlas_tex: FBox<graphics::Texture>,
-    maps_vanilla: MapRepository,
-    maps_standard: MapRepository,
-    maps_wild: MapRepository,
-    map: Map,
-    randomizer_settings: RandomizerSettings,
-    item_locations: Vec<ItemPlacement>,
-    start_location: StartLocation,
-    placed_item_count: [u32; Placeable::VALUES.len()]
-}
-
-impl Plando {
-    fn new() -> Self {
-        let game_data = load_game_data().unwrap();
-        let (atlas_image, room_data) = load_room_sprites(&game_data).unwrap();
-        let atlas_tex = graphics::Texture::from_image(&atlas_image, graphics::Rect::default()).unwrap();
-
-        let vanilla_map_path = Path::new("../maps/vanilla");
-        let standard_maps_path = Path::new("../maps/v117c-standard");
-        let wild_maps_path = Path::new("../maps/v117c-wild");
-    
-        let maps_vanilla = MapRepository::new("Vanilla", vanilla_map_path).unwrap();
-        let maps_standard = MapRepository::new("Standard", standard_maps_path).unwrap();
-        let maps_wild = MapRepository::new("Wild", wild_maps_path).unwrap();
-
-        let map = roll_map(&maps_vanilla, &game_data).unwrap();
-        let preset_path = Path::new("./data/presets/full-settings/Community Race Season 3 (No animals).json");
-        let randomizer_settings = load_preset(preset_path).unwrap();
-
-        let mut ship_start = StartLocation::default();
-        ship_start.name = "Ship".to_string();
-        ship_start.room_id = 8;
-        ship_start.node_id = 5;
-        ship_start.door_load_node_id = Some(2);
-        ship_start.x = 72.0;
-        ship_start.y = 69.5;
-
-        let mut placed_item_count = [0u32; Placeable::VALUES.len()];
-        placed_item_count[0] = 1;
-
-        let mut plando = Plando {
-            game_data,
-            room_data,
-            atlas_tex,
-            maps_vanilla,
-            maps_standard,
-            maps_wild,
-            map,
-            randomizer_settings,
-            item_locations: Vec::new(),
-            start_location: ship_start,
-            placed_item_count
-        };
-
-        plando.init_item_locations();
-
-        plando
-    }
-
-    fn clear_item_locations(&mut self) {
-        for i in 0..self.item_locations.len() {
-            self.item_locations[i].item = Item::Nothing;
-        }
-    }
-
-    fn init_item_locations(&mut self) {
-        for map_tile in &self.game_data.map_tile_data {
-            let room_ptr = &self.game_data.room_ptr_by_id[&map_tile.room_id];
-            let room_idx = self.game_data.room_idx_by_ptr[room_ptr];
-            let room_geometry = &self.game_data.room_geometry[room_idx];
-
-            for tile in &room_geometry.items {
-                let mut has_double_item = false;
-                for item in &mut self.item_locations {
-                    if item.room_idx == room_idx && item.tile_x == tile.x && item.tile_y == tile.y {
-                        has_double_item = true;
-                        item.double_item_placement = DoubleItemPlacement::Left;
-                    }
-                }
-
-                self.item_locations.push(ItemPlacement {
-                    item: Item::Nothing,
-                    room_idx,
-                    tile_x: tile.x,
-                    tile_y: tile.y,
-                    double_item_placement: if has_double_item { DoubleItemPlacement::Right } else { DoubleItemPlacement::Middle }
-                });
-            }
-        }
-    }
-
-    fn get_tile_at(&self, x: usize, y: usize) -> Option<TileInfo> {
-        for map_tile in &self.game_data.map_tile_data {
-            let room_id = map_tile.room_id;
-            let room_ptr = self.game_data.room_ptr_by_id[&room_id];
-            let room_idx = self.game_data.room_idx_by_ptr[&room_ptr];
-            let room_geometry = &self.game_data.room_geometry[room_idx];
-            let (room_x, room_y) = self.map.rooms[room_idx];
-            for (tile_y, row) in room_geometry.map.iter().enumerate() {
-                for (tile_x, &tile) in row.iter().enumerate() {
-                    if tile == 1 && room_x + tile_x == x && room_y + tile_y == y {
-                        return Some(TileInfo { room_id, room_idx, tile_x, tile_y })
-                    }
-                }
-            }
-        }
-        None
-    }
-
-    fn place_item(&mut self, tile_info: &TileInfo, item: Item, right_item: bool) -> Result<()> {
-        for i in 0..self.item_locations.len() {
-            let item_location = &mut self.item_locations[i];
-            if tile_info.room_idx == item_location.room_idx && tile_info.tile_x == item_location.tile_x && tile_info.tile_y == item_location.tile_y {
-                let valid = match item_location.double_item_placement {
-                    DoubleItemPlacement::Middle => true,
-                    DoubleItemPlacement::Left => !right_item,
-                    DoubleItemPlacement::Right => right_item,
-                };
-                if valid {
-                    // Remove old item from placed_item_count
-                    if item_location.item != Item::Nothing {
-                        self.placed_item_count[Placeable::ETank as usize + item_location.item as usize] -= 1;
-                    }
-                    // Add new item to placed_item_count
-                    if item != Item::Nothing {
-                        self.placed_item_count[Placeable::ETank as usize + item as usize] += 1;
-                    }
-                    item_location.item = item;
-                    return Ok(());
-                }
-            }
-        }
-        Err(anyhow!("Could not place item"))
-    }
-
-    fn get_max_placeable_count(&self, placeable: Placeable) -> Option<usize> {
-        if placeable == Placeable::Helm {
-            return Some(1);
-        } else if placeable >= Placeable::Bombs && placeable <= Placeable::Morph {
-            return Some(1);
-        } else if placeable == Placeable::WalljumpBoots {
-            return if self.randomizer_settings.other_settings.wall_jump == WallJump::Vanilla { Some(0) } else { Some(1) };
-        } else if placeable < Placeable::DoorMissile {
-            let item_pool = &self.randomizer_settings.item_progression_settings.item_pool;
-            return Some(match placeable {
-                Placeable::Missile => item_pool.iter().find(|elem| elem.item == Item::Missile).unwrap().count,
-                Placeable::SuperMissile => item_pool.iter().find(|elem| elem.item == Item::Super).unwrap().count,
-                Placeable::PowerBomb => item_pool.iter().find(|elem| elem.item == Item::PowerBomb).unwrap().count,
-                Placeable::ETank => item_pool.iter().find(|elem| elem.item == Item::ETank).unwrap().count,
-                Placeable::ReserveTank => item_pool.iter().find(|elem| elem.item == Item::ReserveTank).unwrap().count,
-                _ => 0
-            });
-        }
-        None
-    }
-}
-
-fn load_game_data() -> Result<GameData> {
-    let sm_json_data_path = Path::new("../sm-json-data");
-    let room_geometry_path = Path::new("../room_geometry.json");
-    let escape_timings_path = Path::new("data/escape_timings.json");
-    let start_locations_path = Path::new("data/start_locations.json");
-    let hub_locations_path = Path::new("data/hub_locations.json");
-    let title_screen_path = Path::new("../TitleScreen/Images");
-    let reduced_flashing_path = Path::new("data/reduced_flashing.json");
-    let strat_videos_path = Path::new("data/strat_videos.json");
-    let map_tiles_path = Path::new("data/map_tiles.json");
-
-    let game_data = GameData::load(
-        sm_json_data_path,
-        room_geometry_path,
-        escape_timings_path,
-        start_locations_path,
-        hub_locations_path,
-        title_screen_path,
-        reduced_flashing_path,
-        strat_videos_path,
-        map_tiles_path,
-    );
-
-    game_data
+    room_name: String,
+    tile_width: u32,
+    tile_height: u32,
+    atlas_x_offset: u32,
+    atlas_y_offset: u32
 }
 
 fn load_preset_data(game_data: &GameData) -> Result<PresetData> {
@@ -240,23 +44,6 @@ fn load_vanilla_rom(rom_path: &Path) -> Result<Rom> {
         bail!("Invalid ROM data");
     }
     Ok(rom)
-}
-
-fn load_preset(path: &Path) -> Result<RandomizerSettings> {
-    let json_data = std::fs::read_to_string(path)?;
-    let result = maprando::settings::parse_randomizer_settings(&json_data);
-    result
-}
-
-#[derive(Clone)]
-struct RoomData {
-    room_id: usize,
-    room_idx: usize,
-    room_name: String,
-    tile_width: u32,
-    tile_height: u32,
-    atlas_x_offset: u32,
-    atlas_y_offset: u32
 }
 
 enum SpecialRoom {
@@ -642,131 +429,6 @@ fn generate_door_sprites() -> Result<FBox<graphics::Image>> {
     Ok(img_doors)
 }
 
-fn roll_map(repo: &MapRepository, game_data: &GameData) -> Result<Map> {
-    let mut rng = rand::rngs::StdRng::from_entropy();
-
-    let map_seed = (rng.next_u64() & 0xFFFFFFFF) as usize;
-    repo.get_map(1, map_seed, game_data)
-}
-
-const ITEM_VALUES: [Item; 23] = [
-    Item::ETank, Item::Missile, Item::Super, Item::PowerBomb, Item::Bombs, Item::Charge, Item::Ice, Item::HiJump, Item::SpeedBooster,
-    Item::Wave, Item::Spazer, Item::SpringBall, Item::Varia, Item::Gravity, Item::XRayScope, Item::Plasma, Item::Grapple,
-    Item::SpaceJump, Item::ScrewAttack, Item::Morph, Item::ReserveTank, Item::WallJump, Item::Nothing
-];
-
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Placeable {
-    Helm = 0,
-    ETank,
-    Missile,
-    SuperMissile,
-    PowerBomb,
-    Bombs,
-    Charge,
-    Ice,
-    HighJump,
-    SpeedBooster,
-    Wave,
-    Spazer,
-    Springball,
-    Varia,
-    Gravity,
-    XRay,
-    Plasma,
-    Grapple,
-    SpaceJump,
-    ScrewAttack,
-    Morph,
-    ReserveTank,
-    WalljumpBoots,
-    DoorMissile,
-    DoorSuper,
-    DoorPowerBomb,
-    DoorCharge,
-    DoorIce,
-    DoorWave,
-    DoorSpazer,
-    DoorPlasma
-}
-
-impl Placeable {
-    const VALUES: [Self; 31] = [Self::Helm,
-    Self::ETank,
-    Self::Missile,
-    Self::SuperMissile,
-    Self::PowerBomb,
-    Self::Bombs,
-    Self::Charge,
-    Self::Ice,
-    Self::HighJump,
-    Self::SpeedBooster,
-    Self::Wave,
-    Self::Spazer,
-    Self::Springball,
-    Self::Varia,
-    Self::Gravity,
-    Self::XRay,
-    Self::Plasma,
-    Self::Grapple,
-    Self::SpaceJump,
-    Self::ScrewAttack,
-    Self::Morph,
-    Self::ReserveTank,
-    Self::WalljumpBoots,
-    Self::DoorMissile,
-    Self::DoorSuper,
-    Self::DoorPowerBomb,
-    Self::DoorSpazer,
-    Self::DoorWave,
-    Self::DoorIce,
-    Self::DoorPlasma,
-    Self::DoorCharge];
-
-    fn to_string(self) -> String {
-        match self {
-            Placeable::Helm => "Starting Position",
-            Placeable::ETank => "Energy Tank",
-            Placeable::Missile => "Missile",
-            Placeable::SuperMissile => "Super Missile",
-            Placeable::PowerBomb => "Power Bomb",
-            Placeable::Bombs => "Bombs",
-            Placeable::Charge => "Charge",
-            Placeable::Ice => "Ice",
-            Placeable::HighJump => "High Jump Boots",
-            Placeable::SpeedBooster => "Speed Booster",
-            Placeable::Wave => "Wave",
-            Placeable::Spazer => "Spazer",
-            Placeable::Springball => "Springball",
-            Placeable::Varia => "Varia",
-            Placeable::Gravity => "Gravity",
-            Placeable::XRay => "XRay",
-            Placeable::Plasma => "Plasma",
-            Placeable::Grapple => "Grapple",
-            Placeable::SpaceJump => "Space Jump",
-            Placeable::ScrewAttack => "Screw Attack",
-            Placeable::Morph => "Morph",
-            Placeable::ReserveTank => "Reserve Tank",
-            Placeable::WalljumpBoots => "Walljump Boots",
-            Placeable::DoorMissile => "Missile Door",
-            Placeable::DoorSuper => "Super Door",
-            Placeable::DoorPowerBomb => "Power Bomb Door",
-            Placeable::DoorSpazer => "Spazer Door",
-            Placeable::DoorWave => "Wave Door",
-            Placeable::DoorIce => "Ice Door",
-            Placeable::DoorPlasma => "Plasma Door",
-            Placeable::DoorCharge => "Charge Door",
-        }.to_string()
-    }
-
-    fn to_item(self) -> Option<Item> {
-        if self == Placeable::Helm || self > Placeable::ReserveTank {
-            return None;
-        }
-        Some(ITEM_VALUES[self as usize - Placeable::ETank as usize])
-    }
-}
-
 fn put_placeable(plando: &mut Plando, tile_info: &TileInfo, placeable: Placeable, right: bool, bottom: bool) -> Result<()> {
     let placed_item_count = plando.placed_item_count[placeable as usize] as usize;
     let max_item_count = plando.get_max_placeable_count(placeable);
@@ -838,8 +500,6 @@ fn main() {
     //let rom_path = Path::new("C:/Users/Loptr/Desktop/Super Metroid/Original ROM/Super Metroid (JU) [!].smc");
     //let rom_original = load_vanilla_rom(rom_path).unwrap();
 
-    let preset_path = Path::new("./data/presets/full-settings/Community Race Season 3 (No animals).json");
-    let mut randomizer_settings = load_preset(preset_path).unwrap();
     //let difficulty_tiers = maprando::randomize::get_difficulty_tiers(&randomizer_settings, game_data.p, &game_data, implicit_tech, implicit_notables);
 
     /*let randomization = Randomization {
@@ -857,7 +517,8 @@ fn main() {
         base_links_data,
         rng
     );*/
-
+    let (atlas_img, room_data) = load_room_sprites(&plando.game_data).unwrap();
+    let atlas_tex = graphics::Texture::from_image(&atlas_img, IntRect::default()).unwrap();
 
     let mut window = RenderWindow::new((1080, 720), "Maprando Plando", Style::DEFAULT, &Default::default()).expect("Could not create Window");
     window.set_vertical_sync_enabled(true);
@@ -908,8 +569,6 @@ fn main() {
     let mut error_modal_message: Option<String> = None;
 
     let mut sidebar_selection = Placeable::Helm;
-
-    
 
     while window.is_open() {
         let local_mouse_x = (mouse_x as f32 - x_offset) / zoom;
@@ -995,8 +654,8 @@ fn main() {
 
         let mut info_overlay_opt: Option<String> = None;
         // Draw the entire map
-        for i in 0..plando.room_data.len() {
-            let data = &plando.room_data[i];
+        for i in 0..room_data.len() {
+            let data = &room_data[i];
             let (x, y) = plando.map.rooms[data.room_idx];
             let room_geometry = &plando.game_data.room_geometry[data.room_idx];
 
@@ -1022,13 +681,16 @@ fn main() {
 
                     // Draw Tile Outline
                     let sprite_tile_rect = IntRect::new(8 * (data.atlas_x_offset as i32 + local_x as i32), 8 * (data.atlas_y_offset as i32 + local_y as i32), 8, 8);
-                    let mut sprite_tile = graphics::Sprite::with_texture_and_rect(&plando.atlas_tex, sprite_tile_rect);
+                    let mut sprite_tile = graphics::Sprite::with_texture_and_rect(&atlas_tex, sprite_tile_rect);
                     sprite_tile.set_position(Vector2f::new(cell_x as f32, cell_y as f32));
                     window.draw_with_renderstates(&sprite_tile, &states);
 
                     let (tex_helm_w, _, tex_helm) = user_tex_source.get_texture(Placeable::Helm as u64);
                     let mut sprite_helm = graphics::Sprite::with_texture(tex_helm);
                     sprite_helm.set_scale(8.0 / tex_helm_w);
+
+                    // Draw Doors
+
 
                     // Draw all possible starting positions
                     if sidebar_selection == Placeable::Helm {
@@ -1118,15 +780,16 @@ fn main() {
                     });
                     ui.menu_button("Map", |ui| {
                         if ui.button("Reroll Map (Vanilla)").clicked() {
-                            plando.map = roll_map(&plando.maps_vanilla, &plando.game_data).unwrap();
+                            plando.reroll_map(MapRepositoryType::Vanilla).unwrap();
                             ui.close_menu();
                         }
                         if ui.button("Reroll Map (Standard)").clicked() {
-                            plando.map = roll_map(&plando.maps_standard, &plando.game_data).unwrap();
+                            plando.reroll_map(MapRepositoryType::Standard).unwrap();
                             ui.close_menu();
                         }
                         if ui.button("Reroll Map (Wild)").clicked() {
-                            plando.map = roll_map(&plando.maps_wild, &plando.game_data).unwrap();
+                            plando.reroll_map(MapRepositoryType::Wild).unwrap();
+                            ui.close_menu();
                         }
                     });
                 });
@@ -1141,8 +804,8 @@ fn main() {
                     }).min_row_height(sidebar_height).show(ui, |ui| {
                         for (row, placeable) in Placeable::VALUES.iter().enumerate() {
                             // If settigs don't allow ammo or beam doors, we don't allow their placement
-                            if (*placeable >= Placeable::DoorMissile && randomizer_settings.doors_mode == DoorsMode::Blue)
-                                || (*placeable >= Placeable::DoorCharge && randomizer_settings.doors_mode == DoorsMode::Ammo) {
+                            if (*placeable >= Placeable::DoorMissile && plando.randomizer_settings.doors_mode == DoorsMode::Blue)
+                                || (*placeable >= Placeable::DoorCharge && plando.randomizer_settings.doors_mode == DoorsMode::Ammo) {
                                 break;
                             }
 
@@ -1180,12 +843,9 @@ fn main() {
                     ui.separator();
                     egui_sfml::egui::Sides::new().show(ui, |_ui| {}, |ui| {
                         if ui.button("Load").clicked() {
-                            let preset_res = load_preset(Path::new(&modal_load_preset_path));
-                            if preset_res.is_ok() {
-                                randomizer_settings = preset_res.unwrap();
-                                show_load_preset_modal = false;
-                            } else {
-                                error_modal_message = Some("Could not open supplied preset".to_string());
+                            match plando.load_preset(Path::new(&modal_load_preset_path)) {
+                                Ok(_) => show_load_preset_modal = false,
+                                Err(_) => error_modal_message = Some("Could not open supplied preset".to_string())
                             }
                         }
                         if ui.button("Cancel").clicked() {
