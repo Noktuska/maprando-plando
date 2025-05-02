@@ -1,7 +1,7 @@
 use {
     anyhow::{anyhow, bail, Context, Result}, egui_sfml::{egui::{self, layers::GraphicLayers, Color32, Id, Sense, TextureId, Ui, Vec2}, SfEgui, UserTexSource}, hashbrown::HashMap, maprando::{
         map_repository::MapRepository, patch::Rom, preset::PresetData, settings::{DoorsMode, ItemCount, RandomizerSettings, WallJump}
-    }, maprando_game::{GameData, Item, ItemLocationId, Map, MapTileEdge, MapTileInterior, MapTileSpecialType}, rand::{
+    }, maprando_game::{GameData, Item, ItemLocationId, Map, MapTileEdge, MapTileInterior, MapTileSpecialType, StartLocation}, rand::{
         RngCore, SeedableRng
     }, sfml::{
         cpp::FBox, graphics::{
@@ -27,6 +27,7 @@ struct ItemPlacement {
 }
 
 struct TileInfo {
+    room_id: usize,
     room_idx: usize,
     tile_x: usize,
     tile_y: usize
@@ -42,6 +43,7 @@ struct Plando {
     map: Map,
     randomizer_settings: RandomizerSettings,
     item_locations: Vec<ItemPlacement>,
+    start_location: StartLocation,
     placed_item_count: [u32; Placeable::VALUES.len()]
 }
 
@@ -63,6 +65,17 @@ impl Plando {
         let preset_path = Path::new("./data/presets/full-settings/Community Race Season 3 (No animals).json");
         let randomizer_settings = load_preset(preset_path).unwrap();
 
+        let mut ship_start = StartLocation::default();
+        ship_start.name = "Ship".to_string();
+        ship_start.room_id = 8;
+        ship_start.node_id = 5;
+        ship_start.door_load_node_id = Some(2);
+        ship_start.x = 72.0;
+        ship_start.y = 69.5;
+
+        let mut placed_item_count = [0u32; Placeable::VALUES.len()];
+        placed_item_count[0] = 1;
+
         let mut plando = Plando {
             game_data,
             room_data,
@@ -73,7 +86,8 @@ impl Plando {
             map,
             randomizer_settings,
             item_locations: Vec::new(),
-            placed_item_count: [0u32; Placeable::VALUES.len()]
+            start_location: ship_start,
+            placed_item_count
         };
 
         plando.init_item_locations();
@@ -114,12 +128,16 @@ impl Plando {
     }
 
     fn get_tile_at(&self, x: usize, y: usize) -> Option<TileInfo> {
-        for (room_idx, room_geomtry) in self.game_data.room_geometry.iter().enumerate() {
+        for map_tile in &self.game_data.map_tile_data {
+            let room_id = map_tile.room_id;
+            let room_ptr = self.game_data.room_ptr_by_id[&room_id];
+            let room_idx = self.game_data.room_idx_by_ptr[&room_ptr];
+            let room_geometry = &self.game_data.room_geometry[room_idx];
             let (room_x, room_y) = self.map.rooms[room_idx];
-            for (tile_y, row) in room_geomtry.map.iter().enumerate() {
+            for (tile_y, row) in room_geometry.map.iter().enumerate() {
                 for (tile_x, &tile) in row.iter().enumerate() {
                     if tile == 1 && room_x + tile_x == x && room_y + tile_y == y {
-                        return Some(TileInfo { room_idx, tile_x, tile_y })
+                        return Some(TileInfo { room_id, room_idx, tile_x, tile_y })
                     }
                 }
             }
@@ -232,6 +250,7 @@ fn load_preset(path: &Path) -> Result<RandomizerSettings> {
 
 #[derive(Clone)]
 struct RoomData {
+    room_id: usize,
     room_idx: usize,
     room_name: String,
     tile_width: u32,
@@ -493,7 +512,7 @@ fn load_room_sprites(game_data: &GameData) -> Result<(FBox<graphics::Image>, Vec
         let room_idx = game_data.room_idx_by_ptr[room_ptr];
 
         image_mappings.push((RoomData {
-            //room_id: map_tile_data.room_id,
+            room_id: map_tile_data.room_id,
             room_idx: room_idx,
             room_name: map_tile_data.room_name.clone(),
             tile_width: max_width as u32,
@@ -630,6 +649,12 @@ fn roll_map(repo: &MapRepository, game_data: &GameData) -> Result<Map> {
     repo.get_map(1, map_seed, game_data)
 }
 
+const ITEM_VALUES: [Item; 23] = [
+    Item::ETank, Item::Missile, Item::Super, Item::PowerBomb, Item::Bombs, Item::Charge, Item::Ice, Item::HiJump, Item::SpeedBooster,
+    Item::Wave, Item::Spazer, Item::SpringBall, Item::Varia, Item::Gravity, Item::XRayScope, Item::Plasma, Item::Grapple,
+    Item::SpaceJump, Item::ScrewAttack, Item::Morph, Item::ReserveTank, Item::WallJump, Item::Nothing
+];
+
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Placeable {
     Helm = 0,
@@ -733,6 +758,36 @@ impl Placeable {
             Placeable::DoorCharge => "Charge Door",
         }.to_string()
     }
+
+    fn to_item(self) -> Option<Item> {
+        if self == Placeable::Helm || self > Placeable::ReserveTank {
+            return None;
+        }
+        Some(ITEM_VALUES[self as usize - Placeable::ETank as usize])
+    }
+}
+
+fn put_placeable(plando: &mut Plando, tile_info: &TileInfo, placeable: Placeable, right: bool, bottom: bool) -> Result<()> {
+    let placed_item_count = plando.placed_item_count[placeable as usize] as usize;
+    let max_item_count = plando.get_max_placeable_count(placeable);
+
+    if placeable == Placeable::Helm {
+        for start_pos in &plando.game_data.start_locations {
+            let tile_x = (start_pos.x / 16.0).floor() as usize;
+            let tile_y = (start_pos.y / 16.0).floor() as usize;
+            if tile_info.room_id == start_pos.room_id && tile_info.tile_x == tile_x && tile_info.tile_y == tile_y {
+                plando.start_location = start_pos.clone();
+                return Ok(());
+            }
+        }
+    } else if let Some(item) = placeable.to_item() {
+        if max_item_count.is_none() || placed_item_count < max_item_count.unwrap() {
+            return plando.place_item(tile_info, item, right);
+        }
+    } else {
+        todo!("Put placeable");
+    }
+    Ok(())
 }
 
 /*fn get_randomizer<'a>(map: &'a Map, settings: &'a RandomizerSettings, preset_data: PresetData, game_data: &'a GameData) -> Randomizer<'a> {
@@ -852,13 +907,9 @@ fn main() {
     let mut modal_load_preset_path = "".to_string();
     let mut error_modal_message: Option<String> = None;
 
-    let mut sidebar_selection = 0;
+    let mut sidebar_selection = Placeable::Helm;
 
-    const ITEM_VALUES: [Item; 23] = [
-        Item::ETank, Item::Missile, Item::Super, Item::PowerBomb, Item::Bombs, Item::Charge, Item::Ice, Item::HiJump, Item::SpeedBooster,
-        Item::Wave, Item::Spazer, Item::SpringBall, Item::Varia, Item::Gravity, Item::XRayScope, Item::Plasma, Item::Grapple,
-        Item::SpaceJump, Item::ScrewAttack, Item::Morph, Item::ReserveTank, Item::WallJump, Item::Nothing
-    ];
+    
 
     while window.is_open() {
         let local_mouse_x = (mouse_x as f32 - x_offset) / zoom;
@@ -866,12 +917,6 @@ fn main() {
         let tile_x = (local_mouse_x / 8.0).floor().max(0.0) as usize;
         let tile_y = (local_mouse_y / 8.0).floor().max(0.0) as usize;
         let tile_hovered_opt = plando.get_tile_at(tile_x, tile_y);
-
-        let item_selected_opt: Option<Item> = if sidebar_selection >= Placeable::ETank as i32 && sidebar_selection <= Placeable::WalljumpBoots as i32 {
-            Some(ITEM_VALUES[sidebar_selection as usize - Placeable::ETank as usize])
-        } else {
-            None
-        };
 
         while let Some(ev) = window.poll_event() {
             sfegui.add_event(&ev);
@@ -893,19 +938,18 @@ fn main() {
                     }
 
                     if !is_mouse_dragged {
-                        let item_to_place = match button {
-                            mouse::Button::Left => item_selected_opt,
-                            mouse::Button::Right => Some(Item::Nothing),
-                            _ => None
-                        };
-                        if let Some(item_selected) = item_to_place {
-                            let placed_item_count = plando.placed_item_count[Placeable::ETank as usize + item_selected as usize] as usize;
-                            let max_item_count = plando.get_max_placeable_count(Placeable::VALUES[Placeable::ETank as usize + item_selected as usize]);
-                            if max_item_count.is_none() || placed_item_count < max_item_count.unwrap() {
-                                if let Some(tile_info) = &tile_hovered_opt {
-                                    let right_item = (local_mouse_x / 8.0).fract() > 0.5;
-                                    let _ = plando.place_item(tile_info, item_selected, right_item);
+                        if let Some(tile_info) = &tile_hovered_opt {
+                            let right = (local_mouse_x / 8.0).fract() > 0.5;
+                            let bottom = (local_mouse_y / 8.0).fract() > 0.5;
+                            if button == mouse::Button::Right {
+                                if sidebar_selection.to_item().is_some() {
+                                    let _ = plando.place_item(tile_info, Item::Nothing, right);
+                                } else {
+                                    // Remove Door
+                                    todo!("Remove placed doors");
                                 }
+                            } else if button == mouse::Button::Left {
+                                let _ = put_placeable(&mut plando, tile_info, sidebar_selection, right, bottom);
                             }
                         }
                     }
@@ -975,37 +1019,69 @@ fn main() {
                     if info_overlay_opt.is_none() && graphics::FloatRect::new(cell_x as f32, cell_y as f32, 8.0, 8.0).contains2(local_mouse_x, local_mouse_y) {
                         info_overlay_opt = Some(data.room_name.to_string());
                     }
+
+                    // Draw Tile Outline
+                    let sprite_tile_rect = IntRect::new(8 * (data.atlas_x_offset as i32 + local_x as i32), 8 * (data.atlas_y_offset as i32 + local_y as i32), 8, 8);
+                    let mut sprite_tile = graphics::Sprite::with_texture_and_rect(&plando.atlas_tex, sprite_tile_rect);
+                    sprite_tile.set_position(Vector2f::new(cell_x as f32, cell_y as f32));
+                    window.draw_with_renderstates(&sprite_tile, &states);
+
+                    let (tex_helm_w, _, tex_helm) = user_tex_source.get_texture(Placeable::Helm as u64);
+                    let mut sprite_helm = graphics::Sprite::with_texture(tex_helm);
+                    sprite_helm.set_scale(8.0 / tex_helm_w);
+
+                    // Draw all possible starting positions
+                    if sidebar_selection == Placeable::Helm {
+                        sprite_helm.set_color(Color::rgba(0xAF, 0xAF, 0xAF, 0x5F));
+                        for start_pos in &plando.game_data.start_locations {
+                            if data.room_id != start_pos.room_id {
+                                continue;
+                            }
+                            let start_tile_x = (start_pos.x / 16.0).floor() as usize;
+                            let start_tile_y = (start_pos.y / 16.0).floor() as usize;
+                            if start_tile_x == local_x && start_tile_y == local_y {
+                                sprite_helm.set_position(Vector2f::new(cell_x as f32, cell_y as f32));
+                                window.draw_with_renderstates(&sprite_helm, &states);
+                            }
+                        }
+                        sprite_helm.set_color(Color::WHITE);
+                    }
+
+                    // Draw Start Position
+                    if data.room_id == plando.start_location.room_id {
+                        let start_tile_x = (plando.start_location.x / 16.0).floor() as usize;
+                        let start_tile_y = (plando.start_location.y / 16.0).floor() as usize;
+                        if start_tile_x == local_x && start_tile_y == local_y {
+                            sprite_helm.set_position(Vector2f::new(cell_x as f32, cell_y as f32));
+                            window.draw_with_renderstates(&sprite_helm, &states);
+                        }
+                    }
                 }
             }
-
-            // Draw the room outlines
-            let mut room_sprite = graphics::Sprite::with_texture_and_rect(&plando.atlas_tex,
-                graphics::IntRect::new(8 * (data.atlas_x_offset as i32), 8 * (data.atlas_y_offset as i32),
-                    8 * data.tile_width as i32, 8 * data.tile_height as i32));
-            room_sprite.set_position(Vector2f::new(8.0 * x as f32, 8.0 * y as f32));
-            window.draw_with_renderstates(&room_sprite, &states);
         }
 
         // Draw items
-        for item_placement in &plando.item_locations {
-            let (room_x, room_y) = plando.map.rooms[item_placement.room_idx];
-            let item_index = match item_placement.item {
-                Item::Nothing => 23,
-                item => item as i32
-            };
+        if sidebar_selection >= Placeable::ETank && sidebar_selection <= Placeable::WalljumpBoots {
+            for item_placement in &plando.item_locations {
+                let (room_x, room_y) = plando.map.rooms[item_placement.room_idx];
+                let item_index = match item_placement.item {
+                    Item::Nothing => 23,
+                    item => item as i32
+                };
 
-            let mut spr_item = graphics::Sprite::with_texture_and_rect(&tex_items,
-                IntRect::new(tex_item_width * item_index, 0, tex_item_width, tex_item_width));
-            spr_item.set_origin(Vector2f::new(tex_item_width as f32 / 2.0, tex_item_width as f32 / 2.0));
-            let item_x_offset = match item_placement.double_item_placement {
-                DoubleItemPlacement::Left => 2,
-                DoubleItemPlacement::Middle => 4,
-                DoubleItemPlacement::Right => 6
-            };
-            spr_item.set_position(Vector2f::new((8 * (item_placement.tile_x + room_x) + item_x_offset) as f32, (8 * (item_placement.tile_y + room_y) + 4) as f32));
-            spr_item.set_scale(6.0 / tex_item_width as f32);
+                let mut spr_item = graphics::Sprite::with_texture_and_rect(&tex_items,
+                    IntRect::new(tex_item_width * item_index, 0, tex_item_width, tex_item_width));
+                spr_item.set_origin(Vector2f::new(tex_item_width as f32 / 2.0, tex_item_width as f32 / 2.0));
+                let item_x_offset = match item_placement.double_item_placement {
+                    DoubleItemPlacement::Left => 2,
+                    DoubleItemPlacement::Middle => 4,
+                    DoubleItemPlacement::Right => 6
+                };
+                spr_item.set_position(Vector2f::new((8 * (item_placement.tile_x + room_x) + item_x_offset) as f32, (8 * (item_placement.tile_y + room_y) + 4) as f32));
+                spr_item.set_scale(6.0 / tex_item_width as f32);
 
-            window.draw_with_renderstates(&spr_item, &states);
+                window.draw_with_renderstates(&spr_item, &states);
+            }
         }
 
         // Draw the info overlay
@@ -1056,11 +1132,12 @@ fn main() {
                 });
             });
 
+            // Draw item selection sidebar
             sidebar_width = egui::SidePanel::right("panel_item_select").resizable(false).show(ctx, |ui| {
                 egui::scroll_area::ScrollArea::vertical().show(ui, |ui| {
                     egui::Grid::new("grid_item_select")
                     .with_row_color(move |val, _style| {
-                        if val as i32 == sidebar_selection { Some(Color32::from_rgb(255, 0, 0)) } else { None }
+                        if Placeable::VALUES[val] == sidebar_selection { Some(Color32::from_rgb(255, 0, 0)) } else { None }
                     }).min_row_height(sidebar_height).show(ui, |ui| {
                         for (row, placeable) in Placeable::VALUES.iter().enumerate() {
                             // If settigs don't allow ammo or beam doors, we don't allow their placement
@@ -1074,24 +1151,20 @@ fn main() {
                                 .fit_to_exact_size(Vec2::new(sidebar_height, sidebar_height));
                             let img_resp = ui.add(img);
                             if img_resp.clicked() {
-                                sidebar_selection = row as i32;
+                                sidebar_selection = Placeable::VALUES[row];
                             }
 
                             let item_count = plando.placed_item_count[row];
                             let max_item_count = plando.get_max_placeable_count(placeable.clone());
 
                             let label_name = egui::Label::new(placeable.to_string());
-                            if /*ui.add_sized(Vec2::new(sidebar_width - img_resp.rect.width() - 32.0, sidebar_height), |ui: &mut Ui| {*/
-                                ui.add(label_name)
-                            /*})*/.clicked() {
-                                sidebar_selection = row as i32;
+                            if ui.add(label_name).clicked() {
+                                sidebar_selection = Placeable::VALUES[row];
                             }
                             let label_count_str = if max_item_count.is_some() { format!("{item_count} / {}", max_item_count.unwrap()) } else { item_count.to_string() };
                             let label_count = egui::Label::new(label_count_str).sense(Sense::click());
-                            if /*ui.add_sized(Vec2::new(32.0, sidebar_height), |ui: &mut Ui| {*/
-                                ui.add(label_count)
-                            /*})*/.clicked() {
-                                sidebar_selection = row as i32;
+                            if ui.add(label_count).clicked() {
+                                sidebar_selection = Placeable::VALUES[row];
                             }
                             ui.end_row();
                         }
