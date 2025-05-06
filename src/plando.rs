@@ -1,10 +1,13 @@
 use std::path::Path;
 
-use anyhow::{anyhow, Result};
-use hashbrown::HashSet;
-use maprando::{map_repository::MapRepository, settings::{RandomizerSettings, WallJump}};
-use maprando_game::{DoorPtrPair, GameData, Item, Map, StartLocation};
-use rand::{RngCore, SeedableRng};
+use anyhow::{anyhow, bail, Result};
+use hashbrown::{HashMap, HashSet};
+use maprando::{map_repository::MapRepository, preset::PresetData, randomize::{DifficultyConfig, DoorState, FlagLocationState, ItemLocationState, LockedDoor, RandomizationState, Randomizer, SaveLocationState, SpoilerDetails, SpoilerDoorDetails, SpoilerDoorSummary, SpoilerFlagDetails, SpoilerFlagSummary, SpoilerSummary, StartLocationData}, settings::{Objective, RandomizerSettings, WallJump}, traverse::{apply_requirement, get_bireachable_idxs, get_spoiler_route, traverse, LockedDoorData}};
+use maprando_game::{DoorPtrPair, DoorType, GameData, HubLocation, Item, ItemLocationId, LinksDataGroup, Map, NodeId, RoomId, StartLocation, VertexKey};
+use maprando_logic::{GlobalState, Inventory, LocalState};
+use rand::{rngs::StdRng, RngCore, SeedableRng};
+
+//use crate::plando_logic::*;
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DoubleItemPlacement {
@@ -145,21 +148,35 @@ pub struct TileInfo {
     pub tile_y: usize
 }
 
+pub enum MapRepositoryType {
+    Vanilla, Standard, Wild
+}
+
 pub struct Plando {
     pub game_data: GameData,
+    pub preset_data: PresetData,
+    pub difficulty_tiers: Vec<DifficultyConfig>,
     pub maps_vanilla: MapRepository,
     pub maps_standard: MapRepository,
     pub maps_wild: MapRepository,
     pub map: Map,
     pub randomizer_settings: RandomizerSettings,
+    pub objectives: Vec<Objective>,
     pub item_locations: Vec<ItemPlacement>,
-    pub start_location: StartLocation,
+    pub start_location_data: StartLocationData,
     pub placed_item_count: [u32; Placeable::VALUES.len()],
-    pub randomizable_doors: HashSet<DoorPtrPair>
-}
+    pub randomizable_door_connections: Vec<(DoorPtrPair, DoorPtrPair)>,
+    pub locked_doors: Vec<LockedDoor>,
 
-pub enum MapRepositoryType {
-    Vanilla, Standard, Wild
+    door_lock_loc: Vec<(usize, usize, usize)>,
+    door_beam_loc: Vec<(usize, usize, usize)>,
+    total_door_count: usize,
+
+    pub spoiler_summary_vec: Vec<SpoilerSummary>,
+    pub spoiler_details_vec: Vec<SpoilerDetails>,
+
+    pub rng: StdRng,
+    pub auto_update_spoiler: bool
 }
 
 impl Plando {
@@ -178,6 +195,10 @@ impl Plando {
         let preset_path = Path::new("./data/presets/full-settings/Community Race Season 3 (No animals).json");
         let randomizer_settings = load_preset(preset_path).unwrap();
 
+        let mut rng = rand::rngs::StdRng::from_entropy();
+        let objectives = maprando::randomize::get_objectives(&randomizer_settings, &mut rng);
+        let randomizable_door_connections = get_randomizable_door_connections(&game_data, &map, &objectives);
+
         let mut ship_start = StartLocation::default();
         ship_start.name = "Ship".to_string();
         ship_start.room_id = 8;
@@ -186,25 +207,51 @@ impl Plando {
         ship_start.x = 72.0;
         ship_start.y = 69.5;
 
+        let mut ship_hub = HubLocation::default();
+        ship_hub.name = "Ship".to_string();
+        ship_hub.room_id = 8;
+        ship_hub.node_id = 5;
+
+        let start_location_data = StartLocationData {
+            start_location: ship_start,
+            hub_location: ship_hub,
+            hub_obtain_route: Vec::new(),
+            hub_return_route: Vec::new()
+        };
+
         let mut placed_item_count = [0u32; Placeable::VALUES.len()];
         placed_item_count[0] = 1;
 
-        let randomizable_doors = HashSet::new();
+        let preset_data = load_preset_data(&game_data).unwrap();
 
         let mut plando = Plando {
             game_data,
+            preset_data,
+            difficulty_tiers: Vec::new(),
             maps_vanilla,
             maps_standard,
             maps_wild,
             map,
             randomizer_settings,
+            objectives,
             item_locations: Vec::new(),
-            start_location: ship_start,
+            start_location_data,
             placed_item_count,
-            randomizable_doors
-        };
+            randomizable_door_connections,
+            locked_doors: Vec::new(),
 
+            door_lock_loc: Vec::new(),
+            door_beam_loc: Vec::new(),
+            total_door_count: 0,
+            spoiler_summary_vec: Vec::new(),
+            spoiler_details_vec: Vec::new(),
+
+            rng,
+            auto_update_spoiler: true
+        };
+        
         plando.init_item_locations();
+        plando.get_difficulty_tiers();
 
         plando
     }
@@ -213,31 +260,29 @@ impl Plando {
         for i in 0..self.item_locations.len() {
             self.item_locations[i].item = Item::Nothing;
         }
+        for i in Placeable::ETank as usize..Placeable::ReserveTank as usize {
+            self.placed_item_count[i] = 0;
+        }
+
+        if self.auto_update_spoiler {
+            self.update_spoiler_data();
+        }
     }
 
     fn init_item_locations(&mut self) {
-        for map_tile in &self.game_data.map_tile_data {
-            let room_ptr = &self.game_data.room_ptr_by_id[&map_tile.room_id];
+        for item_loc in &self.game_data.item_locations {
+            let room_ptr = &self.game_data.room_ptr_by_id[&item_loc.0];
             let room_idx = self.game_data.room_idx_by_ptr[room_ptr];
-            let room_geometry = &self.game_data.room_geometry[room_idx];
+            
+            let (tile_x, tile_y) = self.game_data.node_coords[item_loc];
 
-            for tile in &room_geometry.items {
-                let mut has_double_item = false;
-                for item in &mut self.item_locations {
-                    if item.room_idx == room_idx && item.tile_x == tile.x && item.tile_y == tile.y {
-                        has_double_item = true;
-                        item.double_item_placement = DoubleItemPlacement::Left;
-                    }
-                }
-
-                self.item_locations.push(ItemPlacement {
-                    item: Item::Nothing,
-                    room_idx,
-                    tile_x: tile.x,
-                    tile_y: tile.y,
-                    double_item_placement: if has_double_item { DoubleItemPlacement::Right } else { DoubleItemPlacement::Middle }
-                });
-            }
+            self.item_locations.push(ItemPlacement {
+                item: Item::Nothing,
+                room_idx,
+                tile_x,
+                tile_y,
+                double_item_placement: get_double_item_offset(item_loc.0, item_loc.1)
+            });
         }
     }
 
@@ -249,12 +294,28 @@ impl Plando {
         };
         self.map = roll_map(&map_repository, &self.game_data)?;
         self.clear_item_locations();
+        self.clear_doors();
+        self.randomizable_door_connections = get_randomizable_door_connections(&self.game_data, &self.map, &self.objectives);
         Ok(())
     }
 
     pub fn load_preset(&mut self, path: &Path) -> Result<()> {
         self.randomizer_settings = load_preset(path).unwrap();
+        self.clear_doors();
+        self.objectives = maprando::randomize::get_objectives(&self.randomizer_settings, &mut self.rng);
+        self.randomizable_door_connections = get_randomizable_door_connections(&self.game_data, &self.map, &self.objectives);
+        self.get_difficulty_tiers();
         Ok(())
+    }
+
+    pub fn get_difficulty_tiers(&mut self) {
+        self.difficulty_tiers = maprando::randomize::get_difficulty_tiers(
+            &self.randomizer_settings, 
+            &self.preset_data.difficulty_tiers, 
+            &self.game_data, 
+            &self.preset_data.tech_by_difficulty["Implicit"],
+            &self.preset_data.notables_by_difficulty["Implicit"]
+        );
     }
 
     pub fn get_tile_at(&self, x: usize, y: usize) -> Option<TileInfo> {
@@ -273,6 +334,152 @@ impl Plando {
             }
         }
         None
+    }
+
+    pub fn place_start_location(&mut self, start_loc: StartLocation) -> Result<()> {
+        let locked_door_data = self.get_locked_door_data();
+        let implicit_tech = &self.preset_data.tech_by_difficulty["Implicit"];
+        let implicit_notables = &self.preset_data.notables_by_difficulty["Implicit"];
+        let difficulty = DifficultyConfig::new(
+            &self.randomizer_settings.skill_assumption_settings,
+            &self.game_data,
+            &implicit_tech,
+            &implicit_notables,
+        );
+        let filtered_base_links = maprando::randomize::filter_links(&self.game_data.links, &self.game_data, &difficulty);
+        let base_links_data = LinksDataGroup::new(
+            filtered_base_links,
+            self.game_data.vertex_isv.keys.len(),
+            0,
+        );
+        let randomizer = Randomizer::new(
+            &self.map, 
+            &locked_door_data, 
+            self.objectives.clone(), 
+            &self.randomizer_settings,
+            &self.difficulty_tiers,
+            &self.game_data,
+            &base_links_data,
+            &mut self.rng
+        );
+
+        let num_vertices = self.game_data.vertex_isv.keys.len();
+        let start_vertex_id = self.game_data.vertex_isv.index_by_key[&VertexKey {
+            room_id: start_loc.room_id,
+            node_id: start_loc.node_id,
+            obstacle_mask: 0,
+            actions: vec![],
+        }];
+
+        let locked_door_data = self.get_locked_door_data();
+
+        let global = self.get_initial_global_state();
+        let local = apply_requirement(
+            &start_loc.requires_parsed.as_ref().unwrap(),
+            &global,
+            LocalState::new(),
+            false,
+            &self.randomizer_settings,
+            &self.difficulty_tiers[0],
+            &self.game_data,
+            &locked_door_data,
+            &self.objectives,
+        );
+        if local.is_none() {
+            bail!("Invalid start location");
+        }
+        let forward = traverse(
+            &randomizer.base_links_data,
+            &randomizer.seed_links_data,
+            None,
+            &global,
+            local.unwrap(),
+            num_vertices,
+            start_vertex_id,
+            false,
+            &self.randomizer_settings,
+            &self.difficulty_tiers[0],
+            &self.game_data,
+            &locked_door_data,
+            &self.objectives,
+        );
+        let forward0 = traverse(
+            &randomizer.base_links_data,
+            &randomizer.seed_links_data,
+            None,
+            &global,
+            LocalState::new(),
+            num_vertices,
+            start_vertex_id,
+            false,
+            &self.randomizer_settings,
+            &self.difficulty_tiers[0],
+            &self.game_data,
+            &locked_door_data,
+            &self.objectives,
+        );
+        let reverse = traverse(
+            &randomizer.base_links_data,
+            &randomizer.seed_links_data,
+            None,
+            &global,
+            LocalState::new(),
+            num_vertices,
+            start_vertex_id,
+            true,
+            &self.randomizer_settings,
+            &self.difficulty_tiers[0],
+            &self.game_data,
+            &locked_door_data,
+            &self.objectives,
+        );
+
+        for hub in &self.game_data.hub_locations {
+            let hub_vertex_id = self.game_data.vertex_isv.index_by_key[&VertexKey {
+                room_id: hub.room_id,
+                node_id: hub.node_id,
+                obstacle_mask: 0,
+                actions: vec![]
+            }];
+            if !forward.cost[hub_vertex_id].iter().any(|&x| x.is_finite()) {
+                continue;
+            }
+            if let Some((forward_cost_idx, reverse_cost_idx)) = get_bireachable_idxs(&global, hub_vertex_id, &forward0, &reverse) {
+                let local = apply_requirement(
+                    &hub.requires_parsed.as_ref().unwrap(),
+                    &global,
+                    LocalState::new(),
+                    false,
+                    &self.randomizer_settings,
+                    &self.difficulty_tiers[0],
+                    &self.game_data,
+                    &locked_door_data,
+                    &self.objectives
+                );
+                if local.is_some() {
+                    let hub_obtain_link_idxs = get_spoiler_route(&forward, hub_vertex_id, forward_cost_idx);
+                    let hub_return_link_idxs = get_spoiler_route(&reverse, hub_vertex_id, reverse_cost_idx);
+
+                    let hub_obtain_route = randomizer.get_spoiler_route(&global, LocalState::new(), &hub_obtain_link_idxs, &difficulty, false);
+                    let hub_return_route = randomizer.get_spoiler_route(&global, LocalState::new(), &hub_return_link_idxs, &difficulty, true);
+                
+                    self.start_location_data = StartLocationData {
+                        start_location: start_loc,
+                        hub_location: hub.clone(),
+                        hub_obtain_route,
+                        hub_return_route
+                    };
+
+                    if self.auto_update_spoiler {
+                        self.update_spoiler_data();
+                    }
+
+                    return Ok(());
+                }
+            }
+        }
+
+        bail!("Could not find suitable hub location to given start location")
     }
 
     pub fn place_item(&mut self, tile_info: &TileInfo, item: Item, right_item: bool) -> Result<()> {
@@ -294,11 +501,144 @@ impl Plando {
                         self.placed_item_count[Placeable::ETank as usize + item as usize] += 1;
                     }
                     item_location.item = item;
+                    if self.auto_update_spoiler {
+                        self.update_spoiler_data();
+                    }
                     return Ok(());
                 }
             }
         }
         Err(anyhow!("Could not place item"))
+    }
+
+    pub fn place_door(&mut self, tile_info: &TileInfo, door_type_opt: Option<DoorType>, direction: String, replace: bool) -> Result<()> {
+        if self.total_door_count == 55 {
+            bail!("Cannot place more than 55 doors");
+        }
+
+        let door = self.game_data.room_geometry[tile_info.room_idx].doors.iter().find(|door| {
+            door.x == tile_info.tile_x && door.y == tile_info.tile_y && door.direction == direction
+        }).ok_or(anyhow!("Could not find door on given tile with given direction"))?;
+        let ptr_pair = (door.exit_ptr, door.entrance_ptr);
+
+        let door_connection = self.randomizable_door_connections.iter().find(|pair| {
+            pair.0 == ptr_pair || pair.1 == ptr_pair
+        }).ok_or(anyhow!("Door is not randomizable"))?;
+
+        let (room_src_idx, door_src_idx) = self.game_data.room_and_door_idxs_by_door_ptr_pair[&door_connection.0];
+        let (room_dst_idx, door_dst_idx) = self.game_data.room_and_door_idxs_by_door_ptr_pair[&door_connection.1];
+        let tile_src_x = self.game_data.room_geometry[room_src_idx].doors[door_src_idx].x;
+        let tile_src_y = self.game_data.room_geometry[room_src_idx].doors[door_src_idx].y;
+        let tile_dst_x = self.game_data.room_geometry[room_dst_idx].doors[door_dst_idx].x;
+        let tile_dst_y = self.game_data.room_geometry[room_dst_idx].doors[door_dst_idx].y;
+
+        let loc_src = (room_src_idx, tile_src_x, tile_src_y);
+        let loc_dst = (room_dst_idx, tile_dst_x, tile_dst_y);
+
+        if door_type_opt.is_none() {
+            if self.door_lock_loc.contains(&loc_src) && self.door_lock_loc.contains(&loc_dst) {
+                self.door_lock_loc.retain(|&elem| elem != loc_src && elem != loc_dst);
+            }
+            if self.door_beam_loc.contains(&loc_src) && self.door_beam_loc.contains(&loc_dst) {
+                self.door_beam_loc.retain(|&elem| elem != loc_src && elem != loc_dst);
+            }
+
+            let old_door_type_opt = self.locked_doors.iter().find_map(
+                |elem| if elem.src_ptr_pair == door_connection.0 && elem.dst_ptr_pair == door_connection.1 { Some(elem.door_type) } else { None });
+
+            if let Some(old_door_type) = old_door_type_opt {
+                let placeable = match old_door_type {
+                    DoorType::Red => Placeable::DoorMissile,
+                    DoorType::Green => Placeable::DoorSuper,
+                    DoorType::Yellow => Placeable::DoorPowerBomb,
+                    DoorType::Beam(beam_type) => match beam_type {
+                        maprando_game::BeamType::Charge => Placeable::DoorCharge,
+                        maprando_game::BeamType::Ice => Placeable::DoorIce,
+                        maprando_game::BeamType::Wave => Placeable::DoorWave,
+                        maprando_game::BeamType::Spazer => Placeable::DoorSpazer,
+                        maprando_game::BeamType::Plasma => Placeable::DoorPlasma,
+                    },
+                    _ => Placeable::DoorMissile
+                } as usize;
+                self.placed_item_count[placeable] -= 1;
+                self.total_door_count -= 1;
+                self.locked_doors.retain(|elem| elem.src_ptr_pair != door_connection.0 || elem.dst_ptr_pair != door_connection.1);
+                if self.auto_update_spoiler {
+                    self.update_spoiler_data();
+                }
+            }
+
+            return Ok(());
+        }
+
+        let door_type = door_type_opt.unwrap();
+        let locked_door = LockedDoor {
+            src_ptr_pair: door_connection.0,
+            dst_ptr_pair: door_connection.1,
+            door_type: door_type,
+            bidirectional: true
+        };
+
+        let placeable = match door_type {
+            DoorType::Red => Placeable::DoorMissile,
+            DoorType::Green => Placeable::DoorSuper,
+            DoorType::Yellow => Placeable::DoorPowerBomb,
+            DoorType::Beam(beam_type) => match beam_type {
+                maprando_game::BeamType::Charge => Placeable::DoorCharge,
+                maprando_game::BeamType::Ice => Placeable::DoorIce,
+                maprando_game::BeamType::Wave => Placeable::DoorWave,
+                maprando_game::BeamType::Spazer => Placeable::DoorSpazer,
+                maprando_game::BeamType::Plasma => Placeable::DoorPlasma,
+            },
+            _ => Placeable::DoorMissile
+        } as usize;
+
+        if self.door_lock_loc.contains(&loc_src) || self.door_lock_loc.contains(&loc_dst) {
+            if replace {
+                todo!("Implement door replacing");
+            } else {
+                bail!("There can only be one locked door per tile");
+            }
+        }
+
+        if let DoorType::Beam(_) = door_type {
+            if self.door_beam_loc.contains(&loc_src) || self.door_beam_loc.contains(&loc_dst) {
+                if replace {
+                    todo!("Implement door replacing");
+                } else {
+                    bail!("There can only be one beam door per room");
+                }
+            }
+            self.door_beam_loc.push(loc_src);
+            self.door_beam_loc.push(loc_dst);
+        }
+        self.door_lock_loc.push(loc_src);
+        self.door_lock_loc.push(loc_dst);
+
+        self.locked_doors.push(locked_door);
+        
+        self.placed_item_count[placeable] += 1;
+        self.total_door_count += 1;
+
+        if self.auto_update_spoiler {
+            self.update_spoiler_data();
+        }
+
+        Ok(())
+    }
+
+    pub fn clear_doors(&mut self) {
+        self.door_beam_loc.clear();
+        self.door_lock_loc.clear();
+        self.locked_doors.clear();
+
+        for i in Placeable::DoorMissile as usize..Placeable::DoorPlasma as usize {
+            self.placed_item_count[i] = 0;
+        }
+
+        if self.auto_update_spoiler {
+            self.update_spoiler_data();
+        }
     }
 
     pub fn get_max_placeable_count(&self, placeable: Placeable) -> Option<usize> {
@@ -320,6 +660,297 @@ impl Plando {
             });
         }
         None
+    }
+
+    pub fn get_locked_door_data(&self) -> LockedDoorData {
+        let mut locked_door_node_map: HashMap<(RoomId, NodeId), usize> = HashMap::new();
+        for (i, door) in self.locked_doors.iter().enumerate() {
+            let (src_room_id, src_node_id) = self.game_data.door_ptr_pair_map[&door.src_ptr_pair];
+            locked_door_node_map.insert((src_room_id, src_node_id), i);
+            if door.bidirectional {
+                let (dst_room_id, dst_node_id) = self.game_data.door_ptr_pair_map[&door.dst_ptr_pair];
+                locked_door_node_map.insert((dst_room_id, dst_node_id), i);
+            }
+        }
+
+        // Homing Geemer Room left door -> West Ocean Bridge left door
+        if let Some(&idx) = locked_door_node_map.get(&(313, 1)) {
+            locked_door_node_map.insert((32, 7), idx);
+        }
+
+        // Homing Geemer Room right door -> West Ocean Bridge right door
+        if let Some(&idx) = locked_door_node_map.get(&(313, 2)) {
+            locked_door_node_map.insert((32, 8), idx);
+        }
+
+        // Pants Room right door -> East Pants Room right door
+        if let Some(&idx) = locked_door_node_map.get(&(322, 2)) {
+            locked_door_node_map.insert((220, 2), idx);
+        }
+
+        let mut locked_door_vertex_ids = vec![vec![]; self.locked_doors.len()];
+        for (&(room_id, node_id), vertex_ids) in &self.game_data.node_door_unlock {
+            if let Some(&locked_door_idx) = locked_door_node_map.get(&(room_id, node_id)) {
+                locked_door_vertex_ids[locked_door_idx].extend(vertex_ids);
+            }
+        }
+
+        LockedDoorData {
+            locked_doors: self.locked_doors.clone(),
+            locked_door_node_map,
+            locked_door_vertex_ids,
+        }
+    }
+
+    pub fn update_spoiler_data(&mut self) {
+        let locked_door_data = self.get_locked_door_data();
+        let implicit_tech = &self.preset_data.tech_by_difficulty["Implicit"];
+        let implicit_notables = &self.preset_data.notables_by_difficulty["Implicit"];
+        let difficulty = DifficultyConfig::new(
+            &self.randomizer_settings.skill_assumption_settings,
+            &self.game_data,
+            &implicit_tech,
+            &implicit_notables,
+        );
+        let filtered_base_links = maprando::randomize::filter_links(&self.game_data.links, &self.game_data, &difficulty);
+        let base_links_data = LinksDataGroup::new(
+            filtered_base_links,
+            self.game_data.vertex_isv.keys.len(),
+            0,
+        );
+        let randomizer = Randomizer::new(
+            &self.map, 
+            &locked_door_data, 
+            self.objectives.clone(), 
+            &self.randomizer_settings,
+            &self.difficulty_tiers,
+            &self.game_data,
+            &base_links_data,
+            &mut self.rng
+        );
+
+        let initial_global_state = self.get_initial_global_state();
+        let initial_item_location_state = ItemLocationState {
+            placed_item: None,
+            collected: false,
+            reachable_step: None,
+            bireachable: false,
+            bireachable_vertex_id: None,
+            difficulty_tier: None,
+        };
+        let initial_flag_location_state = FlagLocationState {
+            reachable_step: None,
+            reachable_vertex_id: None,
+            bireachable: false,
+            bireachable_vertex_id: None,
+        };
+        let initial_save_location_state = SaveLocationState { bireachable: false };
+        let initial_door_state = DoorState {
+            bireachable: false,
+            bireachable_vertex_id: None,
+        };
+
+        let mut state = RandomizationState {
+            step_num: 1,
+            start_location: self.start_location_data.start_location.clone(),
+            hub_location: self.start_location_data.hub_location.clone(),
+            hub_obtain_route: self.start_location_data.hub_obtain_route.clone(),
+            hub_return_route: self.start_location_data.hub_return_route.clone(),
+            item_precedence: Vec::new(),
+            save_location_state: vec![initial_save_location_state; self.game_data.save_locations.len()],
+            item_location_state: vec![initial_item_location_state; self.game_data.item_locations.len()],
+            flag_location_state: vec![initial_flag_location_state; self.game_data.flag_ids.len()],
+            door_state: vec![initial_door_state; locked_door_data.locked_doors.len()],
+            items_remaining: randomizer.initial_items_remaining.clone(),
+            global_state: initial_global_state,
+            debug_data: None,
+            previous_debug_data: None,
+            key_visited_vertices: HashSet::new()
+        };
+
+        randomizer.update_reachability(&mut state);
+
+        for i in 0..state.item_location_state.len() {
+            let item_placed = &self.item_locations[i];
+            if item_placed.item != Item::Nothing {
+                state.item_location_state[i].placed_item = Some(item_placed.item);
+            }
+        }
+
+        self.spoiler_summary_vec.clear();
+        self.spoiler_details_vec.clear();
+        //let mut debug_data_vec: Vec<DebugData> = Vec::new();
+
+        loop {
+            let (spoiler_summary, spoiler_details) = self.update_step(&mut state, &randomizer);
+            let any_progress = spoiler_summary.items.len() > 0 || spoiler_summary.flags.len() > 0;
+            self.spoiler_summary_vec.push(spoiler_summary);
+            self.spoiler_details_vec.push(spoiler_details);
+            //debug_data_vec.push(state.previous_debug_data.as_ref().unwrap().clone());
+
+            if !any_progress {
+                break;
+            }
+        }
+
+        for item_loc_state in &mut state.item_location_state {
+            if item_loc_state.placed_item.is_none() {
+                item_loc_state.placed_item = Some(Item::Nothing);
+            }
+        }
+    }
+
+    fn update_step(&self, state: &mut RandomizationState, randomizer: &Randomizer) -> (SpoilerSummary, SpoilerDetails) {
+        let orig_global_state = state.global_state.clone();
+        let mut spoiler_flag_summaries: Vec<SpoilerFlagSummary> = Vec::new();
+        let mut spoiler_flag_details: Vec<SpoilerFlagDetails> = Vec::new();
+        let mut spoiler_door_summaries: Vec<SpoilerDoorSummary> = Vec::new();
+        let mut spoiler_door_details: Vec<SpoilerDoorDetails> = Vec::new();
+        loop {
+            let mut any_update = false;
+            for (i, &flag_id) in self.game_data.flag_ids.iter().enumerate() {
+                if state.global_state.flags[flag_id] {
+                    continue;
+                }
+                if state.flag_location_state[i].reachable_step.is_some() && flag_id == self.game_data.mother_brain_defeated_flag_id {
+                    any_update = true;
+                    let flag_vertex_id = state.flag_location_state[i].reachable_vertex_id.unwrap();
+                    spoiler_flag_summaries.push(randomizer.get_spoiler_flag_summary(&state, flag_vertex_id, flag_id));
+                    spoiler_flag_details.push(randomizer.get_spoiler_flag_details_one_way(&state, flag_vertex_id, flag_id, i));
+                    state.global_state.flags[flag_id] = true;
+                } else if state.flag_location_state[i].bireachable {
+                    any_update = true;
+                    let flag_vertex_id = state.flag_location_state[i].bireachable_vertex_id.unwrap();
+                    spoiler_flag_summaries.push(randomizer.get_spoiler_flag_summary(&state, flag_vertex_id, flag_id));
+                    spoiler_flag_details.push(randomizer.get_spoiler_flag_details(&state, flag_vertex_id, flag_id, i));
+                    state.global_state.flags[flag_id] = true;
+                }
+            }
+            for i in 0..randomizer.locked_door_data.locked_doors.len() {
+                if state.global_state.doors_unlocked[i] {
+                    continue;
+                }
+                if state.door_state[i].bireachable {
+                    any_update = true;
+                    let door_vertex_id = state.door_state[i].bireachable_vertex_id.unwrap();
+                    spoiler_door_summaries.push(randomizer.get_spoiler_door_summary(door_vertex_id, i));
+                    spoiler_door_details.push(randomizer.get_spoiler_door_details(&state, door_vertex_id, i));
+                    state.global_state.doors_unlocked[i] = true;
+                }
+            }
+            if any_update {
+                randomizer.update_reachability(state);
+            } else {
+                break;
+            }
+        }
+
+        let mut placed_uncollected_bireachable_loc: Vec<ItemLocationId> = Vec::new();
+        let mut placed_uncollected_bireachable_items: Vec<Item> = Vec::new();
+        for (i, item_location_state) in state.item_location_state.iter().enumerate() {
+            if let Some(item) = item_location_state.placed_item {
+                if !item_location_state.collected && item_location_state.bireachable {
+                    placed_uncollected_bireachable_loc.push(i);
+                    placed_uncollected_bireachable_items.push(item);
+                }
+            }
+        }
+
+        let mut new_state = RandomizationState {
+            step_num: state.step_num + 1,
+            start_location: state.start_location.clone(),
+            hub_location: state.hub_location.clone(),
+            hub_obtain_route: state.hub_obtain_route.clone(),
+            hub_return_route: state.hub_return_route.clone(),
+            item_precedence: state.item_precedence.clone(),
+            item_location_state: state.item_location_state.clone(),
+            flag_location_state: state.flag_location_state.clone(),
+            save_location_state: state.save_location_state.clone(),
+            door_state: state.door_state.clone(),
+            items_remaining: state.items_remaining.clone(),
+            global_state: state.global_state.clone(),
+            debug_data: None,
+            previous_debug_data: None,
+            key_visited_vertices: HashSet::new(),
+        };
+
+        for &item in &placed_uncollected_bireachable_items {
+            new_state.global_state.collect(item, &self.game_data, self.randomizer_settings.item_progression_settings.ammo_collect_fraction, &self.difficulty_tiers[0].tech);
+        }
+
+        for &loc in &placed_uncollected_bireachable_loc {
+            new_state.item_location_state[loc].collected = true;
+        }
+
+        let spoiler_summary = randomizer.get_spoiler_summary(
+            &orig_global_state,
+            &state,
+            &new_state,
+            spoiler_flag_summaries,
+            spoiler_door_summaries
+        );
+        let spoiler_details = randomizer.get_spoiler_details(
+            &orig_global_state,
+            &state,
+            &new_state,
+            spoiler_flag_details,
+            spoiler_door_details
+        );
+        *state = new_state;
+        (spoiler_summary, spoiler_details)
+    }
+
+    /* COPY FROM maprando::randomize::get_initial_global_state */
+    fn get_initial_global_state(&self) -> GlobalState {
+        let items = vec![false; self.game_data.item_isv.keys.len()];
+        let weapon_mask = self
+            .game_data
+            .get_weapon_mask(&items, &self.difficulty_tiers[0].tech);
+        let mut global = GlobalState {
+            inventory: Inventory {
+                items: items,
+                max_energy: 99,
+                max_reserves: 0,
+                max_missiles: 0,
+                max_supers: 0,
+                max_power_bombs: 0,
+                collectible_missile_packs: 0,
+                collectible_super_packs: 0,
+                collectible_power_bomb_packs: 0,
+            },
+            flags: self.get_initial_flag_vec(),
+            doors_unlocked: vec![false; self.locked_doors.len()],
+            weapon_mask: weapon_mask,
+        };
+        for x in &self.randomizer_settings.item_progression_settings.starting_items {
+            for _ in 0..x.count {
+                global.collect(
+                    x.item,
+                    &self.game_data,
+                    self.randomizer_settings
+                        .item_progression_settings
+                        .ammo_collect_fraction,
+                    &self.difficulty_tiers[0].tech,
+                );
+            }
+        }
+        global
+    }
+
+    fn get_initial_flag_vec(&self) -> Vec<bool> {
+        let mut flag_vec = vec![false; self.game_data.flag_isv.keys.len()];
+        let tourian_open_idx = self.game_data.flag_isv.index_by_key["f_TourianOpen"];
+        flag_vec[tourian_open_idx] = true;
+        if self.randomizer_settings.quality_of_life_settings.all_items_spawn {
+            let all_items_spawn_idx = self.game_data.flag_isv.index_by_key["f_AllItemsSpawn"];
+            flag_vec[all_items_spawn_idx] = true;
+        }
+        if self.randomizer_settings.quality_of_life_settings.acid_chozo {
+            let acid_chozo_without_space_jump_idx =
+                self.game_data.flag_isv.index_by_key["f_AcidChozoWithoutSpaceJump"];
+            flag_vec[acid_chozo_without_space_jump_idx] = true;
+        }
+        flag_vec
     }
 }
 
@@ -355,9 +986,206 @@ fn load_preset(path: &Path) -> Result<RandomizerSettings> {
     result
 }
 
+fn load_preset_data(game_data: &GameData) -> Result<PresetData> {
+    let tech_path = Path::new("data/tech_data.json");
+    let notable_path = Path::new("data/notable_data.json");
+    let presets_path = Path::new("data/presets/");
+
+    let preset_data = PresetData::load(tech_path, notable_path, presets_path, game_data);
+    preset_data
+}
+
 fn roll_map(repo: &MapRepository, game_data: &GameData) -> Result<Map> {
     let mut rng = rand::rngs::StdRng::from_entropy();
 
     let map_seed = (rng.next_u64() & 0xFFFFFFFF) as usize;
     repo.get_map(1, map_seed, game_data)
+}
+
+
+
+fn get_randomizable_doors(game_data: &GameData, objectives: &[Objective]) -> HashSet<DoorPtrPair> {
+    // Doors which we do not want to randomize:
+    let mut non_randomizable_doors: HashSet<DoorPtrPair> = vec![
+        // Gray doors - Pirate rooms:
+        (0x18B7A, 0x18B62), // Pit Room left
+        (0x18B86, 0x18B92), // Pit Room right
+        (0x19192, 0x1917A), // Baby Kraid left
+        (0x1919E, 0x191AA), // Baby Kraid right
+        (0x1A558, 0x1A54C), // Plasma Room
+        (0x19A32, 0x19966), // Metal Pirates left
+        (0x19A3E, 0x19A1A), // Metal Pirates right
+        // Gray doors - Bosses:
+        (0x191CE, 0x191B6), // Kraid left
+        (0x191DA, 0x19252), // Kraid right
+        (0x1A2C4, 0x1A2AC), // Phantoon
+        (0x1A978, 0x1A924), // Draygon left
+        (0x1A96C, 0x1A840), // Draygon right
+        (0x198B2, 0x19A62), // Ridley left
+        (0x198BE, 0x198CA), // Ridley right
+        (0x1AA8C, 0x1AAE0), // Mother Brain left
+        (0x1AA80, 0x1AAC8), // Mother Brain right
+        // Gray doors - Minibosses:
+        (0x18BAA, 0x18BC2), // Bomb Torizo
+        (0x18E56, 0x18E3E), // Spore Spawn bottom
+        (0x193EA, 0x193D2), // Crocomire top
+        (0x1A90C, 0x1A774), // Botwoon left
+        (0x19882, 0x19A86), // Golden Torizo right
+        // Save stations:
+        (0x189BE, 0x1899A), // Crateria Save Room
+        (0x19006, 0x18D12), // Green Brinstar Main Shaft Save Room
+        (0x19012, 0x18F52), // Etecoon Save Room
+        (0x18FD6, 0x18DF6), // Big Pink Save Room
+        (0x1926A, 0x190D2), // Caterpillar Save Room
+        (0x1925E, 0x19186), // Warehouse Save Room
+        (0x1A828, 0x1A744), // Aqueduct Save Room
+        (0x1A888, 0x1A7EC), // Draygon Save Room left
+        (0x1A87C, 0x1A930), // Draygon Save Room right
+        (0x1A5F4, 0x1A588), // Forgotten Highway Save Room
+        (0x1A324, 0x1A354), // Glass Tunnel Save Room
+        (0x19822, 0x193BA), // Crocomire Save Room
+        (0x19462, 0x19456), // Post Crocomire Save Room
+        (0x1982E, 0x19702), // Lower Norfair Elevator Save Room
+        (0x19816, 0x192FA), // Frog Savestation left
+        (0x1980A, 0x197DA), // Frog Savestation right
+        (0x197CE, 0x1959A), // Bubble Mountain Save Room
+        (0x19AB6, 0x19A0E), // Red Kihunter Shaft Save Room
+        (0x1A318, 0x1A240), // Wrecked Ship Save Room
+        (0x1AAD4, 0x1AABC), // Lower Tourian Save Room
+        // Map stations:
+        (0x18C2E, 0x18BDA), // Crateria Map Room
+        (0x18D72, 0x18D36), // Brinstar Map Room
+        (0x197C2, 0x19306), // Norfair Map Room
+        (0x1A5E8, 0x1A51C), // Maridia Map Room
+        (0x1A2B8, 0x1A2A0), // Wrecked Ship Map Room
+        (0x1AB40, 0x1A99C), // Tourian Map Room (Upper Tourian Save Room)
+        // Refill stations:
+        (0x18D96, 0x18D7E), // Green Brinstar Missile Refill Room
+        (0x18F6A, 0x18DBA), // Dachora Energy Refill Room
+        (0x191FE, 0x1904E), // Sloaters Refill
+        (0x1A894, 0x1A8F4), // Maridia Missile Refill Room
+        (0x1A930, 0x1A87C), // Maridia Health Refill Room
+        (0x19786, 0x19756), // Nutella Refill left
+        (0x19792, 0x1976E), // Nutella Refill right
+        (0x1920A, 0x191C2), // Kraid Recharge Station
+        (0x198A6, 0x19A7A), // Golden Torizo Energy Recharge
+        (0x1AA74, 0x1AA68), // Tourian Recharge Room
+        // Pants room interior door
+        (0x1A7A4, 0x1A78C), // Left door
+        (0x1A78C, 0x1A7A4), // Right door
+        // Items: (to avoid an interaction in map tiles between doors disappearing and items disappearing)
+        (0x18FA6, 0x18EDA), // First Missile Room
+        (0x18FFA, 0x18FEE), // Billy Mays Room
+        (0x18D66, 0x18D5A), // Brinstar Reserve Tank Room
+        (0x18F3A, 0x18F5E), // Etecoon Energy Tank Room (top left door)
+        (0x18F5E, 0x18F3A), // Etecoon Supers Room
+        (0x18E02, 0x18E62), // Big Pink (top door to Pink Brinstar Power Bomb Room)
+        (0x18FCA, 0x18FBE), // Hopper Energy Tank Room
+        (0x19132, 0x19126), // Spazer Room
+        (0x19162, 0x1914A), // Warehouse Energy Tank Room
+        (0x19252, 0x191DA), // Varia Suit Room
+        (0x18ADE, 0x18A36), // The Moat (left door)
+        (0x18C9A, 0x18C82), // The Final Missile
+        (0x18BE6, 0x18C3A), // Terminator Room (left door)
+        (0x18B0E, 0x18952), // Gauntlet Energy Tank Room (right door)
+        (0x1A924, 0x1A978), // Space Jump Room
+        (0x19A62, 0x198B2), // Ridley Tank Room
+        (0x199D2, 0x19A9E), // Lower Norfair Escape Power Bomb Room (left door)
+        (0x199DE, 0x199C6), // Lower Norfair Escape Power Bomb Room (top door)
+        (0x19876, 0x1983A), // Golden Torizo's Room (left door)
+        (0x19A86, 0x19882), // Screw Attack Room (left door)
+        (0x1941A, 0x192D6), // Hi Jump Energy Tank Room (right door)
+        (0x193F6, 0x19426), // Hi Jump Boots Room
+        (0x1929A, 0x19732), // Cathedral (right door)
+        (0x1953A, 0x19552), // Green Bubbles Missile Room
+        (0x195B2, 0x195BE), // Speed Booster Hall
+        (0x195BE, 0x195B2), // Speed Booster Room
+        (0x1962A, 0x1961E), // Wave Beam Room
+        (0x1935A, 0x1937E), // Ice Beam Room
+        (0x1938A, 0x19336), // Crumble Shaft (top right door)
+        (0x19402, 0x192E2), // Crocomire Escape (left door)
+        (0x1946E, 0x1943E), // Post Crocomire Power Bomb Room
+        (0x19516, 0x194DA), // Grapple Beam Room (bottom right door)
+        (0x1A2E8, 0x1A210), // Wrecked Ship West Super Room
+        (0x1A300, 0x18A06), // Gravity Suit Room (left door)
+        (0x1A30C, 0x1A1A4), // Gravity Suit Room (right door)
+    ]
+    .into_iter()
+    .map(|(x, y)| (Some(x), Some(y)))
+    .collect();
+
+    // Avoid placing an ammo door on a tile with an objective "X", as it looks bad.
+    for i in objectives.iter() {
+        use Objective::*;
+        match i {
+            SporeSpawn => {
+                non_randomizable_doors.insert((Some(0x18E4A), Some(0x18D2A)));
+            }
+            Crocomire => {
+                non_randomizable_doors.insert((Some(0x193DE), Some(0x19432)));
+            }
+            Botwoon => {
+                non_randomizable_doors.insert((Some(0x1A918), Some(0x1A84C)));
+            }
+            GoldenTorizo => {
+                non_randomizable_doors.insert((Some(0x19876), Some(0x1983A)));
+            }
+            MetroidRoom1 => {
+                non_randomizable_doors.insert((Some(0x1A9B4), Some(0x1A9C0))); // left
+                non_randomizable_doors.insert((Some(0x1A9A8), Some(0x1A984))); // right
+            }
+            MetroidRoom2 => {
+                non_randomizable_doors.insert((Some(0x1A9C0), Some(0x1A9B4))); // top right
+                non_randomizable_doors.insert((Some(0x1A9CC), Some(0x1A9D8))); // bottom right
+            }
+            MetroidRoom3 => {
+                non_randomizable_doors.insert((Some(0x1A9D8), Some(0x1A9CC))); // left
+                non_randomizable_doors.insert((Some(0x1A9E4), Some(0x1A9F0))); // right
+            }
+            MetroidRoom4 => {
+                non_randomizable_doors.insert((Some(0x1A9F0), Some(0x1A9E4))); // left
+                non_randomizable_doors.insert((Some(0x1A9FC), Some(0x1AA08))); // bottom
+            }
+            _ => {} // All other tiles have gray doors and are excluded above.
+        }
+    }
+
+    let mut out: Vec<DoorPtrPair> = vec![];
+    for room in &game_data.room_geometry {
+        for door in &room.doors {
+            let pair = (door.exit_ptr, door.entrance_ptr);
+            let has_door_cap = door.offset.is_some();
+            if has_door_cap && !non_randomizable_doors.contains(&pair) {
+                out.push(pair);
+            }
+        }
+    }
+    out.into_iter().collect()
+}
+
+fn get_randomizable_door_connections(
+    game_data: &GameData,
+    map: &Map,
+    objectives: &[Objective],
+) -> Vec<(DoorPtrPair, DoorPtrPair)> {
+    let doors = get_randomizable_doors(game_data, objectives);
+    let mut out: Vec<(DoorPtrPair, DoorPtrPair)> = vec![];
+    for (src_door_ptr_pair, dst_door_ptr_pair, _bidirectional) in &map.doors {
+        if doors.contains(src_door_ptr_pair) && doors.contains(dst_door_ptr_pair) {
+            out.push((*src_door_ptr_pair, *dst_door_ptr_pair));
+        }
+    }
+    out
+}
+
+fn get_double_item_offset(room_id: usize, node_id: usize) -> DoubleItemPlacement {
+    match room_id {
+        46 => if node_id == 4 { DoubleItemPlacement::Right } else { DoubleItemPlacement::Left }, // Brinstar Reserve
+        43 => if node_id == 2 { DoubleItemPlacement::Right } else { DoubleItemPlacement::Left }, // Billy Mays
+        99 => if node_id == 3 { DoubleItemPlacement::Right } else { DoubleItemPlacement::Left }, // Norfair Reserve
+        181 => if node_id == 3 { DoubleItemPlacement::Right } else { DoubleItemPlacement::Left }, // Watering Hole
+        209 => if node_id == 4 { DoubleItemPlacement::Right } else { DoubleItemPlacement::Left }, // West Sand Hole
+        21 => if node_id == 6 { DoubleItemPlacement::Right } else { DoubleItemPlacement::Left }, // Green Pirates Shaft
+        _ => DoubleItemPlacement::Middle
+    }
 }

@@ -6,10 +6,12 @@ edition = "2021"
 [dependencies]
 maprando = { path = "../maprando" }
 maprando-game = { path = "../maprando-game" }
+maprando-logic = { path = "../maprando-logic" }
 anyhow = { version = "1.0.68", features = ["backtrace"] }
 crypto-hash = "0.3.4"
 egui-sfml = "0.9.0"
 hashbrown = { version = "0.14.5", features = ["serde"] }
 rand = "0.8.5"
+rfd = "0.15.3"
 serde_json = "1.0.91"
 sfml = "=0.24.0"
