@@ -3,7 +3,7 @@ use {
         patch::Rom, settings::DoorsMode
     }, maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType}, plando::{DoubleItemPlacement, MapRepositoryType, Placeable, Plando, TileInfo}, rfd::FileDialog, serde::{Deserialize, Serialize}, sfml::{
         cpp::FBox, graphics::{
-            self, Color, IntRect, RenderTarget, RenderWindow, Shape, Transformable
+            self, Color, IntRect, PrimitiveType, RenderStates, RenderTarget, RenderWindow, Shape, Transformable, Vertex
         }, system::{Vector2f, Vector2i}, window::{
             mouse, Event, Key, Style
         }
@@ -190,6 +190,15 @@ fn save_seed(plando: &Plando, path: &Path) -> Result<()> {
     let out = serde_json::to_string(&seed_data)?;
 
     file.write_all(out.as_bytes())?;
+    Ok(())
+}
+
+fn load_map(plando: &mut Plando, path: &Path) -> Result<()> {
+    let mut file = File::open(path)?;
+    let mut data_str = String::new();
+    file.read_to_string(&mut data_str)?;
+    let map: Map = serde_json::from_str(&data_str)?;
+    plando.load_map(map);
     Ok(())
 }
 
@@ -627,6 +636,36 @@ fn patch_rom(plando: &mut Plando, rom: &Rom, save_path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn draw_thick_line_strip(rt: &mut dyn RenderTarget, states: &RenderStates, strip: &[Vertex], thickness: f32) {
+    for i in 1..strip.len() {
+        let prev = &strip[i - 1];
+        let curr = &strip[i];
+
+        let mut circle_end = graphics::CircleShape::new(thickness / 2.0, 30);
+        circle_end.set_origin(thickness / 2.0);
+
+        circle_end.set_position(prev.position);
+        circle_end.set_fill_color(prev.color);
+        rt.draw_with_renderstates(&circle_end, states);
+
+        circle_end.set_position(curr.position);
+        circle_end.set_fill_color(curr.color);
+        rt.draw_with_renderstates(&circle_end, states);
+
+        let mut diff = curr.position - prev.position;
+        diff /= diff.length_sq().sqrt() * 2.0;
+        let ortho = diff.perpendicular();
+
+        let rect: [Vertex; 4] = [
+            Vertex::with_pos_color(prev.position + ortho * thickness, prev.color),
+            Vertex::with_pos_color(prev.position - ortho * thickness, prev.color),
+            Vertex::with_pos_color(curr.position + ortho * thickness, curr.color),
+            Vertex::with_pos_color(curr.position - ortho * thickness, curr.color)
+        ];
+        rt.draw_primitives(&rect, PrimitiveType::TRIANGLE_STRIP, states);
+    }
+}
+
 enum FlagType {
     Bosses = Placeable::VALUES.len() as isize,
     Minibosses,
@@ -661,6 +700,14 @@ fn get_flag_info(flag: &String) -> Result<(f32, f32, FlagType, &str)> {
     }
 }
 
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+enum SpoilerType {
+    None,
+    Hub,
+    Item(usize),
+    Flag(usize),
+    Escape
+}
 
 fn main() {
 
@@ -728,14 +775,11 @@ fn main() {
 
     let mut sfegui = SfEgui::new(&window);
 
-    let mut show_load_preset_modal = false;
-    let mut modal_load_preset_path = "".to_string();
     let mut error_modal_message: Option<String> = None;
 
     let mut sidebar_selection: Option<Placeable> = None;
-    let mut spoiler_step = 1;
-    let mut spoiler_item: Option<usize> = None;
-    let mut spoiler_flag: Option<usize> = None;
+    let mut spoiler_step = 0;
+    let mut spoiler_type = SpoilerType::None;
 
     while window.is_open() {
         let local_mouse_x = (mouse_x as f32 - x_offset) / zoom;
@@ -877,10 +921,10 @@ fn main() {
 
                     let mut color_div = 1;
                     if let Some(r) = &plando.randomization {
-                        if r.spoiler_log.all_rooms[data.room_idx].map_bireachable_step[local_y][local_x] > spoiler_step {
+                        if r.spoiler_log.all_rooms[data.room_idx].map_bireachable_step[local_y][local_x] > spoiler_step as u8 {
                             color_div *= 2;
                         }
-                        if r.spoiler_log.all_rooms[data.room_idx].map_reachable_step[local_y][local_x] > spoiler_step {
+                        if r.spoiler_log.all_rooms[data.room_idx].map_reachable_step[local_y][local_x] > spoiler_step as u8 {
                             color_div *= 3;
                         }
                     }
@@ -942,6 +986,13 @@ fn main() {
                         if start_tile_x == local_x && start_tile_y == local_y {
                             sprite_helm.set_position(Vector2f::new(cell_x as f32, cell_y as f32));
                             window.draw_with_renderstates(&sprite_helm, &states);
+
+                            if sprite_helm.global_bounds().contains2(local_mouse_x, local_mouse_y) {
+                                sprite_helm.scale(1.2);
+                                if is_mouse_clicked.is_some_and(|x| x == mouse::Button::Left) {
+                                    spoiler_type = SpoilerType::Hub;
+                                }
+                            }
                         }
                     }
                 }
@@ -1028,8 +1079,8 @@ fn main() {
                     };
                     info_overlay_opt = Some(item_name.clone());
 
-                    if let Some(_button) = is_mouse_clicked {
-                        println!("Clicked item: {}", item_name);
+                    if is_mouse_clicked.is_some_and(|bt| bt == mouse::Button::Left) {
+                        spoiler_type = SpoilerType::Item(i);
                     }
                 }
 
@@ -1061,8 +1112,12 @@ fn main() {
 
                 info_overlay_opt = Some(flag_str.to_string());
 
-                if let Some(_button) = is_mouse_clicked {
-                    println!("Flag clicked: {}", flag_str);
+                if is_mouse_clicked.is_some_and(|bt| bt == mouse::Button::Left) {
+                    if flag_id == plando.game_data.mother_brain_defeated_flag_id {
+                        spoiler_type = SpoilerType::Escape;
+                    } else {
+                        spoiler_type = SpoilerType::Flag(i);
+                    }
                 }
             }
 
@@ -1113,26 +1168,98 @@ fn main() {
         }
 
         // Draw spoiler route
-        /*if spoiler_item.is_some() || spoiler_flag.is_some() {
-            let mut obtain_route;
-            let mut return_route;
-            if let Some(spoiler_idx) = spoiler_item {
-                let (room_id, node_id) = plando.game_data.item_locations[spoiler_idx];
-                (obtain_route, return_route) = plando.spoiler_details_vec[spoiler_step].items.iter().find_map(|x| {
-                    if x.location.room_id == room_id && x.location.node_id == node_id { Some((&x.obtain_route, &x.return_route)) } else { None }
-                }).unwrap();
-            } else {
-                let spoiler_idx = spoiler_flag.unwrap();
-                let vertex_idxs = &plando.game_data.flag_vertex_ids[spoiler_idx];
-                let vertex_data = &plando.game_data.vertex_isv.keys[vertex_idxs[0]];
-                let (room_id, node_id) = (vertex_data.room_id, vertex_data.node_id);
-                (obtain_route, return_route) = plando.spoiler_details_vec[spoiler_step].flags.iter().find_map(|x| {
-                    if x.location.room_id == room_id && x.location.node_id == node_id { Some((&x.obtain_route, &x.return_route)) } else { None }
-                }).unwrap();
+        if spoiler_type != SpoilerType::None && plando.randomization.is_some() {
+            let r = plando.randomization.as_ref().unwrap();
+            let mut obtain_route = None;
+            let mut return_route = None;
+
+            match spoiler_type {
+                SpoilerType::Hub => {
+                    obtain_route = Some(&r.spoiler_log.hub_obtain_route);
+                    return_route = Some(&r.spoiler_log.hub_return_route);
+                    spoiler_step = 0;
+                }
+                SpoilerType::Item(spoiler_idx) => {
+                    let (room_id, node_id) = plando.game_data.item_locations[spoiler_idx];
+                    let mut details_opt = None;
+                    while details_opt.is_none() {
+                        if spoiler_step < r.spoiler_log.details.len() {
+                            details_opt = r.spoiler_log.details[spoiler_step].items.iter().find(
+                                |x| x.location.room_id == room_id && x.location.node_id == node_id
+                            );
+                        }
+                        if details_opt.is_none() {
+                            let step_opt = r.spoiler_log.details.iter().position(
+                                |x| x.items.iter().any(|y| y.location.room_id == room_id && y.location.node_id == node_id)
+                            );
+                            if step_opt.is_none() {
+                                break;
+                            }
+                            spoiler_step = step_opt.unwrap();
+                        }
+                    }
+                    if let Some(details) = details_opt {
+                        obtain_route = Some(&details.obtain_route);
+                        return_route = Some(&details.return_route);
+                    } else {
+                        error_modal_message = Some("Item not logically bireachable".to_string());
+                        spoiler_type = SpoilerType::None;
+                    }
+                }
+                SpoilerType::Flag(spoiler_idx) => {
+                    let flag_id = plando.game_data.flag_ids[spoiler_idx];
+                    let flag_name = &plando.game_data.flag_isv.keys[flag_id];
+                    
+                    let mut details_opt = None;
+                    while details_opt.is_none() {
+                        if spoiler_step < r.spoiler_log.details.len() {
+                            details_opt = r.spoiler_log.details[spoiler_step].flags.iter().find(
+                                |x| x.flag == *flag_name
+                            );
+                        }
+                        if details_opt.is_none() {
+                            let step_opt = r.spoiler_log.details.iter().position(
+                                |x| x.flags.iter().any(|y| y.flag == *flag_name)
+                            );
+                            if step_opt.is_none() {
+                                break;
+                            }
+                            spoiler_step = step_opt.unwrap();
+                        }
+                    }
+                    if let Some(details) = details_opt {
+                        obtain_route = Some(&details.obtain_route);
+                        return_route = Some(&details.return_route);
+                    } else {
+                        error_modal_message = Some("Flag not logically clearable".to_string());
+                        spoiler_type = SpoilerType::None;
+                    }
+                }
+                _ => {
+                    spoiler_step = r.spoiler_log.details.len();
+                }
             }
 
-            
-        }*/
+            if obtain_route.is_some() && return_route.is_some() {
+                let mut vertex_return = Vec::new();
+                let mut vertex_obtain = Vec::new();
+                for entry in return_route.unwrap() {
+                    if let Some((x, y)) = entry.coords {
+                        let vertex = graphics::Vertex::with_pos_color(Vector2f::new(x as f32 + 0.5, y as f32 + 0.5) * 8.0, Color::YELLOW);
+                        vertex_return.push(vertex);
+                    }
+                }
+                for entry in obtain_route.unwrap() {
+                    if let Some((x, y)) = entry.coords {
+                        let vertex = graphics::Vertex::with_pos_color(Vector2f::new(x as f32 + 0.5, y as f32 + 0.5) * 8.0, Color::WHITE);
+                        vertex_obtain.push(vertex);
+                    }
+                }
+
+                draw_thick_line_strip(&mut *window, &states, &vertex_return, 1.0);
+                draw_thick_line_strip(&mut *window, &states, &vertex_obtain, 1.0);
+            }
+        }
 
         
 
@@ -1144,7 +1271,7 @@ fn main() {
                         if ui.button("Save Seed").clicked() {
                             let file_opt = FileDialog::new()
                                 .set_directory("/")
-                                .add_filter("Plando seed", &["pls"])
+                                .add_filter("JSON File", &["json"])
                                 .save_file();
                             if let Some(file) = file_opt {
                                 let res = save_seed(&plando, file.as_path());
@@ -1156,7 +1283,7 @@ fn main() {
                         if ui.button("Load Seed").clicked() {
                             let file_opt = FileDialog::new()
                                 .set_directory("/")
-                                .add_filter("Plando seed", &["pls"])
+                                .add_filter("JSON File", &["json"])
                                 .pick_file();
                             if let Some(file) = file_opt {
                                 let res = load_seed(&mut plando, file.as_path());
@@ -1166,12 +1293,21 @@ fn main() {
                             }
                         }
                         if ui.button("Load Settings Preset").clicked() {
-                            show_load_preset_modal = true;
+                            let file_opt = FileDialog::new()
+                                .set_directory("/")
+                                .add_filter("JSON File", &["json"])
+                                .pick_file();
+                            if let Some(file) = file_opt {
+                                let res = plando.load_preset(&file);
+                                if res.is_err() {
+                                    error_modal_message = Some(res.unwrap_err().to_string());
+                                }
+                            }
                         }
                         if ui.button("Create ROM").clicked() {
                             let file_opt = FileDialog::new()
                                 .set_directory("/")
-                                .add_filter("Snes ROM", &[".sfc"])
+                                .add_filter("Snes ROM", &["sfc"])
                                 .save_file();
                             if let Some(file) = file_opt {
                                 if let Err(err) = patch_rom(&mut plando, &rom_vanilla, &file) {
@@ -1192,6 +1328,18 @@ fn main() {
                         if ui.button("Reroll Map (Wild)").clicked() {
                             plando.reroll_map(MapRepositoryType::Wild).unwrap();
                             ui.close_menu();
+                        }
+                        if ui.button("Load Map from JSON").clicked() {
+                            let file_opt = FileDialog::new()
+                                .set_directory("/")
+                                .add_filter("JSON File", &["json"])
+                                .pick_file();
+                            if let Some(file) = file_opt {
+                                let res = load_map(&mut plando, &file);
+                                if res.is_err() {
+                                    error_modal_message = Some(res.unwrap_err().to_string());
+                                }
+                            }
                         }
                     });
                 });
@@ -1236,29 +1384,6 @@ fn main() {
                     });
                 });
             }).response.rect.width();
-
-            if show_load_preset_modal {
-                let modal = egui::Modal::new(Id::new("modal_load_preset")).show(ctx, |ui| {
-                    ui.heading("Load Settings Preset");
-                    ui.label("Filepath:");
-                    ui.text_edit_singleline(&mut modal_load_preset_path);
-                    ui.separator();
-                    egui_sfml::egui::Sides::new().show(ui, |_ui| {}, |ui| {
-                        if ui.button("Load").clicked() {
-                            match plando.load_preset(Path::new(&modal_load_preset_path)) {
-                                Ok(_) => show_load_preset_modal = false,
-                                Err(_) => error_modal_message = Some("Could not open supplied preset".to_string())
-                            }
-                        }
-                        if ui.button("Cancel").clicked() {
-                            show_load_preset_modal = false;
-                        }
-                    });
-                });
-                if modal.should_close() {
-                    show_load_preset_modal = false;
-                }
-            }
 
             if let Some(err_msg) = error_modal_message.clone() {
                 let modal = egui::Modal::new(Id::new("modal_error")).show(ctx, |ui| {
