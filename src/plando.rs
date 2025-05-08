@@ -1250,6 +1250,7 @@ fn get_randomizable_door_connections(
 
 pub fn get_double_item_offset(room_id: usize, node_id: usize) -> DoubleItemPlacement {
     match room_id {
+        19 => DoubleItemPlacement::Left, // Bomb Torizo
         46 => if node_id == 4 { DoubleItemPlacement::Right } else if node_id == 3 { DoubleItemPlacement::Left } else { DoubleItemPlacement::Middle }, // Brinstar Reserve
         43 => if node_id == 2 { DoubleItemPlacement::Right } else { DoubleItemPlacement::Left }, // Billy Mays
         99 => if node_id == 3 { DoubleItemPlacement::Right } else { DoubleItemPlacement::Left }, // Norfair Reserve

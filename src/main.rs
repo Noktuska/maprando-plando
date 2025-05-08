@@ -612,14 +612,19 @@ fn put_placeable(plando: &mut Plando, tile_info: &TileInfo, placeable: Placeable
     plando.place_door(room_idx, door_idx, door, false)
 }
 
-fn patch_rom(plando: &mut Plando, rom: &Rom) -> Result<Rom> {
+fn patch_rom(plando: &mut Plando, rom: &Rom, save_path: &Path) -> Result<()> {
     if plando.randomization.is_none() {
         plando.update_spoiler_data();
         if plando.randomization.is_none() {
             bail!("Could not generate randomization for current placements");
         }
     }
-    maprando::patch::make_rom(&rom, plando.randomization.as_ref().unwrap(), &plando.game_data)
+    let rom = maprando::patch::make_rom(&rom, plando.randomization.as_ref().unwrap(), &plando.game_data)?;
+
+    let mut file = File::create(save_path)?;
+    file.write_all(&rom.data)?;
+
+    Ok(())
 }
 
 enum FlagType {
@@ -638,7 +643,7 @@ fn get_flag_info(flag: &String) -> Result<(f32, f32, FlagType, &str)> {
         "f_ClearedBabyKraidRoom" => Ok((2.5, 0.0, FlagType::Misc, "Clear Baby Kraid Room")),
         "f_ClearedPlasmaRoom" => Ok((0.5, 1.0, FlagType::Misc, "Clear Plasma Room")),
         "f_ClearedMetalPiratesRoom" => Ok((1.0, 0.0, FlagType::Misc, "Clear Metal Pirates Room")),
-        "f_DefeatedBombTorizo" => Ok((0.0, 0.0, FlagType::Minibosses, "Defeat Bomb Torizo")),
+        "f_DefeatedBombTorizo" => Ok((0.5, 0.0, FlagType::Minibosses, "Defeat Bomb Torizo")),
         "f_DefeatedBotwoon" => Ok((0.5, 0.0, FlagType::Minibosses, "Defeat Botwoon")),
         "f_DefeatedCrocomire" => Ok((4.0, 0.0, FlagType::Minibosses, "Defeat Crocomire")),
         "f_DefeatedSporeSpawn" => Ok((0.0, 1.5, FlagType::Minibosses, "Defeat Spore Spawn")),
@@ -1164,7 +1169,15 @@ fn main() {
                             show_load_preset_modal = true;
                         }
                         if ui.button("Create ROM").clicked() {
-                            patch_rom(&mut plando, &rom_vanilla).unwrap();
+                            let file_opt = FileDialog::new()
+                                .set_directory("/")
+                                .add_filter("Snes ROM", &[".sfc"])
+                                .save_file();
+                            if let Some(file) = file_opt {
+                                if let Err(err) = patch_rom(&mut plando, &rom_vanilla, &file) {
+                                    error_modal_message = Some(err.to_string());
+                                }
+                            }
                         }
                     });
                     ui.menu_button("Map", |ui| {
