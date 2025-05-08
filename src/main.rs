@@ -1,7 +1,7 @@
 use {
     anyhow::{anyhow, bail, Context, Result}, egui_sfml::{egui::{self, Color32, Id, Sense, TextureId, Vec2}, SfEgui, UserTexSource}, hashbrown::HashMap, maprando::{
         patch::Rom, settings::DoorsMode
-    }, maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType}, plando::{DoubleItemPlacement, MapRepositoryType, Placeable, Plando, TileInfo}, rfd::FileDialog, serde::{Deserialize, Serialize}, sfml::{
+    }, maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType}, plando::{DoubleItemPlacement, MapRepositoryType, Placeable, Plando, ITEM_VALUES}, rfd::FileDialog, serde::{Deserialize, Serialize}, sfml::{
         cpp::FBox, graphics::{
             self, Color, FloatRect, IntRect, PrimitiveType, RenderStates, RenderTarget, RenderWindow, Shape, Transformable, Vertex
         }, system::{Vector2f, Vector2i}, window::{
@@ -585,42 +585,6 @@ fn generate_door_sprites() -> Result<FBox<graphics::Image>> {
     Ok(img_doors)
 }
 
-fn put_placeable(plando: &mut Plando, tile_info: &TileInfo, placeable: Placeable, right: bool, direction: String) -> Result<()> {
-    let placed_item_count = plando.placed_item_count[placeable as usize] as usize;
-    let max_item_count = plando.get_max_placeable_count(placeable);
-
-    if placeable == Placeable::Helm {
-        for i in 0..plando.game_data.start_locations.len() {
-            let start_pos = plando.game_data.start_locations[i].clone();
-            let tile_x = (start_pos.x / 16.0).floor() as usize;
-            let tile_y = (start_pos.y / 16.0).floor() as usize;
-            if tile_info.room_id == start_pos.room_id && tile_info.tile_x == tile_x && tile_info.tile_y == tile_y {
-                return plando.place_start_location(start_pos);
-            }
-        }
-        return Ok(());
-    } else if let Some(item) = placeable.to_item() {
-        if max_item_count.is_none() || placed_item_count < max_item_count.unwrap() {
-            return plando.place_item(tile_info, item, right);
-        }
-        return Ok(());
-    }
-    let door = match placeable {
-        Placeable::DoorMissile => Some(DoorType::Red),
-        Placeable::DoorSuper => Some(DoorType::Green),
-        Placeable::DoorPowerBomb => Some(DoorType::Yellow),
-        Placeable::DoorCharge => Some(DoorType::Beam(BeamType::Charge)),
-        Placeable::DoorSpazer => Some(DoorType::Beam(BeamType::Spazer)),
-        Placeable::DoorWave => Some(DoorType::Beam(BeamType::Wave)),
-        Placeable::DoorIce => Some(DoorType::Beam(BeamType::Ice)),
-        Placeable::DoorPlasma => Some(DoorType::Beam(BeamType::Plasma)),
-        _ => None
-    };
-    let room_idx = plando.room_id_to_idx(tile_info.room_id);
-    let door_idx = plando.get_door_idx(room_idx, tile_info.tile_x, tile_info.tile_y, direction).ok_or_else(|| anyhow!("Door cannot be placed here"))?;
-    plando.place_door(room_idx, door_idx, door, false)
-}
-
 fn patch_rom(plando: &mut Plando, rom: &Rom, save_path: &Path) -> Result<()> {
     if plando.randomization.is_none() {
         plando.update_spoiler_data();
@@ -731,7 +695,6 @@ fn main() {
     let mut y_offset = 0.0;
     let mut zoom = 1.0;
 
-    let mut is_mouse_dragged = false;
     let mut is_mouse_down = false;
     let mut is_mouse_clicked: Option<mouse::Button>;
     let mut mouse_click_pos = Vector2i::new(0, 0);
@@ -820,42 +783,8 @@ fn main() {
                         is_mouse_down = false;
                     }
 
-                    if !is_mouse_dragged && mouse_x < window.size().x as i32 - sidebar_width as i32 {
-                        if let Some(tile_info) = &tile_hovered_opt {
-                            let right = (local_mouse_x / 8.0).fract() > 0.5;
-                            let tr = (local_mouse_x / 8.0).fract() > (local_mouse_y / 8.0).fract();
-                            let br = (local_mouse_x / 8.0).fract() > 1.0 - (local_mouse_y / 8.0).fract();
-                            let direction = (if tr && br { "right" } else if tr && !br { "up" } else if !tr && br { "down" } else { "left" }).to_string();
-                            if button == mouse::Button::Right && sidebar_selection.is_some() {
-                                let selection = sidebar_selection.unwrap();
-                                let mut is_ok = false;
-                                if selection.to_item().is_some() {
-                                    is_ok = plando.place_item(tile_info, Item::Nothing, right).is_ok();
-                                } else if selection != Placeable::Helm {
-                                    let room_idx = plando.room_id_to_idx(tile_info.room_id);
-                                    let (room_x, room_y) = plando.map.rooms[room_idx];
-                                    let door_idx = plando.get_door_idx(room_idx, tile_x - room_x, tile_y - room_y, direction);
-                                    if door_idx.is_some() {
-                                        is_ok = plando.place_door(room_idx, door_idx.unwrap(), None, false).is_ok();
-                                    }
-                                }
-                                if !is_ok {
-                                    sidebar_selection = None;
-                                }
-                            } else if button == mouse::Button::Left {
-                                if let Some(selection) = sidebar_selection {
-                                    let res = put_placeable(&mut plando, tile_info, selection, right, direction);
-                                    if res.is_err() {
-                                        error_modal_message = Some(res.unwrap_err().to_string());
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    is_mouse_dragged = false;
-
                     let new_mouse_pos = Vector2i::new(x, y);
-                    if (mouse_click_pos - new_mouse_pos).length_sq() < settings.mouse_click_pos_tolerance && mouse_click_timer > 0 && sidebar_selection.is_none() {
+                    if (mouse_click_pos - new_mouse_pos).length_sq() < settings.mouse_click_pos_tolerance && mouse_click_timer > 0 {
                         is_mouse_clicked = Some(button);
                     }
                 },
@@ -879,7 +808,6 @@ fn main() {
                     if is_mouse_down {
                         x_offset += dx as f32;
                         y_offset += dy as f32;
-                        is_mouse_dragged = true;
                     }
                     mouse_x = x;
                     mouse_y = y;
@@ -962,40 +890,53 @@ fn main() {
                     let (tex_helm_w, _, tex_helm) = user_tex_source.get_texture(Placeable::Helm as u64);
                     let mut sprite_helm = graphics::Sprite::with_texture(tex_helm);
                     sprite_helm.set_scale(8.0 / tex_helm_w);
+                }
+            }
+        }
 
-                    // Draw all possible starting positions
-                    if sidebar_selection.is_some_and(|x| x == Placeable::Helm) {
-                        sprite_helm.set_color(Color::rgba(0xAF, 0xAF, 0xAF, 0x5F));
-                        for start_pos in &plando.game_data.start_locations {
-                            if data.room_id != start_pos.room_id {
-                                continue;
-                            }
-                            let start_tile_x = (start_pos.x / 16.0).floor() as usize;
-                            let start_tile_y = (start_pos.y / 16.0).floor() as usize;
-                            if start_tile_x == local_x && start_tile_y == local_y {
-                                sprite_helm.set_position(Vector2f::new(cell_x as f32, cell_y as f32));
-                                window.draw_with_renderstates(&sprite_helm, &states);
-                            }
-                        }
-                        sprite_helm.set_color(Color::WHITE);
-                    }
+        // Draw Possible Start Locations
+        {
+            let (tex_helm_w, _, tex_helm) = user_tex_source.get_texture(Placeable::Helm as u64);
+            let mut sprite_helm = graphics::Sprite::with_texture(tex_helm);
+            sprite_helm.set_color(Color::rgba(0xAF, 0xAF, 0xAF, 0x5F));
 
-                    // Draw Start Position
-                    if data.room_id == plando.start_location_data.start_location.room_id {
-                        let start_tile_x = (plando.start_location_data.start_location.x / 16.0).floor() as usize;
-                        let start_tile_y = (plando.start_location_data.start_location.y / 16.0).floor() as usize;
-                        if start_tile_x == local_x && start_tile_y == local_y {
-                            sprite_helm.set_position(Vector2f::new(cell_x as f32, cell_y as f32));
-                            window.draw_with_renderstates(&sprite_helm, &states);
+            if sidebar_selection.is_some_and(|sel| sel == Placeable::Helm) {
+                for i in 0..plando.game_data.start_locations.len() {
+                    let room_idx = plando.room_id_to_idx(plando.game_data.start_locations[i].room_id);
+                    let (room_x, room_y) = plando.map.rooms[room_idx];
+                    let tile_x = (plando.game_data.start_locations[i].x / 16.0).floor();
+                    let tile_y = (plando.game_data.start_locations[i].y / 16.0).floor();
 
-                            if sprite_helm.global_bounds().contains2(local_mouse_x, local_mouse_y) {
-                                sprite_helm.scale(1.2);
-                                if is_mouse_clicked.is_some_and(|x| x == mouse::Button::Left) {
-                                    spoiler_type = SpoilerType::Hub;
-                                }
+                    sprite_helm.set_position(Vector2f::new(room_x as f32 + tile_x, room_y as f32 + tile_y) * 8.0);
+                    sprite_helm.set_scale(8.0 / tex_helm_w);
+
+                    if sprite_helm.global_bounds().contains2(local_mouse_x, local_mouse_y) {
+                        sprite_helm.scale(1.2);
+                        if is_mouse_clicked.is_some_and(|bt| bt == mouse::Button::Left) {
+                            if let Err(err) = plando.place_start_location(plando.game_data.start_locations[i].clone()) {
+                                error_modal_message = Some(err.to_string());
                             }
                         }
                     }
+
+                    window.draw_with_renderstates(&sprite_helm, &states);
+                }
+            }
+            sprite_helm.set_color(Color::WHITE);
+            sprite_helm.set_scale(8.0 / tex_helm_w);
+
+            // Draw current start location
+            let room_idx = plando.room_id_to_idx(plando.start_location_data.start_location.room_id);
+            let (room_x, room_y) = plando.map.rooms[room_idx];
+            let start_tile_x = (plando.start_location_data.start_location.x / 16.0).floor();
+            let start_tile_y = (plando.start_location_data.start_location.y / 16.0).floor();
+            sprite_helm.set_position(Vector2f::new(room_x as f32 + start_tile_x, room_y as f32 + start_tile_y) * 8.0);
+            window.draw_with_renderstates(&sprite_helm, &states);
+
+            if sidebar_selection.is_none() && sprite_helm.global_bounds().contains2(local_mouse_x, local_mouse_y) {
+                sprite_helm.scale(1.2);
+                if is_mouse_clicked.is_some_and(|x| x == mouse::Button::Left) {
+                    spoiler_type = SpoilerType::Hub;
                 }
             }
         }
@@ -1048,7 +989,8 @@ fn main() {
 
         // Draw items
         if sidebar_selection.is_none() || sidebar_selection.is_some_and(|x| x >= Placeable::ETank && x <= Placeable::WalljumpBoots) {
-            for (i, &item) in plando.item_locations.iter().enumerate() {
+            for i in 0..plando.item_locations.len() {
+                let item = plando.item_locations[i];
                 let (room_id, node_id) = plando.game_data.item_locations[i];
                 let room_ptr = plando.game_data.room_ptr_by_id[&room_id];
                 let room_idx = plando.game_data.room_idx_by_ptr[&room_ptr];
@@ -1082,13 +1024,19 @@ fn main() {
 
                     if let Some(bt) = is_mouse_clicked {
                         if sidebar_selection.is_some() && sidebar_selection.unwrap().to_item().is_some() {
-                            let item_to_place = sidebar_selection.unwrap().to_item().unwrap();
-                            //plando.place_item(i, item_to_place);
+                            let mut res = Ok(());
+                            if bt == mouse::Button::Left {
+                                let item_to_place = sidebar_selection.unwrap().to_item().unwrap();
+                                res = plando.place_item(i, item_to_place);
+                            } else if bt == mouse::Button::Right {
+                                res = plando.place_item(i, Item::Nothing);
+                            }
+                            if let Err(err) = res {
+                                error_modal_message = Some(err.to_string());
+                            }
+                        } else if sidebar_selection.is_none() {
+                            spoiler_type = SpoilerType::Item(i);
                         }
-                    }
-
-                    if sidebar_selection.is_none() && is_mouse_clicked.is_some_and(|bt| bt == mouse::Button::Left) {
-                        spoiler_type = SpoilerType::Item(i);
                     }
                 }
 
@@ -1133,7 +1081,7 @@ fn main() {
         }
         
         // Draw Door hover
-        if sidebar_selection.is_some_and(|x| x >= Placeable::DoorMissile) && tile_hovered_opt.is_some() {
+        if sidebar_selection.is_some_and(|x| x.to_door_type().is_some()) && tile_hovered_opt.is_some() {
             let tile = tile_hovered_opt.unwrap();
             let door_type = sidebar_selection.unwrap();
             let tr = (local_mouse_x / 8.0).fract() > (local_mouse_y / 8.0).fract();
@@ -1141,24 +1089,41 @@ fn main() {
             let direction = (if tr && br { "right" } else if tr && !br { "up" } else if !tr && br { "down" } else { "left" }).to_string();
 
             let room_idx = plando.room_id_to_idx(tile.room_id);
-            let (room_x, room_y) = plando.map.rooms[room_idx];
-            let x = (room_x + tile.tile_x) as f32;
-            let y = (room_y + tile.tile_y) as f32;
+            let door_idx_opt = plando.game_data.room_geometry[room_idx].doors.iter().position(
+                |x| x.direction == direction && x.x == tile.tile_x && x.y == tile.tile_y
+            );
+            if let Some(door_idx) = door_idx_opt {
+                let (room_x, room_y) = plando.map.rooms[room_idx];
+                let x = (room_x + tile.tile_x) as f32;
+                let y = (room_y + tile.tile_y) as f32;
 
-            let (_tex_w, _tex_h, tex) = user_tex_source.get_texture(door_type as u64);
-            let mut spr_ghost = graphics::Sprite::with_texture(tex);
-            spr_ghost.set_position(Vector2f::new(x, y) * 8.0);
-            spr_ghost.move_(4.0);
-            spr_ghost.set_origin(4.0);
-            spr_ghost.set_rotation(match direction.as_str() {
-                "up" => 90.0,
-                "right" => 180.0,
-                "down" => 270.0,
-                _ => 0.0
-            });
-            spr_ghost.set_color(Color::rgba(0xFF, 0xFF, 0xFF, 0x7F));
+                let (_tex_w, _tex_h, tex) = user_tex_source.get_texture(door_type as u64);
+                let mut spr_ghost = graphics::Sprite::with_texture(tex);
+                spr_ghost.set_position(Vector2f::new(x, y) * 8.0);
+                spr_ghost.move_(4.0);
+                spr_ghost.set_origin(4.0);
+                spr_ghost.set_rotation(match direction.as_str() {
+                    "up" => 90.0,
+                    "right" => 180.0,
+                    "down" => 270.0,
+                    _ => 0.0
+                });
+                spr_ghost.set_color(Color::rgba(0xFF, 0xFF, 0xFF, 0x7F));
 
-            window.draw_with_renderstates(&spr_ghost, &states);
+                if let Some(bt) = is_mouse_clicked {
+                    let mut res = Ok(());
+                    if bt == mouse::Button::Left {
+                        res = plando.place_door(room_idx, door_idx, door_type.to_door_type(), false);
+                    } else if bt == mouse::Button::Right {
+                        res = plando.place_door(room_idx, door_idx, None, true);
+                    }
+                    if let Err(err) = res {
+                        error_modal_message = Some(err.to_string());
+                    }
+                }
+
+                window.draw_with_renderstates(&spr_ghost, &states);
+            }
         }
 
         // Draw the info overlay
@@ -1294,6 +1259,8 @@ fn main() {
 
             let mut new_max_width = 0.0;
 
+            let mut found_item = [false; ITEM_VALUES.len()];
+
             for (y_idx, step) in r.spoiler_log.summary.iter().enumerate() {
                 let row_rect = FloatRect::new(0.0, row_height * y_idx as f32, spoiler_window_bounds.width, row_height);
                 spoiler_bg_rect.set_position((row_rect.left, row_rect.top));
@@ -1316,9 +1283,14 @@ fn main() {
                 text.set_position(((column_width - text_bounds.width) / 2.0, row_height * y_idx as f32 + (row_height - text_bounds.height) / 2.0));
                 window.draw_with_renderstates(&text, &states);
 
-                for (x_idx, item) in step.items.iter().enumerate() {
-                    let item_type = Item::from_str(&item.item).unwrap() as i32;
-                    let mut item_spr = graphics::Sprite::with_texture_and_rect(&tex_items, IntRect::new(tex_item_width * item_type, 0, tex_item_width, tex_item_width));
+                let mut x_idx = 0;
+                for item in &step.items {
+                    let item_type = Item::from_str(&item.item).unwrap() as usize;
+                    if found_item[item_type] {
+                        continue;
+                    }
+                    found_item[item_type] = true;
+                    let mut item_spr = graphics::Sprite::with_texture_and_rect(&tex_items, IntRect::new(tex_item_width * item_type as i32, 0, tex_item_width, tex_item_width));
                     item_spr.set_position((column_width * (x_idx + 1) as f32, row_height * y_idx as f32));
                     item_spr.set_scale(row_height / 1.5 / tex_item_width as f32);
                     item_spr.set_origin(Vector2f::new(item_spr.global_bounds().width, item_spr.global_bounds().height) / 2.0);
@@ -1338,11 +1310,12 @@ fn main() {
                     }
 
                     window.draw_with_renderstates(&item_spr, &states);
+                    x_idx += 1;
                 }
 
-                spoiler_window_bounds.width = new_max_width;
                 spoiler_window_bounds.height = row_height * (y_idx + 1) as f32;
             }
+            spoiler_window_bounds.width = new_max_width;
         }
 
         // Draw Menu Bar

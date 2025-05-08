@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::{anyhow, bail, Result};
 use hashbrown::{HashMap, HashSet};
 use maprando::{map_repository::MapRepository, preset::PresetData, randomize::{DebugData, DifficultyConfig, DoorState, FlagLocationState, ItemLocationState, LockedDoor, Randomization, RandomizationState, Randomizer, SaveLocationState, SpoilerDetails, SpoilerDoorDetails, SpoilerDoorSummary, SpoilerFlagDetails, SpoilerFlagSummary, SpoilerSummary, StartLocationData}, settings::{Objective, RandomizerSettings, WallJump}, traverse::{apply_requirement, get_bireachable_idxs, get_spoiler_route, traverse, LockedDoorData}};
-use maprando_game::{DoorPtrPair, DoorType, GameData, HubLocation, Item, ItemLocationId, LinksDataGroup, Map, NodeId, RoomId, StartLocation, VertexKey};
+use maprando_game::{BeamType, DoorPtrPair, DoorType, GameData, HubLocation, Item, ItemLocationId, LinksDataGroup, Map, NodeId, RoomId, StartLocation, VertexKey};
 use maprando_logic::{GlobalState, Inventory, LocalState};
 use rand::{rngs::StdRng, RngCore, SeedableRng};
 
@@ -129,6 +129,20 @@ impl Placeable {
             return None;
         }
         Some(ITEM_VALUES[self as usize - Placeable::ETank as usize])
+    }
+
+    pub fn to_door_type(self) -> Option<DoorType> {
+        match self {
+            Placeable::DoorMissile => Some(DoorType::Red),
+            Placeable::DoorSuper => Some(DoorType::Green),
+            Placeable::DoorPowerBomb => Some(DoorType::Yellow),
+            Placeable::DoorSpazer => Some(DoorType::Beam(BeamType::Spazer)),
+            Placeable::DoorWave => Some(DoorType::Beam(BeamType::Wave)),
+            Placeable::DoorIce => Some(DoorType::Beam(BeamType::Ice)),
+            Placeable::DoorPlasma => Some(DoorType::Beam(BeamType::Plasma)),
+            Placeable::DoorCharge => Some(DoorType::Beam(BeamType::Charge)),
+            _ => None
+        }
     }
 }
 
@@ -504,34 +518,20 @@ impl Plando {
         bail!("Could not find suitable hub location to given start location")
     }
 
-    pub fn place_item(&mut self, tile_info: &TileInfo, item: Item, right_item: bool) -> Result<()> {
-        for i in 0..self.item_locations.len() {
-            let (room_id, node_id) = self.game_data.item_locations[i];
-            let (tile_x, tile_y) = self.game_data.node_coords[&(room_id, node_id)];
-            if tile_info.room_id == room_id && tile_info.tile_x == tile_x && tile_info.tile_y == tile_y {
-                let valid = match get_double_item_offset(room_id, node_id) {
-                    DoubleItemPlacement::Middle => true,
-                    DoubleItemPlacement::Left => !right_item,
-                    DoubleItemPlacement::Right => right_item,
-                };
-                if valid {
-                    // Remove old item from placed_item_count
-                    if self.item_locations[i] != Item::Nothing {
-                        self.placed_item_count[Placeable::ETank as usize + self.item_locations[i] as usize] -= 1;
-                    }
-                    // Add new item to placed_item_count
-                    if item != Item::Nothing {
-                        self.placed_item_count[Placeable::ETank as usize + item as usize] += 1;
-                    }
-                    self.item_locations[i] = item;
-                    if self.auto_update_spoiler {
-                        self.update_spoiler_data();
-                    }
-                    return Ok(());
-                }
-            }
+    pub fn place_item(&mut self, item_loc: usize, item: Item) -> Result<()> {
+        // Remove old item from placed_item_count
+        if self.item_locations[item_loc] != Item::Nothing {
+            self.placed_item_count[Placeable::ETank as usize + self.item_locations[item_loc] as usize] -= 1;
         }
-        Err(anyhow!("Could not place item"))
+        // Add new item to placed_item_count
+        if item != Item::Nothing {
+            self.placed_item_count[Placeable::ETank as usize + item as usize] += 1;
+        }
+        self.item_locations[item_loc] = item;
+        if self.auto_update_spoiler {
+            self.update_spoiler_data();
+        }
+        Ok(())
     }
 
     pub fn place_door(&mut self, room_idx: usize, door_idx: usize, door_type_opt: Option<DoorType>, replace: bool) -> Result<()> {
