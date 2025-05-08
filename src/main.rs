@@ -1,13 +1,13 @@
 use {
-    anyhow::{bail, Context, Result}, egui_sfml::{egui::{self, Color32, Id, Sense, TextureId, Vec2}, SfEgui, UserTexSource}, hashbrown::HashMap, maprando::{
-        patch::Rom, preset::PresetData, randomize::Randomizer, settings::{DoorsMode, SaveAnimals}
-    }, maprando_game::{BeamType, DoorType, GameData, Item, MapTileEdge, MapTileInterior, MapTileSpecialType}, plando::{DoubleItemPlacement, MapRepositoryType, Placeable, Plando, TileInfo}, rand::Rng, sfml::{
+    anyhow::{anyhow, bail, Context, Result}, egui_sfml::{egui::{self, Color32, Id, Sense, TextureId, Vec2}, SfEgui, UserTexSource}, hashbrown::HashMap, maprando::{
+        patch::Rom, settings::DoorsMode
+    }, maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType}, plando::{DoubleItemPlacement, MapRepositoryType, Placeable, Plando, TileInfo}, rfd::FileDialog, serde::{Deserialize, Serialize}, sfml::{
         cpp::FBox, graphics::{
             self, Color, IntRect, RenderTarget, RenderWindow, Shape, Transformable
-        }, system::Vector2f, window::{
+        }, system::{Vector2f, Vector2i}, window::{
             mouse, Event, Key, Style
         }
-    }, std::{cmp::max, path::Path, u32}
+    }, std::{cmp::max, fs::File, io::{Read, Write}, path::Path, u32}
 };
 
 mod plando;
@@ -23,13 +23,19 @@ struct RoomData {
     atlas_y_offset: u32
 }
 
-fn load_preset_data(game_data: &GameData) -> Result<PresetData> {
-    let tech_path = Path::new("data/tech_data.json");
-    let notable_path = Path::new("data/notable_data.json");
-    let presets_path = Path::new("data/presets.json");
+#[derive(Serialize, Deserialize)]
+struct Settings {
+    mouse_click_pos_tolerance: i32,
+    mouse_click_delay_tolerance: i32,
+}
 
-    let preset_data = PresetData::load(tech_path, notable_path, presets_path, game_data);
-    preset_data
+impl Default for Settings {
+    fn default() -> Settings {
+        Settings {
+            mouse_click_pos_tolerance: 5,
+            mouse_click_delay_tolerance: 60
+        }
+    }
 }
 
 fn load_vanilla_rom(rom_path: &Path) -> Result<Rom> {
@@ -44,6 +50,147 @@ fn load_vanilla_rom(rom_path: &Path) -> Result<Rom> {
         bail!("Invalid ROM data");
     }
     Ok(rom)
+}
+
+#[derive(Serialize, Deserialize)]
+struct StartLocationSerializable {
+    name: String,
+    room_id: usize,
+    node_id: usize,
+    door_load_id: Option<usize>,
+    x: f32,
+    y: f32,
+    requires: Option<Vec<serde_json::Value>>,
+    note: Option<Vec<String>>,
+    camera_offset_x: Option<f32>,
+    camera_offset_y: Option<f32>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct LockedDoorSerializable {
+    room_id: usize,
+    node_id: usize,
+    door_type: usize,
+    direction: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct SeedData {
+    map: Map,
+    start_location: usize,
+    item_placements: Vec<Item>,
+    door_locks: Vec<LockedDoorSerializable>
+}
+
+fn save_settings(settings: &Settings, path: &Path) -> Result<()> {
+    let mut file = File::create(path)?;
+    let data = serde_json::to_string(&settings)?;
+    file.write_all(data.as_bytes())?;
+    Ok(())
+}
+
+fn load_settings(path: &Path) -> Result<Settings> {
+    let mut file = File::open(path)?;
+    let mut data_str = String::new();
+    file.read_to_string(&mut data_str)?;
+    let result: Settings = serde_json::from_str(&data_str)?;
+    Ok(result)
+}
+
+fn load_seed(plando: &mut Plando, path: &Path) -> Result<()> {
+    let mut file = File::open(path)?;
+
+    let mut str = String::new();
+    file.read_to_string(&mut str)?;
+
+    let seed_data: SeedData = serde_json::from_str(&str)?;
+
+    let auto_update = plando.auto_update_spoiler;
+    plando.auto_update_spoiler = false;
+
+    plando.load_map(seed_data.map);
+    let start_location = if seed_data.start_location == plando.game_data.start_locations.len() {
+        Plando::get_ship_start()
+    } else {
+        plando.game_data.start_locations[seed_data.start_location].clone()
+    };
+
+    plando.place_start_location(start_location)?;
+
+    plando.item_locations = seed_data.item_placements;
+    
+    for door_data in seed_data.door_locks {
+        let door_type = match door_data.door_type {
+            1 => DoorType::Gray,
+            2 => DoorType::Red,
+            3 => DoorType::Green,
+            4 => DoorType::Yellow,
+            5 => DoorType::Beam(BeamType::Charge),
+            6 => DoorType::Beam(BeamType::Ice),
+            7 => DoorType::Beam(BeamType::Wave),
+            8 => DoorType::Beam(BeamType::Spazer),
+            9 => DoorType::Beam(BeamType::Plasma),
+            _ => DoorType::Blue
+        };
+        
+        let (tile_x, tile_y) = plando.game_data.node_coords[&(door_data.room_id, door_data.node_id)];
+        let room_idx = plando.room_id_to_idx(door_data.room_id);
+        
+        let door_idx = plando.get_door_idx(room_idx, tile_x, tile_y, door_data.direction).ok_or_else(|| anyhow!("Malformed Door Data"))?;
+        plando.place_door(room_idx, door_idx, Some(door_type), false)?;
+    }
+
+    plando.update_spoiler_data();
+    plando.auto_update_spoiler = auto_update;
+
+    Ok(())
+}
+
+fn save_seed(plando: &Plando, path: &Path) -> Result<()> {
+    let mut file = File::create(path)?;
+
+    let mut door_locks = Vec::new();
+    for door_lock in &plando.locked_doors {
+        let (room_id, node_id) = plando.game_data.door_ptr_pair_map[&door_lock.src_ptr_pair];
+        let (room_idx, door_idx) = plando.game_data.room_and_door_idxs_by_door_ptr_pair[&door_lock.src_ptr_pair];
+        let direction = plando.game_data.room_geometry[room_idx].doors[door_idx].direction.clone();
+
+        let door_type = match door_lock.door_type {
+            DoorType::Beam(beam) => 5 + beam as usize,
+            DoorType::Blue => 0,
+            DoorType::Gray => 1,
+            DoorType::Red => 2,
+            DoorType::Green => 3,
+            DoorType::Yellow => 4
+        };
+
+        door_locks.push(LockedDoorSerializable {
+            room_id,
+            node_id,
+            door_type,
+            direction
+        });
+    }
+
+    let start_room_id = plando.start_location_data.start_location.room_id;
+    let start_node_id = plando.start_location_data.start_location.node_id;
+    let start_location_id = if start_room_id == 8 && start_node_id == 5 {
+        plando.game_data.start_locations.len()
+    } else {
+        plando.game_data.start_location_id_map[&(start_room_id, start_node_id)]
+    };
+
+    let seed_data = SeedData {
+        map: plando.map.clone(),
+        start_location: start_location_id,
+        item_placements: plando.item_locations.clone(),
+        door_locks
+    };
+
+    let out = serde_json::to_string(&seed_data)?;
+
+    file.write_all(out.as_bytes())?;
+    Ok(())
 }
 
 enum SpecialRoom {
@@ -460,42 +607,53 @@ fn put_placeable(plando: &mut Plando, tile_info: &TileInfo, placeable: Placeable
         Placeable::DoorPlasma => Some(DoorType::Beam(BeamType::Plasma)),
         _ => None
     };
-    plando.place_door(tile_info, door, direction, false)
+    let room_idx = plando.room_id_to_idx(tile_info.room_id);
+    let door_idx = plando.get_door_idx(room_idx, tile_info.tile_x, tile_info.tile_y, direction).ok_or_else(|| anyhow!("Door cannot be placed here"))?;
+    plando.place_door(room_idx, door_idx, door, false)
 }
 
 fn patch_rom(plando: &mut Plando, rom: &Rom) -> Result<Rom> {
-    let preset_data = load_preset_data(&plando.game_data)?;
-    let difficulty_tiers = maprando::randomize::get_difficulty_tiers(
-        &plando.randomizer_settings, 
-        &preset_data.difficulty_tiers, 
-        &plando.game_data, 
-        &preset_data.tech_by_difficulty["Implicit"],
-        &preset_data.notables_by_difficulty["Implicit"]
-    );
+    if plando.randomization.is_none() {
+        plando.update_spoiler_data();
+        if plando.randomization.is_none() {
+            bail!("Could not generate randomization for current placements");
+        }
+    }
+    maprando::patch::make_rom(&rom, plando.randomization.as_ref().unwrap(), &plando.game_data)
+}
 
-    let save_animals = if plando.randomizer_settings.save_animals == SaveAnimals::Random {
-        if plando.rng.gen_bool(0.5) { SaveAnimals::Yes } else { SaveAnimals::No }
-    } else { plando.randomizer_settings.save_animals };
+enum FlagType {
+    Bosses = Placeable::VALUES.len() as isize,
+    Minibosses,
+    Misc
+}
 
-    let toilet_intersections = Randomizer::get_toilet_intersections(&plando.map, &plando.game_data);
-
-    let locked_door_data = plando.get_locked_door_data();
-
-    Err(anyhow::anyhow!("todo"))
-    /*let randomization = Randomization {
-        settings: plando.randomizer_settings.clone(),
-        difficulty: difficulty_tiers[0].clone(),
-        objectives: plando.objectives.clone(),
-        save_animals,
-        map: plando.map.clone(),
-        toilet_intersections,
-        locked_door_data,
-        item_placement: Vec::new(),
-        start_location: plando.start_location.clone(),
-        spoiler_log
-    };
-    
-    maprando::patch::make_rom(&rom, &randomization, &plando.game_data)*/
+fn get_flag_info(flag: &String) -> Result<(f32, f32, FlagType, &str)> {
+    match flag.as_str() {
+        "f_MaridiaTubeBroken" => Ok((0.0, 1.0, FlagType::Misc, "Break Maridia Tube")),
+        "f_ShaktoolDoneDigging" => Ok((1.5, 0.0, FlagType::Misc, "Clear Shaktool Room")),
+        "f_UsedAcidChozoStatue" => Ok((0.0, 0.0, FlagType::Misc, "Use Acid Statue")),
+        "f_UsedBowlingStatue" => Ok((4.0, 1.0, FlagType::Misc, "Use Bowling Statue")),
+        "f_ClearedPitRoom" => Ok((1.0, 0.0, FlagType::Misc, "Clear Pit Room")),
+        "f_ClearedBabyKraidRoom" => Ok((2.5, 0.0, FlagType::Misc, "Clear Baby Kraid Room")),
+        "f_ClearedPlasmaRoom" => Ok((0.5, 1.0, FlagType::Misc, "Clear Plasma Room")),
+        "f_ClearedMetalPiratesRoom" => Ok((1.0, 0.0, FlagType::Misc, "Clear Metal Pirates Room")),
+        "f_DefeatedBombTorizo" => Ok((0.0, 0.0, FlagType::Minibosses, "Defeat Bomb Torizo")),
+        "f_DefeatedBotwoon" => Ok((0.5, 0.0, FlagType::Minibosses, "Defeat Botwoon")),
+        "f_DefeatedCrocomire" => Ok((4.0, 0.0, FlagType::Minibosses, "Defeat Crocomire")),
+        "f_DefeatedSporeSpawn" => Ok((0.0, 1.5, FlagType::Minibosses, "Defeat Spore Spawn")),
+        "f_DefeatedGoldenTorizo" => Ok((0.5, 1.0, FlagType::Minibosses, "Defeat Golden Torizo")),
+        "f_DefeatedKraid" => Ok((0.5, 0.5, FlagType::Bosses, "Defeat Kraid")),
+        "f_DefeatedPhantoon" => Ok((0.0, 0.0, FlagType::Bosses, "Defeat Phantoon")),
+        "f_DefeatedDraygon" => Ok((0.5, 0.5, FlagType::Bosses, "Defeat Draygon")),
+        "f_DefeatedRidley" => Ok((0.0, 0.5, FlagType::Bosses, "Defeat Ridley")),
+        "f_KilledMetroidRoom1" => Ok((2.5, 0.0, FlagType::Misc, "Clear Metroid Room 1")),
+        "f_KilledMetroidRoom2" => Ok((0.0, 0.5, FlagType::Misc, "Clear Metroid Room 2")),
+        "f_KilledMetroidRoom3" => Ok((2.5, 0.0, FlagType::Misc, "Clear Metroid Room 3")),
+        "f_KilledMetroidRoom4" => Ok((0.0, 0.5, FlagType::Misc, "Clear Metroid Room 4")),
+        "f_DefeatedMotherBrain" => Ok((1.5, 0.0, FlagType::Bosses, "Defeat Mother Brain")),
+        _ => bail!("Invalid flag \"{}\"", flag)
+    }
 }
 
 
@@ -503,26 +661,12 @@ fn main() {
 
     let mut plando = Plando::new();
 
+    let settings_path = Path::new("./plando_settings.json");
+    let settings = load_settings(settings_path).unwrap_or_default();
+
     let rom_path = Path::new("C:/Users/Loptr/Desktop/Super Metroid/Original ROM/Super Metroid (JU) [!].smc");
     let rom_vanilla = load_vanilla_rom(rom_path).unwrap();
 
-    //let difficulty_tiers = maprando::randomize::get_difficulty_tiers(&randomizer_settings, game_data.p, &game_data, implicit_tech, implicit_notables);
-
-    /*let randomization = Randomization {
-        settings: randomizer_settings,
-        difficulty: difficulty_tiers[0].clone(),
-    };
-    let rom_rando = maprando::patch::make_rom(&rom_original, &randomization, &game_data).unwrap();*/
-    /*let randomizer = Randomizer::new(
-        &map,
-        locked_door_data,
-        objectives,
-        settings,
-        difficulty_tiers,
-        &game_data,
-        base_links_data,
-        rng
-    );*/
     let (atlas_img, room_data) = load_room_sprites(&plando.game_data).unwrap();
     let atlas_tex = graphics::Texture::from_image(&atlas_img, IntRect::default()).unwrap();
 
@@ -537,6 +681,9 @@ fn main() {
 
     let mut is_mouse_dragged = false;
     let mut is_mouse_down = false;
+    let mut is_mouse_clicked: Option<mouse::Button>;
+    let mut mouse_click_pos = Vector2i::new(0, 0);
+    let mut mouse_click_timer = 0;
     let mut mouse_x = 0;
     let mut mouse_y = 0;
 
@@ -548,9 +695,15 @@ fn main() {
     let img_door_width = (img_doors.size().x / 8) as i32;
 
     let tex_helm = graphics::Texture::from_file("../visualizer/helm.png").unwrap();
+    let tex_bosses = graphics::Texture::from_file("../visualizer/bosses.png").unwrap();
+    let tex_minibosses = graphics::Texture::from_file("../visualizer/minibosses.png").unwrap();
+    let tex_misc = graphics::Texture::from_file("../visualizer/misc.png").unwrap();
     let mut user_tex_source = ImplUserTexSource::new();
     
     user_tex_source.add_texture(Placeable::Helm as u64, tex_helm);
+    user_tex_source.add_texture(FlagType::Bosses as u64, tex_bosses);
+    user_tex_source.add_texture(FlagType::Minibosses as u64, tex_minibosses);
+    user_tex_source.add_texture(FlagType::Misc as u64, tex_misc);
 
     // Add item textures to egui
     for i in 0..22 {
@@ -586,12 +739,20 @@ fn main() {
         let tile_y = (local_mouse_y / 8.0).floor().max(0.0) as usize;
         let tile_hovered_opt = plando.get_tile_at(tile_x, tile_y);
 
+        is_mouse_clicked = None;
+        if mouse_click_timer > 0 {
+            mouse_click_timer -= 1;
+        }
+
         while let Some(ev) = window.poll_event() {
             sfegui.add_event(&ev);
 
             match ev {
-                Event::Closed => { window.close(); }
-                Event::MouseButtonPressed { button, x, .. } => {
+                Event::Closed => {
+                    let _ = save_settings(&settings, settings_path);
+                    window.close();
+                }
+                Event::MouseButtonPressed { button, x, y } => {
                     if x < window.size().x as i32 - sidebar_width as i32 {
                         if button == mouse::Button::Left {
                             is_mouse_down = true;
@@ -599,8 +760,12 @@ fn main() {
                             zoom = 1.0;
                         }
                     }
+
+                    mouse_click_pos.x = x;
+                    mouse_click_pos.y = y;
+                    mouse_click_timer = settings.mouse_click_delay_tolerance;
                 },
-                Event::MouseButtonReleased { button, .. } => {
+                Event::MouseButtonReleased { button, x, y } => {
                     if button == mouse::Button::Left {
                         is_mouse_down = false;
                     }
@@ -617,7 +782,12 @@ fn main() {
                                 if selection.to_item().is_some() {
                                     is_ok = plando.place_item(tile_info, Item::Nothing, right).is_ok();
                                 } else if selection != Placeable::Helm {
-                                    is_ok = plando.place_door(tile_info, None, direction, false).is_ok();
+                                    let room_idx = plando.room_id_to_idx(tile_info.room_id);
+                                    let (room_x, room_y) = plando.map.rooms[room_idx];
+                                    let door_idx = plando.get_door_idx(room_idx, tile_x - room_x, tile_y - room_y, direction);
+                                    if door_idx.is_some() {
+                                        is_ok = plando.place_door(room_idx, door_idx.unwrap(), None, false).is_ok();
+                                    }
                                 }
                                 if !is_ok {
                                     sidebar_selection = None;
@@ -628,13 +798,16 @@ fn main() {
                                     if res.is_err() {
                                         error_modal_message = Some(res.unwrap_err().to_string());
                                     }
-                                } else {
-                                    // TODO: Select Item/Flag to reveal spoiler route
                                 }
                             }
                         }
                     }
                     is_mouse_dragged = false;
+
+                    let new_mouse_pos = Vector2i::new(x, y);
+                    if (mouse_click_pos - new_mouse_pos).length_sq() < settings.mouse_click_pos_tolerance && mouse_click_timer > 0 && sidebar_selection.is_none() {
+                        is_mouse_clicked = Some(button);
+                    }
                 },
                 Event::MouseWheelScrolled { wheel: _, delta, x, .. } => {
                     if x < window.size().x as i32 - sidebar_width as i32 {
@@ -667,6 +840,10 @@ fn main() {
                 Event::KeyPressed { code, .. } => {
                     if code == Key::F7 {
                         plando.update_spoiler_data();
+                    } else if code == Key::Add {
+                        spoiler_step += 1;
+                    } else if code == Key::Subtract && spoiler_step > 0 {
+                        spoiler_step -= 1;
                     }
                 }
                 _ => {}
@@ -692,16 +869,29 @@ fn main() {
                     if cell == 0 {
                         continue;
                     }
+
+                    let mut color_div = 1;
+                    if let Some(r) = &plando.randomization {
+                        if r.spoiler_log.all_rooms[data.room_idx].map_bireachable_step[local_y][local_x] > spoiler_step {
+                            color_div *= 2;
+                        }
+                        if r.spoiler_log.all_rooms[data.room_idx].map_reachable_step[local_y][local_x] > spoiler_step {
+                            color_div *= 3;
+                        }
+                    }
+
                     let cell_x = (local_x + x) * 8;
                     let cell_y = (local_y + y) * 8;
                     let color_value = if room_geometry.heated { 2 } else { 1 };
-                    let cell_color = get_explored_color(color_value, plando.map.area[data.room_idx]);
+                    let mut cell_color = get_explored_color(color_value, plando.map.area[data.room_idx]);
+                    cell_color.r /= color_div;
+                    cell_color.g /= color_div;
+                    cell_color.b /= color_div;
+
                     let mut bg_rect = graphics::RectangleShape::with_size(Vector2f::new(8.0, 8.0));
                     bg_rect.set_position(Vector2f::new(cell_x as f32, cell_y as f32));
                     bg_rect.set_fill_color(cell_color);
                     window.draw_with_renderstates(&bg_rect, &states);
-
-                    
 
                     // Set up an info overlay we'll draw later, so it'll be on top
                     if info_overlay_opt.is_none() && graphics::FloatRect::new(cell_x as f32, cell_y as f32, 8.0, 8.0).contains2(local_mouse_x, local_mouse_y) {
@@ -716,6 +906,7 @@ fn main() {
                     let sprite_tile_rect = IntRect::new(8 * (data.atlas_x_offset as i32 + local_x as i32), 8 * (data.atlas_y_offset as i32 + local_y as i32), 8, 8);
                     let mut sprite_tile = graphics::Sprite::with_texture_and_rect(&atlas_tex, sprite_tile_rect);
                     sprite_tile.set_position(Vector2f::new(cell_x as f32, cell_y as f32));
+                    sprite_tile.set_color(Color::rgb(255 / color_div, 255 / color_div, 255 / color_div));
                     window.draw_with_renderstates(&sprite_tile, &states);
 
                     let (tex_helm_w, _, tex_helm) = user_tex_source.get_texture(Placeable::Helm as u64);
@@ -800,9 +991,14 @@ fn main() {
 
         // Draw items
         if sidebar_selection.is_none() || sidebar_selection.is_some_and(|x| x >= Placeable::ETank && x <= Placeable::WalljumpBoots) {
-            for item_placement in &plando.item_locations {
-                let (room_x, room_y) = plando.map.rooms[item_placement.room_idx];
-                let item_index = match item_placement.item {
+            for (i, &item) in plando.item_locations.iter().enumerate() {
+                let (room_id, node_id) = plando.game_data.item_locations[i];
+                let room_ptr = plando.game_data.room_ptr_by_id[&room_id];
+                let room_idx = plando.game_data.room_idx_by_ptr[&room_ptr];
+                let (room_x, room_y) = plando.map.rooms[room_idx];
+                let (tile_x, tile_y) = plando.game_data.node_coords[&(room_id, node_id)];
+
+                let item_index = match item {
                     Item::Nothing => 23,
                     item => item as i32
                 };
@@ -810,18 +1006,25 @@ fn main() {
                 let mut spr_item = graphics::Sprite::with_texture_and_rect(&tex_items,
                     IntRect::new(tex_item_width * item_index, 0, tex_item_width, tex_item_width));
                 spr_item.set_origin(Vector2f::new(tex_item_width as f32 / 2.0, tex_item_width as f32 / 2.0));
-                let item_x_offset = match item_placement.double_item_placement {
+                let double_item = plando::get_double_item_offset(room_id, node_id);
+                let item_x_offset = match double_item {
                     DoubleItemPlacement::Left => 2,
                     DoubleItemPlacement::Middle => 4,
                     DoubleItemPlacement::Right => 6
                 };
-                spr_item.set_position(Vector2f::new((8 * (item_placement.tile_x + room_x) + item_x_offset) as f32, (8 * (item_placement.tile_y + room_y) + 4) as f32));
+                spr_item.set_position(Vector2f::new((8 * (tile_x + room_x) + item_x_offset) as f32, (8 * (tile_y + room_y) + 4) as f32));
                 spr_item.set_scale(6.0 / tex_item_width as f32);
-                if let Some(tile_hovered) = &tile_hovered_opt {
-                    if tile_hovered.room_idx == item_placement.room_idx && tile_hovered.tile_x == item_placement.tile_x && tile_hovered.tile_y == item_placement.tile_y {
-                        if item_placement.double_item_placement == DoubleItemPlacement::Middle || (item_placement.double_item_placement == DoubleItemPlacement::Left && (local_mouse_x / 8.0).fract() <= 0.5) {
-                            spr_item.scale(1.2);
-                        }
+                if spr_item.global_bounds().contains2(local_mouse_x, local_mouse_y) {
+                    spr_item.scale(1.2);
+                    let item_name = if item_index == 23 {
+                        &"Nothing".to_string()
+                    } else {
+                        &plando.game_data.item_isv.keys[item_index as usize]
+                    };
+                    info_overlay_opt = Some(item_name.clone());
+
+                    if let Some(_button) = is_mouse_clicked {
+                        println!("Clicked item: {}", item_name);
                     }
                 }
 
@@ -830,7 +1033,65 @@ fn main() {
         }
 
         // Draw flags
+        for (i, &flag_id) in plando.game_data.flag_ids.iter().enumerate() {
+            let vertex_info = &plando.get_vertex_info(plando.game_data.flag_vertex_ids[i][0]);
+            let room_idx = plando.room_id_to_idx(vertex_info.room_id);
+            let (room_x, room_y) = plando.map.rooms[room_idx];
+
+            let flag_str_short = &plando.game_data.flag_isv.keys[flag_id];
+            let flag_info = get_flag_info(flag_str_short);
+            if flag_info.is_err() {
+                continue;
+            }
+            let (flag_x, flag_y, flag_type, flag_str) = flag_info.unwrap();
+            let flag_position = Vector2f::new(room_x as f32 + flag_x + 0.5, room_y as f32 + flag_y + 0.5);
+            let (tex_w, tex_h, tex) = user_tex_source.get_texture(flag_type as u64);
+            let mut spr_flag = graphics::Sprite::with_texture(tex);
+            spr_flag.set_origin(Vector2f::new(tex_w / 2.0, tex_h / 2.0));
+            spr_flag.set_position(flag_position * 8.0);
+            spr_flag.set_scale(8.0 / tex_w);
+
+            if spr_flag.global_bounds().contains2(local_mouse_x, local_mouse_y) {
+                spr_flag.scale(1.3);
+
+                info_overlay_opt = Some(flag_str.to_string());
+
+                if let Some(_button) = is_mouse_clicked {
+                    println!("Flag clicked: {}", flag_str);
+                }
+            }
+
+            window.draw_with_renderstates(&spr_flag, &states);
+        }
         
+        // Draw Door hover
+        if sidebar_selection.is_some_and(|x| x >= Placeable::DoorMissile) && tile_hovered_opt.is_some() {
+            let tile = tile_hovered_opt.unwrap();
+            let door_type = sidebar_selection.unwrap();
+            let tr = (local_mouse_x / 8.0).fract() > (local_mouse_y / 8.0).fract();
+            let br = (local_mouse_x / 8.0).fract() > 1.0 - (local_mouse_y / 8.0).fract();
+            let direction = (if tr && br { "right" } else if tr && !br { "up" } else if !tr && br { "down" } else { "left" }).to_string();
+
+            let room_idx = plando.room_id_to_idx(tile.room_id);
+            let (room_x, room_y) = plando.map.rooms[room_idx];
+            let x = (room_x + tile.tile_x) as f32;
+            let y = (room_y + tile.tile_y) as f32;
+
+            let (_tex_w, _tex_h, tex) = user_tex_source.get_texture(door_type as u64);
+            let mut spr_ghost = graphics::Sprite::with_texture(tex);
+            spr_ghost.set_position(Vector2f::new(x, y) * 8.0);
+            spr_ghost.move_(4.0);
+            spr_ghost.set_origin(4.0);
+            spr_ghost.set_rotation(match direction.as_str() {
+                "up" => 90.0,
+                "right" => 180.0,
+                "down" => 270.0,
+                _ => 0.0
+            });
+            spr_ghost.set_color(Color::rgba(0xFF, 0xFF, 0xFF, 0x7F));
+
+            window.draw_with_renderstates(&spr_ghost, &states);
+        }
 
         // Draw the info overlay
         if let Some(info_overlay) = info_overlay_opt {
@@ -868,16 +1129,36 @@ fn main() {
             
         }*/
 
+        
+
         // Draw Menu Bar
         let gui = sfegui.run(&mut window, |_rt, ctx| {
             egui::TopBottomPanel::top("menu_file_main").show(ctx, |ui| {
                 egui::menu::bar(ui, |ui| {
                     ui.menu_button("File", |ui| {
                         if ui.button("Save Seed").clicked() {
-                            
+                            let file_opt = FileDialog::new()
+                                .set_directory("/")
+                                .add_filter("Plando seed", &["pls"])
+                                .save_file();
+                            if let Some(file) = file_opt {
+                                let res = save_seed(&plando, file.as_path());
+                                if res.is_err() {
+                                    error_modal_message = Some(res.unwrap_err().to_string());
+                                }
+                            }
                         }
                         if ui.button("Load Seed").clicked() {
-
+                            let file_opt = FileDialog::new()
+                                .set_directory("/")
+                                .add_filter("Plando seed", &["pls"])
+                                .pick_file();
+                            if let Some(file) = file_opt {
+                                let res = load_seed(&mut plando, file.as_path());
+                                if res.is_err() {
+                                    error_modal_message = Some(res.unwrap_err().to_string());
+                                }
+                            }
                         }
                         if ui.button("Load Settings Preset").clicked() {
                             show_load_preset_modal = true;

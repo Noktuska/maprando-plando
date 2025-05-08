@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::{anyhow, bail, Result};
 use hashbrown::{HashMap, HashSet};
-use maprando::{map_repository::MapRepository, preset::PresetData, randomize::{DifficultyConfig, DoorState, FlagLocationState, ItemLocationState, LockedDoor, RandomizationState, Randomizer, SaveLocationState, SpoilerDetails, SpoilerDoorDetails, SpoilerDoorSummary, SpoilerFlagDetails, SpoilerFlagSummary, SpoilerSummary, StartLocationData}, settings::{Objective, RandomizerSettings, WallJump}, traverse::{apply_requirement, get_bireachable_idxs, get_spoiler_route, traverse, LockedDoorData}};
+use maprando::{map_repository::MapRepository, preset::PresetData, randomize::{DebugData, DifficultyConfig, DoorState, FlagLocationState, ItemLocationState, LockedDoor, Randomization, RandomizationState, Randomizer, SaveLocationState, SpoilerDetails, SpoilerDoorDetails, SpoilerDoorSummary, SpoilerFlagDetails, SpoilerFlagSummary, SpoilerSummary, StartLocationData}, settings::{Objective, RandomizerSettings, WallJump}, traverse::{apply_requirement, get_bireachable_idxs, get_spoiler_route, traverse, LockedDoorData}};
 use maprando_game::{DoorPtrPair, DoorType, GameData, HubLocation, Item, ItemLocationId, LinksDataGroup, Map, NodeId, RoomId, StartLocation, VertexKey};
 use maprando_logic::{GlobalState, Inventory, LocalState};
 use rand::{rngs::StdRng, RngCore, SeedableRng};
@@ -12,15 +12,6 @@ use rand::{rngs::StdRng, RngCore, SeedableRng};
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DoubleItemPlacement {
     Middle, Left, Right
-}
-
-#[derive(Clone)]
-pub struct ItemPlacement {
-    pub item: Item,
-    pub room_idx: usize,
-    pub tile_x: usize,
-    pub tile_y: usize,
-    pub double_item_placement: DoubleItemPlacement
 }
 
 pub const ITEM_VALUES: [Item; 23] = [
@@ -143,7 +134,6 @@ impl Placeable {
 
 pub struct TileInfo {
     pub room_id: usize,
-    pub room_idx: usize,
     pub tile_x: usize,
     pub tile_y: usize
 }
@@ -162,7 +152,7 @@ pub struct Plando {
     pub map: Map,
     pub randomizer_settings: RandomizerSettings,
     pub objectives: Vec<Objective>,
-    pub item_locations: Vec<ItemPlacement>,
+    pub item_locations: Vec<Item>,
     pub start_location_data: StartLocationData,
     pub placed_item_count: [u32; Placeable::VALUES.len()],
     pub randomizable_door_connections: Vec<(DoorPtrPair, DoorPtrPair)>,
@@ -172,8 +162,7 @@ pub struct Plando {
     door_beam_loc: Vec<(usize, usize, usize)>,
     total_door_count: usize,
 
-    pub spoiler_summary_vec: Vec<SpoilerSummary>,
-    pub spoiler_details_vec: Vec<SpoilerDetails>,
+    pub randomization: Option<Randomization>,
 
     pub rng: StdRng,
     pub auto_update_spoiler: bool
@@ -224,6 +213,8 @@ impl Plando {
 
         let preset_data = load_preset_data(&game_data).unwrap();
 
+        let item_location_len = game_data.item_locations.len();
+
         let mut plando = Plando {
             game_data,
             preset_data,
@@ -234,7 +225,7 @@ impl Plando {
             map,
             randomizer_settings,
             objectives,
-            item_locations: Vec::new(),
+            item_locations: vec![Item::Nothing; item_location_len],
             start_location_data,
             placed_item_count,
             randomizable_door_connections,
@@ -243,14 +234,12 @@ impl Plando {
             door_lock_loc: Vec::new(),
             door_beam_loc: Vec::new(),
             total_door_count: 0,
-            spoiler_summary_vec: Vec::new(),
-            spoiler_details_vec: Vec::new(),
+            randomization: None,
 
             rng,
             auto_update_spoiler: true
         };
         
-        plando.init_item_locations();
         plando.get_difficulty_tiers();
 
         plando
@@ -258,7 +247,7 @@ impl Plando {
 
     pub fn clear_item_locations(&mut self) {
         for i in 0..self.item_locations.len() {
-            self.item_locations[i].item = Item::Nothing;
+            self.item_locations[i] = Item::Nothing;
         }
         for i in Placeable::ETank as usize..Placeable::ReserveTank as usize {
             self.placed_item_count[i] = 0;
@@ -269,21 +258,26 @@ impl Plando {
         }
     }
 
-    fn init_item_locations(&mut self) {
-        for item_loc in &self.game_data.item_locations {
-            let room_ptr = &self.game_data.room_ptr_by_id[&item_loc.0];
-            let room_idx = self.game_data.room_idx_by_ptr[room_ptr];
-            
-            let (tile_x, tile_y) = self.game_data.node_coords[item_loc];
+    pub fn room_id_to_idx(&self, id: usize) -> usize {
+        let room_ptr = self.game_data.room_ptr_by_id[&id];
+        self.game_data.room_idx_by_ptr[&room_ptr]
+    }
 
-            self.item_locations.push(ItemPlacement {
-                item: Item::Nothing,
-                room_idx,
-                tile_x,
-                tile_y,
-                double_item_placement: get_double_item_offset(item_loc.0, item_loc.1)
-            });
+    pub fn get_door_idx(&self, room_idx: usize, tile_x: usize, tile_y: usize, direction: String) -> Option<usize> {
+        let door_opt = self.game_data.room_geometry[room_idx].doors.iter().position(|x| {
+            x.direction == direction && x.x == tile_x && x.y == tile_y
+        });
+        if let Some(door_idx) = door_opt {
+            return Some(door_idx);
         }
+        None
+    }
+
+    pub fn load_map(&mut self, map: Map) {
+        self.map = map;
+        self.clear_item_locations();
+        self.clear_doors();
+        self.randomizable_door_connections = get_randomizable_door_connections(&self.game_data, &self.map, &self.objectives);
     }
 
     pub fn reroll_map(&mut self, map_repository: MapRepositoryType) -> Result<()> {
@@ -321,14 +315,13 @@ impl Plando {
     pub fn get_tile_at(&self, x: usize, y: usize) -> Option<TileInfo> {
         for map_tile in &self.game_data.map_tile_data {
             let room_id = map_tile.room_id;
-            let room_ptr = self.game_data.room_ptr_by_id[&room_id];
-            let room_idx = self.game_data.room_idx_by_ptr[&room_ptr];
+            let room_idx = self.room_id_to_idx(room_id);
             let room_geometry = &self.game_data.room_geometry[room_idx];
             let (room_x, room_y) = self.map.rooms[room_idx];
             for (tile_y, row) in room_geometry.map.iter().enumerate() {
                 for (tile_x, &tile) in row.iter().enumerate() {
                     if tile == 1 && room_x + tile_x == x && room_y + tile_y == y {
-                        return Some(TileInfo { room_id, room_idx, tile_x, tile_y })
+                        return Some(TileInfo { room_id, tile_x, tile_y })
                     }
                 }
             }
@@ -336,7 +329,38 @@ impl Plando {
         None
     }
 
+    pub fn get_ship_start() -> StartLocation {
+        let mut ship_start = StartLocation::default();
+        ship_start.name = "Ship".to_string();
+        ship_start.room_id = 8;
+        ship_start.node_id = 5;
+        ship_start.door_load_node_id = Some(2);
+        ship_start.x = 72.0;
+        ship_start.y = 69.5;
+        ship_start
+    }
+
     pub fn place_start_location(&mut self, start_loc: StartLocation) -> Result<()> {
+        // Ship location
+        if start_loc.room_id == 8 && start_loc.node_id == 5 && start_loc.x == 72.0 && start_loc.y == 69.5 {
+            let mut ship_hub = HubLocation::default();
+            ship_hub.name = "Ship".to_string();
+            ship_hub.room_id = 8;
+            ship_hub.node_id = 5;
+            self.start_location_data = StartLocationData {
+                start_location: start_loc,
+                hub_location: ship_hub,
+                hub_obtain_route: Vec::new(),
+                hub_return_route: Vec::new()
+            };
+
+            if self.auto_update_spoiler {
+                self.update_spoiler_data();
+            }
+
+            return Ok(());
+        }
+
         let locked_door_data = self.get_locked_door_data();
         let implicit_tech = &self.preset_data.tech_by_difficulty["Implicit"];
         let implicit_notables = &self.preset_data.notables_by_difficulty["Implicit"];
@@ -370,8 +394,6 @@ impl Plando {
             obstacle_mask: 0,
             actions: vec![],
         }];
-
-        let locked_door_data = self.get_locked_door_data();
 
         let global = self.get_initial_global_state();
         let local = apply_requirement(
@@ -484,23 +506,24 @@ impl Plando {
 
     pub fn place_item(&mut self, tile_info: &TileInfo, item: Item, right_item: bool) -> Result<()> {
         for i in 0..self.item_locations.len() {
-            let item_location = &mut self.item_locations[i];
-            if tile_info.room_idx == item_location.room_idx && tile_info.tile_x == item_location.tile_x && tile_info.tile_y == item_location.tile_y {
-                let valid = match item_location.double_item_placement {
+            let (room_id, node_id) = self.game_data.item_locations[i];
+            let (tile_x, tile_y) = self.game_data.node_coords[&(room_id, node_id)];
+            if tile_info.room_id == room_id && tile_info.tile_x == tile_x && tile_info.tile_y == tile_y {
+                let valid = match get_double_item_offset(room_id, node_id) {
                     DoubleItemPlacement::Middle => true,
                     DoubleItemPlacement::Left => !right_item,
                     DoubleItemPlacement::Right => right_item,
                 };
                 if valid {
                     // Remove old item from placed_item_count
-                    if item_location.item != Item::Nothing {
-                        self.placed_item_count[Placeable::ETank as usize + item_location.item as usize] -= 1;
+                    if self.item_locations[i] != Item::Nothing {
+                        self.placed_item_count[Placeable::ETank as usize + self.item_locations[i] as usize] -= 1;
                     }
                     // Add new item to placed_item_count
                     if item != Item::Nothing {
                         self.placed_item_count[Placeable::ETank as usize + item as usize] += 1;
                     }
-                    item_location.item = item;
+                    self.item_locations[i] = item;
                     if self.auto_update_spoiler {
                         self.update_spoiler_data();
                     }
@@ -511,14 +534,12 @@ impl Plando {
         Err(anyhow!("Could not place item"))
     }
 
-    pub fn place_door(&mut self, tile_info: &TileInfo, door_type_opt: Option<DoorType>, direction: String, replace: bool) -> Result<()> {
+    pub fn place_door(&mut self, room_idx: usize, door_idx: usize, door_type_opt: Option<DoorType>, replace: bool) -> Result<()> {
         if self.total_door_count == 55 {
             bail!("Cannot place more than 55 doors");
         }
 
-        let door = self.game_data.room_geometry[tile_info.room_idx].doors.iter().find(|door| {
-            door.x == tile_info.tile_x && door.y == tile_info.tile_y && door.direction == direction
-        }).ok_or(anyhow!("Could not find door on given tile with given direction"))?;
+        let door = &self.game_data.room_geometry[room_idx].doors[door_idx];
         let ptr_pair = (door.exit_ptr, door.entrance_ptr);
 
         let door_connection = self.randomizable_door_connections.iter().find(|pair| {
@@ -702,6 +723,34 @@ impl Plando {
         }
     }
 
+    pub fn get_vertex_info(&self, vertex_id: usize) -> VertexInfo {
+        let VertexKey {
+            room_id, node_id, ..
+        } = self.game_data.vertex_isv.keys[vertex_id];
+        self.get_vertex_info_by_id(room_id, node_id)
+    }
+
+    pub fn get_vertex_info_by_id(&self, room_id: RoomId, node_id: NodeId) -> VertexInfo {
+        let room_ptr = self.game_data.room_ptr_by_id[&room_id];
+        let room_idx = self.game_data.room_idx_by_ptr[&room_ptr];
+        let area = self.map.area[room_idx];
+        let room_coords = self.map.rooms[room_idx];
+        VertexInfo {
+            area_name: self.game_data.area_names[area].clone(),
+            room_name: self.game_data.room_json_map[&room_id]["name"]
+                .as_str()
+                .unwrap()
+                .to_string(),
+            room_id,
+            room_coords,
+            node_name: self.game_data.node_json_map[&(room_id, node_id)]["name"]
+                .as_str()
+                .unwrap()
+                .to_string(),
+            node_id,
+        }
+    }
+
     pub fn update_spoiler_data(&mut self) {
         let locked_door_data = self.get_locked_door_data();
         let implicit_tech = &self.preset_data.tech_by_difficulty["Implicit"];
@@ -771,22 +820,21 @@ impl Plando {
         randomizer.update_reachability(&mut state);
 
         for i in 0..state.item_location_state.len() {
-            let item_placed = &self.item_locations[i];
-            if item_placed.item != Item::Nothing {
-                state.item_location_state[i].placed_item = Some(item_placed.item);
+            if self.item_locations[i] != Item::Nothing {
+                state.item_location_state[i].placed_item = Some(self.item_locations[i]);
             }
         }
 
-        self.spoiler_summary_vec.clear();
-        self.spoiler_details_vec.clear();
-        //let mut debug_data_vec: Vec<DebugData> = Vec::new();
+        let mut spoiler_summary_vec = vec![];
+        let mut spoiler_details_vec = vec![];
+        let mut debug_data_vec: Vec<DebugData> = Vec::new();
 
         loop {
             let (spoiler_summary, spoiler_details) = self.update_step(&mut state, &randomizer);
             let any_progress = spoiler_summary.items.len() > 0 || spoiler_summary.flags.len() > 0;
-            self.spoiler_summary_vec.push(spoiler_summary);
-            self.spoiler_details_vec.push(spoiler_details);
-            //debug_data_vec.push(state.previous_debug_data.as_ref().unwrap().clone());
+            spoiler_summary_vec.push(spoiler_summary);
+            spoiler_details_vec.push(spoiler_details);
+            debug_data_vec.push(state.previous_debug_data.as_ref().unwrap().clone());
 
             if !any_progress {
                 break;
@@ -798,6 +846,16 @@ impl Plando {
                 item_loc_state.placed_item = Some(Item::Nothing);
             }
         }
+
+        self.randomization = randomizer.get_randomization(
+            &state,
+            spoiler_summary_vec,
+            spoiler_details_vec,
+            debug_data_vec,
+            0,
+            0,
+            &mut self.rng
+        ).ok();
     }
 
     fn update_step(&self, state: &mut RandomizationState, randomizer: &Randomizer) -> (SpoilerSummary, SpoilerDetails) {
@@ -873,10 +931,13 @@ impl Plando {
             previous_debug_data: None,
             key_visited_vertices: HashSet::new(),
         };
+        new_state.previous_debug_data = state.debug_data.clone();
 
         for &item in &placed_uncollected_bireachable_items {
             new_state.global_state.collect(item, &self.game_data, self.randomizer_settings.item_progression_settings.ammo_collect_fraction, &self.difficulty_tiers[0].tech);
         }
+
+        randomizer.update_reachability(&mut new_state);
 
         for &loc in &placed_uncollected_bireachable_loc {
             new_state.item_location_state[loc].collected = true;
@@ -1003,6 +1064,15 @@ fn roll_map(repo: &MapRepository, game_data: &GameData) -> Result<Map> {
 }
 
 
+
+pub struct VertexInfo {
+    pub area_name: String,
+    pub room_id: usize,
+    pub room_name: String,
+    pub room_coords: (usize, usize),
+    pub node_name: String,
+    pub node_id: usize,
+}
 
 fn get_randomizable_doors(game_data: &GameData, objectives: &[Objective]) -> HashSet<DoorPtrPair> {
     // Doors which we do not want to randomize:
@@ -1178,9 +1248,9 @@ fn get_randomizable_door_connections(
     out
 }
 
-fn get_double_item_offset(room_id: usize, node_id: usize) -> DoubleItemPlacement {
+pub fn get_double_item_offset(room_id: usize, node_id: usize) -> DoubleItemPlacement {
     match room_id {
-        46 => if node_id == 4 { DoubleItemPlacement::Right } else { DoubleItemPlacement::Left }, // Brinstar Reserve
+        46 => if node_id == 4 { DoubleItemPlacement::Right } else if node_id == 3 { DoubleItemPlacement::Left } else { DoubleItemPlacement::Middle }, // Brinstar Reserve
         43 => if node_id == 2 { DoubleItemPlacement::Right } else { DoubleItemPlacement::Left }, // Billy Mays
         99 => if node_id == 3 { DoubleItemPlacement::Right } else { DoubleItemPlacement::Left }, // Norfair Reserve
         181 => if node_id == 3 { DoubleItemPlacement::Right } else { DoubleItemPlacement::Left }, // Watering Hole
