@@ -3,11 +3,11 @@ use {
         patch::Rom, settings::DoorsMode
     }, maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType}, plando::{DoubleItemPlacement, MapRepositoryType, Placeable, Plando, TileInfo}, rfd::FileDialog, serde::{Deserialize, Serialize}, sfml::{
         cpp::FBox, graphics::{
-            self, Color, IntRect, PrimitiveType, RenderStates, RenderTarget, RenderWindow, Shape, Transformable, Vertex
+            self, Color, FloatRect, IntRect, PrimitiveType, RenderStates, RenderTarget, RenderWindow, Shape, Transformable, Vertex
         }, system::{Vector2f, Vector2i}, window::{
             mouse, Event, Key, Style
         }
-    }, std::{cmp::max, fs::File, io::{Read, Write}, path::Path, u32}
+    }, std::{cmp::max, fs::File, io::{Read, Write}, path::Path, str::FromStr, u32}
 };
 
 mod plando;
@@ -780,6 +780,7 @@ fn main() {
     let mut sidebar_selection: Option<Placeable> = None;
     let mut spoiler_step = 0;
     let mut spoiler_type = SpoilerType::None;
+    let mut spoiler_window_bounds = FloatRect::default();
 
     while window.is_open() {
         let local_mouse_x = (mouse_x as f32 - x_offset) / zoom;
@@ -1079,7 +1080,14 @@ fn main() {
                     };
                     info_overlay_opt = Some(item_name.clone());
 
-                    if is_mouse_clicked.is_some_and(|bt| bt == mouse::Button::Left) {
+                    if let Some(bt) = is_mouse_clicked {
+                        if sidebar_selection.is_some() && sidebar_selection.unwrap().to_item().is_some() {
+                            let item_to_place = sidebar_selection.unwrap().to_item().unwrap();
+                            //plando.place_item(i, item_to_place);
+                        }
+                    }
+
+                    if sidebar_selection.is_none() && is_mouse_clicked.is_some_and(|bt| bt == mouse::Button::Left) {
                         spoiler_type = SpoilerType::Item(i);
                     }
                 }
@@ -1112,7 +1120,7 @@ fn main() {
 
                 info_overlay_opt = Some(flag_str.to_string());
 
-                if is_mouse_clicked.is_some_and(|bt| bt == mouse::Button::Left) {
+                if sidebar_selection.is_none() && is_mouse_clicked.is_some_and(|bt| bt == mouse::Button::Left) {
                     if flag_id == plando.game_data.mother_brain_defeated_flag_id {
                         spoiler_type = SpoilerType::Escape;
                     } else {
@@ -1261,7 +1269,81 @@ fn main() {
             }
         }
 
-        
+        // Draw Spoiler Window
+        if let Some(r) = &plando.randomization {
+            let x_offset = 32.0;
+            let y_offset = 48.0;
+            let row_height = 24.0;
+            let column_width = 24.0;
+
+            let mut states = RenderStates::default();
+            states.transform.translate(x_offset, y_offset);
+
+            //let mpos = states.transform.transform_point(Vector2f::new(mouse_x as f32, mouse_y as f32));
+            let mx = mouse_x as f32 - x_offset;
+            let my = mouse_y as f32 - y_offset;
+            let mpos = Vector2f::new(mx, my);
+
+            let mut text = graphics::Text::new("", &font_default, (row_height * 0.5) as u32);
+            let mut spoiler_bg_rect = graphics::RectangleShape::from_rect(spoiler_window_bounds);
+            spoiler_bg_rect.set_size(spoiler_bg_rect.size() + Vector2f::new(column_width, row_height) / 2.0);
+            spoiler_bg_rect.move_(Vector2f::new(column_width, row_height) / -4.0);
+            spoiler_bg_rect.set_fill_color(Color::rgba(0x2F, 0x2F, 0x2F, 0xEF));
+
+            window.draw_with_renderstates(&spoiler_bg_rect, &states);
+
+            let mut new_max_width = 0.0;
+
+            for (y_idx, step) in r.spoiler_log.summary.iter().enumerate() {
+                let row_rect = FloatRect::new(0.0, row_height * y_idx as f32, spoiler_window_bounds.width, row_height);
+                spoiler_bg_rect.set_position((row_rect.left, row_rect.top));
+                spoiler_bg_rect.set_size((row_rect.width, row_rect.height));
+                if y_idx == spoiler_step {
+                    spoiler_bg_rect.set_fill_color(Color::from(0x404074));
+                    window.draw_with_renderstates(&spoiler_bg_rect, &states);
+                } else if row_rect.contains(mpos) {
+                    spoiler_bg_rect.set_fill_color(Color::rgba(0x4F, 0x4F, 0x4F, 0xEF));
+                    window.draw_with_renderstates(&spoiler_bg_rect, &states);
+
+                    if is_mouse_clicked.is_some_and(|bt| bt == mouse::Button::Left) {
+                        spoiler_step = y_idx;
+                        spoiler_type = SpoilerType::None;
+                    }
+                }
+
+                text.set_string(&step.step.to_string());
+                let text_bounds = text.global_bounds();
+                text.set_position(((column_width - text_bounds.width) / 2.0, row_height * y_idx as f32 + (row_height - text_bounds.height) / 2.0));
+                window.draw_with_renderstates(&text, &states);
+
+                for (x_idx, item) in step.items.iter().enumerate() {
+                    let item_type = Item::from_str(&item.item).unwrap() as i32;
+                    let mut item_spr = graphics::Sprite::with_texture_and_rect(&tex_items, IntRect::new(tex_item_width * item_type, 0, tex_item_width, tex_item_width));
+                    item_spr.set_position((column_width * (x_idx + 1) as f32, row_height * y_idx as f32));
+                    item_spr.set_scale(row_height / 1.5 / tex_item_width as f32);
+                    item_spr.set_origin(Vector2f::new(item_spr.global_bounds().width, item_spr.global_bounds().height) / 2.0);
+                    item_spr.move_((item_spr.origin().x, row_height / 2.0));
+
+                    // Set new spoiler window bounds. This will be rendered a frame later and is just a consequence of immediate mode GUIs
+                    let right = item_spr.global_bounds().left + item_spr.global_bounds().width;
+                    new_max_width = right.max(new_max_width);
+
+                    if item_spr.global_bounds().contains(mpos) {
+                        item_spr.scale(1.5);
+                        if is_mouse_clicked.is_some_and(|bt| bt == mouse::Button::Left) {
+                            spoiler_type = SpoilerType::Item(
+                                plando.game_data.item_locations.iter().position(|x| x.0 == item.location.room_id && x.1 == item.location.node_id).unwrap()
+                            );
+                        }
+                    }
+
+                    window.draw_with_renderstates(&item_spr, &states);
+                }
+
+                spoiler_window_bounds.width = new_max_width;
+                spoiler_window_bounds.height = row_height * (y_idx + 1) as f32;
+            }
+        }
 
         // Draw Menu Bar
         let gui = sfegui.run(&mut window, |_rt, ctx| {
@@ -1387,6 +1469,7 @@ fn main() {
 
             if let Some(err_msg) = error_modal_message.clone() {
                 let modal = egui::Modal::new(Id::new("modal_error")).show(ctx, |ui| {
+                    ui.set_min_width(256.0);
                     ui.heading("Error");
                     ui.label(err_msg);
                     if ui.button("OK").clicked() {
