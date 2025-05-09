@@ -27,13 +27,17 @@ struct RoomData {
 struct Settings {
     mouse_click_pos_tolerance: i32,
     mouse_click_delay_tolerance: i32,
+    rom_path: String,
+    spoiler_auto_update: bool,
 }
 
 impl Default for Settings {
     fn default() -> Settings {
         Settings {
             mouse_click_pos_tolerance: 5,
-            mouse_click_delay_tolerance: 60
+            mouse_click_delay_tolerance: 60,
+            rom_path: String::new(),
+            spoiler_auto_update: false,
         }
     }
 }
@@ -692,10 +696,9 @@ fn main() {
     let mut plando = Plando::new();
 
     let settings_path = Path::new("./plando_settings.json");
-    let settings = load_settings(settings_path).unwrap_or_default();
+    let mut settings = load_settings(settings_path).unwrap_or_default();
 
-    let rom_path = Path::new("C:/Users/Loptr/Desktop/Super Metroid/Original ROM/Super Metroid (JU) [!].smc");
-    let rom_vanilla = load_vanilla_rom(rom_path).unwrap();
+    let mut rom_vanilla = load_vanilla_rom(&Path::new(&settings.rom_path)).ok();
 
     let (atlas_img, room_data) = load_room_sprites(&plando.game_data).unwrap();
     let atlas_tex = graphics::Texture::from_image(&atlas_img, IntRect::default()).unwrap();
@@ -777,6 +780,8 @@ fn main() {
     let mut sfegui = SfEgui::new(&window);
 
     let mut error_modal_message: Option<String> = None;
+    let mut settings_open = false;
+    let mut customize_open = false;
 
     let mut sidebar_selection: Option<Placeable> = None;
     let mut spoiler_step = 0;
@@ -806,7 +811,7 @@ fn main() {
                     window.close();
                 }
                 Event::MouseButtonPressed { button, x, y } => {
-                    if x < window.size().x as i32 - sidebar_width as i32 && !spoiler_details_hovered {
+                    if x < window.size().x as i32 - sidebar_width as i32 && !spoiler_details_hovered && !settings_open && !customize_open {
                         if button == mouse::Button::Left {
                             is_mouse_down = true;
                         } else if button == mouse::Button::Middle {
@@ -826,12 +831,13 @@ fn main() {
                     }
 
                     let new_mouse_pos = Vector2i::new(x, y);
-                    if (mouse_click_pos - new_mouse_pos).length_sq() < settings.mouse_click_pos_tolerance && mouse_click_timer > 0 && !spoiler_details_hovered {
+                    if (mouse_click_pos - new_mouse_pos).length_sq() < settings.mouse_click_pos_tolerance && mouse_click_timer > 0 && !spoiler_details_hovered
+                        && !settings_open && !customize_open {
                         is_mouse_clicked = Some(button);
                     }
                 },
                 Event::MouseWheelScrolled { wheel: _, delta, x, .. } => {
-                    if x < window.size().x as i32 - sidebar_width as i32 && !spoiler_details_hovered {
+                    if x < window.size().x as i32 - sidebar_width as i32 && !spoiler_details_hovered && !settings_open && !customize_open {
                         let factor = 1.1;
                         if delta > 0.0 && zoom < 20.0 {
                             zoom *= factor;
@@ -858,7 +864,7 @@ fn main() {
                     window.set_view(&graphics::View::from_rect(graphics::Rect::new(0.0, 0.0, width as f32, height as f32)).unwrap());
                 },
                 Event::KeyPressed { code, .. } => {
-                    if code == Key::F7 {
+                    if code == Key::F5 {
                         plando.update_spoiler_data();
                     } else if code == Key::Add {
                         spoiler_step += 1;
@@ -1082,18 +1088,14 @@ fn main() {
 
                     if let Some(bt) = is_mouse_clicked {
                         if sidebar_selection.is_some() && sidebar_selection.unwrap().to_item().is_some() {
-                            let mut res = Ok(());
                             if bt == mouse::Button::Left {
                                 let item_to_place = sidebar_selection.unwrap().to_item().unwrap();
                                 let as_placeable = Placeable::VALUES[item_to_place as usize + Placeable::ETank as usize];
                                 if plando.placed_item_count[as_placeable as usize] < plando.get_max_placeable_count(as_placeable).unwrap() {
-                                    res = plando.place_item(i, item_to_place);
+                                    plando.place_item(i, item_to_place);
                                 }
                             } else if bt == mouse::Button::Right {
-                                res = plando.place_item(i, Item::Nothing);
-                            }
-                            if let Err(err) = res {
-                                error_modal_message = Some(err.to_string());
+                                plando.place_item(i, Item::Nothing);
                             }
                         } else if sidebar_selection.is_none() {
                             spoiler_type = SpoilerType::Item(i);
@@ -1451,13 +1453,25 @@ fn main() {
                             }
                         }
                         if ui.button("Create ROM").clicked() {
-                            let file_opt = FileDialog::new()
-                                .set_directory("/")
-                                .add_filter("Snes ROM", &["sfc"])
-                                .save_file();
-                            if let Some(file) = file_opt {
-                                if let Err(err) = patch_rom(&mut plando, &rom_vanilla, &file) {
-                                    error_modal_message = Some(err.to_string());
+                            if rom_vanilla.is_none() {
+                                if let Some(file) = FileDialog::new().set_title("Select vanilla ROM")
+                                .set_directory("/").add_filter("Snes ROM", &["sfc", "smc"]).pick_file() {
+                                    settings.rom_path = file.to_str().unwrap().to_string();
+                                    match load_vanilla_rom(&Path::new(&settings.rom_path)) {
+                                        Ok(rom) => rom_vanilla = Some(rom),
+                                        Err(err) => error_modal_message = Some(err.to_string())
+                                    }
+                                }
+                            }
+                            if let Some(rom) = rom_vanilla.as_ref() {
+                                let file_opt = FileDialog::new().set_title("Select output location")
+                                    .set_directory("/")
+                                    .add_filter("Snes ROM", &["sfc"])
+                                    .save_file();
+                                if let Some(file) = file_opt {
+                                    if let Err(err) = patch_rom(&mut plando, rom, &file) {
+                                        error_modal_message = Some(err.to_string());
+                                    }
                                 }
                             }
                         }
@@ -1488,6 +1502,22 @@ fn main() {
                             }
                         }
                     });
+                    ui.menu_button("Items", |ui| {
+                        if ui.button("Replace Nothings with Missiles").clicked() {
+                            let auto_update = plando.auto_update_spoiler;
+                            plando.auto_update_spoiler = false;
+                            for i in 0..plando.item_locations.len() {
+                                if plando.item_locations[i] == Item::Nothing {
+                                    let _ = plando.place_item(i, Item::Missile);
+                                }
+                            }
+                            plando.auto_update_spoiler = auto_update;
+                            plando.update_spoiler_data();
+                        }
+                    });
+                    if ui.button("Settings").clicked() {
+                        settings_open = true;
+                    }
                 });
             });
 
@@ -1754,6 +1784,64 @@ fn main() {
                 if window.contains_pointer() {
                     spoiler_details_hovered = true;
                 }
+            }
+
+            if settings_open {
+                egui::Window::new("Settings")
+                .resizable(false)
+                .title_bar(false)
+                .show(ctx, |ui| {
+                    egui::Grid::new("grid_settings").num_columns(3).striped(true).show(ui, |ui| {
+                        let default = Settings::default();
+                        
+                        ui.label("Click delay tolerance").on_hover_text("Time in frames between a click and release to count as a click and not a drag");
+                        ui.add(egui::DragValue::new(&mut settings.mouse_click_delay_tolerance).range(1..=600));
+                        if ui.add_enabled(settings.mouse_click_delay_tolerance != default.mouse_click_delay_tolerance, egui::Button::new("Reset")).clicked() {
+                            settings.mouse_click_delay_tolerance = default.mouse_click_delay_tolerance;
+                        }
+                        ui.end_row();
+
+                        ui.label("Click position tolerance").on_hover_text("Distance in pixels between a mouse click and release to count as a click and not a drag");
+                        ui.add(egui::DragValue::new(&mut settings.mouse_click_pos_tolerance).range(1..=600));
+                        if ui.add_enabled(settings.mouse_click_pos_tolerance != default.mouse_click_pos_tolerance, egui::Button::new("Reset")).clicked() {
+                            settings.mouse_click_pos_tolerance = default.mouse_click_pos_tolerance;
+                        }
+                        ui.end_row();
+
+                        ui.label("ROM Path").on_hover_text("Path to your vanilla Super Metroid ROM");
+                        let rom_path_text = if settings.rom_path.is_empty() { "Empty".to_string() } else { settings.rom_path.clone() };
+                        if ui.button(rom_path_text).clicked() {
+                            let file_opt = FileDialog::new().add_filter("Snes ROM", &["smc", "sfc"]).set_directory("/").pick_file();
+                            if let Some(file) = file_opt {
+                                settings.rom_path = file.to_str().unwrap().to_string();
+                                match load_vanilla_rom(Path::new(&settings.rom_path)) {
+                                    Ok(rom) => rom_vanilla = Some(rom),
+                                    Err(err) => error_modal_message = Some(err.to_string())
+                                }
+                            }
+                        }
+                        ui.end_row();
+
+                        ui.label("Auto update Spoiler").on_hover_text("If checked will automatically update the spoiler after each change. Does affect performance. Press F5 to manually update spoiler");
+                        ui.checkbox(&mut settings.spoiler_auto_update, "Auto update Spoiler");
+                        if ui.add_enabled(settings.spoiler_auto_update != default.spoiler_auto_update, egui::Button::new("Reset")).clicked() {
+                            settings.spoiler_auto_update = default.spoiler_auto_update;
+                        }
+                        plando.auto_update_spoiler = settings.spoiler_auto_update;
+                        ui.end_row();
+                    });
+                    ui.horizontal(|ui| {
+                        if ui.button("Save").clicked() {
+                            if let Err(err) = save_settings(&settings, settings_path) {
+                                error_modal_message = Some(err.to_string());
+                            }
+                            settings_open = false;
+                        }
+                        if ui.button("Reset All").clicked() {
+                            settings = Settings::default();
+                        }
+                    });
+                });
             }
 
             if let Some(err_msg) = error_modal_message.clone() {
