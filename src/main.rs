@@ -7,7 +7,7 @@ use {
         }, system::{Vector2f, Vector2i}, window::{
             mouse, Event, Key, Style
         }
-    }, std::{cmp::max, fs::File, io::{Read, Write}, path::Path, str::FromStr, u32}
+    }, std::{cmp::max, fs::File, io::{Read, Write}, path::Path, str::FromStr, time, u32}
 };
 
 mod plando;
@@ -207,7 +207,8 @@ enum SpecialRoom {
     AmmoRefill,
     FullRefill,
     SaveStation,
-    MapStation    
+    MapStation,
+    Objective
 }
 
 fn get_special_room_mask(room_type: SpecialRoom) -> [[u8; 8]; 8] {
@@ -256,6 +257,15 @@ fn get_special_room_mask(room_type: SpecialRoom) -> [[u8; 8]; 8] {
             [1, 0, 1, 0, 0, 1, 0, 1],
             [1, 0, 1, 1, 1, 1, 0, 1],
             [1, 0, 0, 0, 0, 0, 0, 1],
+            [1, 1, 1, 1, 1, 1, 1, 1]],
+        SpecialRoom::Objective =>
+            [[1, 1, 1, 1, 1, 1, 1, 1],
+            [1, 0, 0, 1, 1, 0, 0, 1],
+            [1, 0, 0, 0, 0, 0, 0, 1],
+            [1, 1, 0, 0, 0, 0, 1, 1],
+            [1, 1, 0, 0, 0, 0, 1, 1],
+            [1, 0, 0, 0, 0, 0, 0, 1],
+            [1, 0, 0, 1, 1, 0, 0, 1],
             [1, 1, 1, 1, 1, 1, 1, 1]]
     }
 }
@@ -686,6 +696,17 @@ fn main() {
     let (atlas_img, room_data) = load_room_sprites(&plando.game_data).unwrap();
     let atlas_tex = graphics::Texture::from_image(&atlas_img, IntRect::default()).unwrap();
 
+    let mut img_obj = graphics::Image::new_solid(8, 8, Color::TRANSPARENT).unwrap();
+    let img_obj_mask = get_special_room_mask(SpecialRoom::Objective);
+    for y in 0..8 {
+        for x in 0..8 {
+            if img_obj_mask[x][y] == 1 {
+                img_obj.set_pixel(x as u32, y as u32, Color::WHITE).unwrap();
+            }
+        }
+    }
+    let tex_obj = graphics::Texture::from_image(&img_obj, IntRect::default()).unwrap();
+
     let mut window = RenderWindow::new((1080, 720), "Maprando Plando", Style::DEFAULT, &Default::default()).expect("Could not create Window");
     window.set_vertical_sync_enabled(true);
 
@@ -745,7 +766,10 @@ fn main() {
     let mut spoiler_type = SpoilerType::None;
     let mut spoiler_window_bounds = FloatRect::default();
 
+    let mut frame_count = 0;
+    let mut now = time::Instant::now();
     while window.is_open() {
+
         let local_mouse_x = (mouse_x as f32 - x_offset) / zoom;
         let local_mouse_y = (mouse_y as f32 - y_offset) / zoom;
         let tile_x = (local_mouse_x / 8.0).floor().max(0.0) as usize;
@@ -840,6 +864,15 @@ fn main() {
             let data = &room_data[i];
             let (x, y) = plando.map.rooms[data.room_idx];
             let room_geometry = &plando.game_data.room_geometry[data.room_idx];
+            let room_flag_idx = plando.game_data.flag_vertex_ids.iter().position(
+                |vert_vec| plando.get_vertex_info(vert_vec[0]).room_id == data.room_id
+            );
+            let room_flag_id = if let Some(idx) = room_flag_idx { Some(plando.game_data.flag_ids[idx]) } else { None };
+            let is_objective = if let Some(id) = room_flag_id {
+                id == plando.game_data.mother_brain_defeated_flag_id || plando.objectives.iter().any(
+                    |obj| obj.get_flag_name() == plando.game_data.flag_isv.keys[id]
+                )
+            } else { false };
 
             // Draw the background color
             for (local_y, row) in room_geometry.map.iter().enumerate() {
@@ -882,7 +915,11 @@ fn main() {
 
                     // Draw Tile Outline
                     let sprite_tile_rect = IntRect::new(8 * (data.atlas_x_offset as i32 + local_x as i32), 8 * (data.atlas_y_offset as i32 + local_y as i32), 8, 8);
-                    let mut sprite_tile = graphics::Sprite::with_texture_and_rect(&atlas_tex, sprite_tile_rect);
+                    let mut sprite_tile = if is_objective {
+                        graphics::Sprite::with_texture(&tex_obj)
+                    } else {
+                        graphics::Sprite::with_texture_and_rect(&atlas_tex, sprite_tile_rect)
+                    };
                     sprite_tile.set_position(Vector2f::new(cell_x as f32, cell_y as f32));
                     sprite_tile.set_color(Color::rgb(255 / color_div, 255 / color_div, 255 / color_div));
                     window.draw_with_renderstates(&sprite_tile, &states);
@@ -1457,6 +1494,14 @@ fn main() {
         sfegui.draw(gui, &mut window, Some(&mut user_tex_source));
 
         window.display();
+
+        let elapsed = now.elapsed();
+        frame_count += 1;
+        if elapsed.as_secs() >= 1 {
+            println!("FPS: {}", frame_count);
+            frame_count = 0;
+            now = time::Instant::now();
+        }
     }
 }
 
