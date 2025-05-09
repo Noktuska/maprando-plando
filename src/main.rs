@@ -118,6 +118,11 @@ fn load_seed(plando: &mut Plando, path: &Path) -> Result<()> {
     plando.place_start_location(start_location)?;
 
     plando.item_locations = seed_data.item_placements;
+    for item in &plando.item_locations {
+        if *item != Item::Nothing {
+            plando.placed_item_count[*item as usize + Placeable::ETank as usize] += 1;
+        }
+    }
     
     for door_data in seed_data.door_locks {
         let door_type = match door_data.door_type {
@@ -884,7 +889,7 @@ fn main() {
             );
             let room_flag_id = if let Some(idx) = room_flag_idx { Some(plando.game_data.flag_ids[idx]) } else { None };
             let is_objective = if let Some(id) = room_flag_id {
-                id == plando.game_data.mother_brain_defeated_flag_id || plando.objectives.iter().any(
+                data.room_id == 238 || plando.objectives.iter().any(
                     |obj| obj.get_flag_name() == plando.game_data.flag_isv.keys[id]
                 )
             } else { false };
@@ -1080,7 +1085,10 @@ fn main() {
                             let mut res = Ok(());
                             if bt == mouse::Button::Left {
                                 let item_to_place = sidebar_selection.unwrap().to_item().unwrap();
-                                res = plando.place_item(i, item_to_place);
+                                let as_placeable = Placeable::VALUES[item_to_place as usize + Placeable::ETank as usize];
+                                if plando.placed_item_count[as_placeable as usize] < plando.get_max_placeable_count(as_placeable).unwrap() {
+                                    res = plando.place_item(i, item_to_place);
+                                }
                             } else if bt == mouse::Button::Right {
                                 res = plando.place_item(i, Item::Nothing);
                             }
@@ -1197,6 +1205,7 @@ fn main() {
             let r = plando.randomization.as_ref().unwrap();
             let mut obtain_route = None;
             let mut return_route = None;
+            let mut show_escape_route = false;
 
             match spoiler_type {
                 SpoilerType::Hub => {
@@ -1255,6 +1264,7 @@ fn main() {
                     if let Some(details) = details_opt {
                         obtain_route = Some(&details.obtain_route);
                         return_route = Some(&details.return_route);
+                        show_escape_route = flag_id == plando.game_data.mother_brain_defeated_flag_id;
                     } else {
                         error_modal_message = Some("Flag not logically clearable".to_string());
                         spoiler_type = SpoilerType::None;
@@ -1268,6 +1278,7 @@ fn main() {
             if obtain_route.is_some() && return_route.is_some() {
                 let mut vertex_return = Vec::new();
                 let mut vertex_obtain = Vec::new();
+                let mut vertex_escape = Vec::new();
                 for entry in return_route.unwrap() {
                     if let Some((x, y)) = entry.coords {
                         let vertex = graphics::Vertex::with_pos_color(Vector2f::new(x as f32 + 0.5, y as f32 + 0.5) * 8.0, Color::YELLOW);
@@ -1280,7 +1291,24 @@ fn main() {
                         vertex_obtain.push(vertex);
                     }
                 }
+                if show_escape_route {
+                    if let Some(animal_route) = r.spoiler_log.escape.animals_route.as_ref() {
+                        for entry in animal_route {
+                            let v1 = graphics::Vertex::with_pos_color(Vector2f::new(entry.from.x as f32 + 0.5, entry.from.y as f32 + 0.5) * 8.0, Color::CYAN);
+                            let v2 = graphics::Vertex::with_pos_color(Vector2f::new(entry.to.x as f32 + 0.5, entry.to.y as f32 + 0.5) * 8.0, Color::CYAN);
+                            vertex_escape.push(v1);
+                            vertex_escape.push(v2);
+                        }
+                    }
+                    for entry in &r.spoiler_log.escape.ship_route {
+                        let v1 = graphics::Vertex::with_pos_color(Vector2f::new(entry.from.x as f32 + 0.5, entry.from.y as f32 + 0.5) * 8.0, Color::CYAN);
+                        let v2 = graphics::Vertex::with_pos_color(Vector2f::new(entry.to.x as f32 + 0.5, entry.to.y as f32 + 0.5) * 8.0, Color::CYAN);
+                        vertex_escape.push(v1);
+                        vertex_escape.push(v2);
+                    }
+                }
 
+                draw_thick_line_strip(&mut *window, &states, &vertex_escape, 1.0);
                 draw_thick_line_strip(&mut *window, &states, &vertex_return, 1.0);
                 draw_thick_line_strip(&mut *window, &states, &vertex_obtain, 1.0);
             }
@@ -1601,6 +1629,9 @@ fn main() {
                             ui.horizontal(|ui| {
                                 for flag_details in &details.flags {
                                     let flag_id = plando.game_data.flag_isv.index_by_key[&flag_details.flag];
+                                    if !flag_has_tex.contains(&flag_id) {
+                                        continue;
+                                    }
                                     let flag_tex_id = FLAG_TEX_START + flag_id as u64;
                                     let img = egui::Image::new(user_tex_source.get_image_source(flag_tex_id)).fit_to_exact_size(Vec2::new(24.0, 24.0)).sense(Sense::click());
                                     if ui.add(img).clicked() {

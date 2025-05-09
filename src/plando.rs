@@ -168,7 +168,7 @@ pub struct Plando {
     pub objectives: Vec<Objective>,
     pub item_locations: Vec<Item>,
     pub start_location_data: StartLocationData,
-    pub placed_item_count: [u32; Placeable::VALUES.len()],
+    pub placed_item_count: [usize; Placeable::VALUES.len()],
     pub randomizable_door_connections: Vec<(DoorPtrPair, DoorPtrPair)>,
     pub locked_doors: Vec<LockedDoor>,
 
@@ -222,7 +222,7 @@ impl Plando {
             hub_return_route: Vec::new()
         };
 
-        let mut placed_item_count = [0u32; Placeable::VALUES.len()];
+        let mut placed_item_count = [0usize; Placeable::VALUES.len()];
         placed_item_count[0] = 1;
 
         let preset_data = load_preset_data(&game_data).unwrap();
@@ -666,19 +666,28 @@ impl Plando {
         if placeable == Placeable::Helm {
             return Some(1);
         } else if placeable >= Placeable::Bombs && placeable <= Placeable::Morph {
+            let item = placeable.to_item().unwrap();
+            if let Some(item_count) = self.randomizer_settings.item_progression_settings.starting_items.iter().find(|x| x.item == item) {
+                return Some(1 - item_count.count);
+            }
             return Some(1);
         } else if placeable == Placeable::WalljumpBoots {
             return if self.randomizer_settings.other_settings.wall_jump == WallJump::Vanilla { Some(0) } else { Some(1) };
         } else if placeable < Placeable::DoorMissile {
             let item_pool = &self.randomizer_settings.item_progression_settings.item_pool;
-            return Some(match placeable {
+            let count = match placeable {
                 Placeable::Missile => item_pool.iter().find(|elem| elem.item == Item::Missile).unwrap().count,
                 Placeable::SuperMissile => item_pool.iter().find(|elem| elem.item == Item::Super).unwrap().count,
                 Placeable::PowerBomb => item_pool.iter().find(|elem| elem.item == Item::PowerBomb).unwrap().count,
                 Placeable::ETank => item_pool.iter().find(|elem| elem.item == Item::ETank).unwrap().count,
                 Placeable::ReserveTank => item_pool.iter().find(|elem| elem.item == Item::ReserveTank).unwrap().count,
                 _ => 0
-            });
+            };
+            let item = placeable.to_item().unwrap();
+            if let Some(item_count) = self.randomizer_settings.item_progression_settings.starting_items.iter().find(|x| x.item == item) {
+                return Some(count - item_count.count);
+            }
+            return Some(count);
         }
         None
     }
