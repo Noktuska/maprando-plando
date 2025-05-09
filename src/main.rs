@@ -1,13 +1,13 @@
 use {
     anyhow::{anyhow, bail, Context, Result}, egui_sfml::{egui::{self, Color32, Id, Sense, TextureId, Vec2}, SfEgui, UserTexSource}, hashbrown::HashMap, maprando::{
-        patch::Rom, settings::DoorsMode
+        patch::Rom, randomize::SpoilerRouteEntry, settings::DoorsMode
     }, maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType}, plando::{DoubleItemPlacement, MapRepositoryType, Placeable, Plando, ITEM_VALUES}, rfd::FileDialog, serde::{Deserialize, Serialize}, sfml::{
         cpp::FBox, graphics::{
             self, Color, FloatRect, IntRect, PrimitiveType, RenderStates, RenderTarget, RenderWindow, Shape, Transformable, Vertex
         }, system::{Vector2f, Vector2i}, window::{
             mouse, Event, Key, Style
         }
-    }, std::{cmp::max, fs::File, io::{Read, Write}, path::Path, str::FromStr, time, u32}
+    }, std::{cmp::max, fs::File, io::{Read, Write}, path::Path, str::FromStr, u32}
 };
 
 mod plando;
@@ -674,13 +674,12 @@ fn get_flag_info(flag: &String) -> Result<(f32, f32, FlagType, &str)> {
     }
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
 enum SpoilerType {
     None,
     Hub,
     Item(usize),
-    Flag(usize),
-    Escape
+    Flag(usize)
 }
 
 fn main() {
@@ -727,6 +726,8 @@ fn main() {
     let tex_items = graphics::Texture::from_image(&img_items, IntRect::default()).unwrap();
     let tex_item_width = (tex_items.size().x / 24) as i32;
 
+    //let (tex_flags, tex_flag_map) = load_flag_texture(&plando.game_data, "../visualizer/".to_string()).unwrap();
+
     let img_doors = generate_door_sprites().unwrap();
     let img_door_width = (img_doors.size().x / 8) as i32;
 
@@ -753,6 +754,17 @@ fn main() {
         let tex = graphics::Texture::from_image(&img_doors, source_rect).unwrap();
         user_tex_source.add_texture(Placeable::DoorMissile as u64 + i as u64, tex);
     }
+    // Add Flag textures to egui
+    const FLAG_TEX_START: u64 = FlagType::Misc as u64 + 1;
+    let mut flag_has_tex = Vec::new();
+    for flag_idx in 0..plando.game_data.flag_ids.len() {
+        let flag_id = plando.game_data.flag_ids[flag_idx];
+        let flag_str = &plando.game_data.flag_isv.keys[flag_id];
+        if let Ok(tex) = graphics::Texture::from_file(("../visualizer/".to_string().to_owned() + flag_str + ".png").as_str()) {
+            user_tex_source.add_texture(FLAG_TEX_START + flag_id as u64, tex);
+            flag_has_tex.push(flag_id);
+        }
+    }
 
     let mut sidebar_width = 0.0;
     let sidebar_height = 32.0;
@@ -765,11 +777,9 @@ fn main() {
     let mut spoiler_step = 0;
     let mut spoiler_type = SpoilerType::None;
     let mut spoiler_window_bounds = FloatRect::default();
+    let mut spoiler_details_hovered = false;
 
-    let mut frame_count = 0;
-    let mut now = time::Instant::now();
     while window.is_open() {
-
         let local_mouse_x = (mouse_x as f32 - x_offset) / zoom;
         let local_mouse_y = (mouse_y as f32 - y_offset) / zoom;
         let tile_x = (local_mouse_x / 8.0).floor().max(0.0) as usize;
@@ -780,6 +790,7 @@ fn main() {
         if mouse_click_timer > 0 {
             mouse_click_timer -= 1;
         }
+        let mut click_consumed = false;
 
         while let Some(ev) = window.poll_event() {
             sfegui.add_event(&ev);
@@ -790,10 +801,12 @@ fn main() {
                     window.close();
                 }
                 Event::MouseButtonPressed { button, x, y } => {
-                    if x < window.size().x as i32 - sidebar_width as i32 {
+                    if x < window.size().x as i32 - sidebar_width as i32 && !spoiler_details_hovered {
                         if button == mouse::Button::Left {
                             is_mouse_down = true;
                         } else if button == mouse::Button::Middle {
+                            x_offset = 0.0;
+                            y_offset = 0.0;
                             zoom = 1.0;
                         }
                     }
@@ -808,12 +821,12 @@ fn main() {
                     }
 
                     let new_mouse_pos = Vector2i::new(x, y);
-                    if (mouse_click_pos - new_mouse_pos).length_sq() < settings.mouse_click_pos_tolerance && mouse_click_timer > 0 {
+                    if (mouse_click_pos - new_mouse_pos).length_sq() < settings.mouse_click_pos_tolerance && mouse_click_timer > 0 && !spoiler_details_hovered {
                         is_mouse_clicked = Some(button);
                     }
                 },
                 Event::MouseWheelScrolled { wheel: _, delta, x, .. } => {
-                    if x < window.size().x as i32 - sidebar_width as i32 {
+                    if x < window.size().x as i32 - sidebar_width as i32 && !spoiler_details_hovered {
                         let factor = 1.1;
                         if delta > 0.0 && zoom < 20.0 {
                             zoom *= factor;
@@ -851,6 +864,8 @@ fn main() {
                 _ => {}
             }
         }
+
+        spoiler_details_hovered = false;
 
         window.clear(Color::rgb(0x1F, 0x1F, 0x1F));
 
@@ -974,6 +989,7 @@ fn main() {
                 sprite_helm.scale(1.2);
                 if is_mouse_clicked.is_some_and(|x| x == mouse::Button::Left) {
                     spoiler_type = SpoilerType::Hub;
+                    click_consumed = true;
                 }
             }
         }
@@ -1074,6 +1090,7 @@ fn main() {
                         } else if sidebar_selection.is_none() {
                             spoiler_type = SpoilerType::Item(i);
                         }
+                        click_consumed = true;
                     }
                 }
 
@@ -1106,17 +1123,14 @@ fn main() {
                 info_overlay_opt = Some(flag_str.to_string());
 
                 if sidebar_selection.is_none() && is_mouse_clicked.is_some_and(|bt| bt == mouse::Button::Left) {
-                    if flag_id == plando.game_data.mother_brain_defeated_flag_id {
-                        spoiler_type = SpoilerType::Escape;
-                    } else {
-                        spoiler_type = SpoilerType::Flag(i);
-                    }
+                    spoiler_type = SpoilerType::Flag(i);
+                    click_consumed = true;
                 }
             }
 
             window.draw_with_renderstates(&spr_flag, &states);
         }
-        
+    
         // Draw Door hover
         if sidebar_selection.is_some_and(|x| x.to_door_type().is_some()) && tile_hovered_opt.is_some() {
             let tile = tile_hovered_opt.unwrap();
@@ -1154,6 +1168,7 @@ fn main() {
                     } else if bt == mouse::Button::Right {
                         res = plando.place_door(room_idx, door_idx, None, true);
                     }
+                    click_consumed = true;
                     if let Err(err) = res {
                         error_modal_message = Some(err.to_string());
                     }
@@ -1276,7 +1291,7 @@ fn main() {
             let x_offset = 32.0;
             let y_offset = 48.0;
             let row_height = 24.0;
-            let column_width = 24.0;
+            let column_width = 20.0;
 
             let mut states = RenderStates::default();
             states.transform.translate(x_offset, y_offset);
@@ -1296,63 +1311,74 @@ fn main() {
 
             let mut new_max_width = 0.0;
 
-            let mut found_item = [false; ITEM_VALUES.len()];
+            // Spoiler Summary
+            if spoiler_type == SpoilerType::None {
+                let mut found_item = [false; ITEM_VALUES.len()];
 
-            for (y_idx, step) in r.spoiler_log.summary.iter().enumerate() {
-                let row_rect = FloatRect::new(0.0, row_height * y_idx as f32, spoiler_window_bounds.width, row_height);
-                spoiler_bg_rect.set_position((row_rect.left, row_rect.top));
-                spoiler_bg_rect.set_size((row_rect.width, row_rect.height));
-                if y_idx == spoiler_step {
-                    spoiler_bg_rect.set_fill_color(Color::from(0x404074));
-                    window.draw_with_renderstates(&spoiler_bg_rect, &states);
-                } else if row_rect.contains(mpos) {
-                    spoiler_bg_rect.set_fill_color(Color::rgba(0x4F, 0x4F, 0x4F, 0xEF));
-                    window.draw_with_renderstates(&spoiler_bg_rect, &states);
+                for (y_idx, step) in r.spoiler_log.summary.iter().enumerate() {
+                    let row_rect = FloatRect::new(0.0, row_height * y_idx as f32, spoiler_window_bounds.width, row_height);
+                    spoiler_bg_rect.set_position((row_rect.left, row_rect.top));
+                    spoiler_bg_rect.set_size((row_rect.width, row_rect.height));
+                    if y_idx == spoiler_step {
+                        spoiler_bg_rect.set_fill_color(Color::from(0x404074));
+                        window.draw_with_renderstates(&spoiler_bg_rect, &states);
+                    } else if row_rect.contains(mpos) {
+                        spoiler_bg_rect.set_fill_color(Color::rgba(0x4F, 0x4F, 0x4F, 0xEF));
+                        window.draw_with_renderstates(&spoiler_bg_rect, &states);
 
-                    if is_mouse_clicked.is_some_and(|bt| bt == mouse::Button::Left) {
-                        spoiler_step = y_idx;
-                        spoiler_type = SpoilerType::None;
-                    }
-                }
-
-                text.set_string(&step.step.to_string());
-                let text_bounds = text.global_bounds();
-                text.set_position(((column_width - text_bounds.width) / 2.0, row_height * y_idx as f32 + (row_height - text_bounds.height) / 2.0));
-                window.draw_with_renderstates(&text, &states);
-
-                let mut x_idx = 0;
-                for item in &step.items {
-                    let item_type = Item::from_str(&item.item).unwrap() as usize;
-                    if found_item[item_type] {
-                        continue;
-                    }
-                    found_item[item_type] = true;
-                    let mut item_spr = graphics::Sprite::with_texture_and_rect(&tex_items, IntRect::new(tex_item_width * item_type as i32, 0, tex_item_width, tex_item_width));
-                    item_spr.set_position((column_width * (x_idx + 1) as f32, row_height * y_idx as f32));
-                    item_spr.set_scale(row_height / 1.5 / tex_item_width as f32);
-                    item_spr.set_origin(Vector2f::new(item_spr.global_bounds().width, item_spr.global_bounds().height) / 2.0);
-                    item_spr.move_((item_spr.origin().x, row_height / 2.0));
-
-                    // Set new spoiler window bounds. This will be rendered a frame later and is just a consequence of immediate mode GUIs
-                    let right = item_spr.global_bounds().left + item_spr.global_bounds().width;
-                    new_max_width = right.max(new_max_width);
-
-                    if item_spr.global_bounds().contains(mpos) {
-                        item_spr.scale(1.5);
                         if is_mouse_clicked.is_some_and(|bt| bt == mouse::Button::Left) {
-                            spoiler_type = SpoilerType::Item(
-                                plando.game_data.item_locations.iter().position(|x| x.0 == item.location.room_id && x.1 == item.location.node_id).unwrap()
-                            );
+                            spoiler_step = y_idx;
+                            spoiler_type = SpoilerType::None;
                         }
                     }
 
-                    window.draw_with_renderstates(&item_spr, &states);
-                    x_idx += 1;
-                }
+                    text.set_string(&step.step.to_string());
+                    let text_bounds = text.global_bounds();
+                    text.set_position(((column_width - text_bounds.width) / 2.0, row_height * y_idx as f32 + (row_height - text_bounds.height) / 2.0));
+                    window.draw_with_renderstates(&text, &states);
 
-                spoiler_window_bounds.height = row_height * (y_idx + 1) as f32;
+                    let mut x_idx = 0;
+                    for item in &step.items {
+                        let item_type = Item::from_str(&item.item).unwrap() as usize;
+                        if found_item[item_type] {
+                            continue;
+                        }
+                        found_item[item_type] = true;
+                        let mut item_spr = graphics::Sprite::with_texture_and_rect(&tex_items, IntRect::new(tex_item_width * item_type as i32, 0, tex_item_width, tex_item_width));
+                        item_spr.set_position((column_width * (x_idx + 1) as f32, row_height * y_idx as f32));
+                        item_spr.set_scale(row_height / 1.5 / tex_item_width as f32);
+                        item_spr.set_origin(Vector2f::new(item_spr.global_bounds().width, item_spr.global_bounds().height) / 2.0);
+                        item_spr.move_((item_spr.origin().x, row_height / 2.0));
+
+                        // Set new spoiler window bounds. This will be rendered a frame later and is just a consequence of immediate mode GUIs
+                        let right = item_spr.global_bounds().left + item_spr.global_bounds().width;
+                        new_max_width = right.max(new_max_width);
+
+                        if item_spr.global_bounds().contains(mpos) {
+                            item_spr.scale(1.5);
+                            if is_mouse_clicked.is_some_and(|bt| bt == mouse::Button::Left) {
+                                spoiler_type = SpoilerType::Item(
+                                    plando.game_data.item_locations.iter().position(|x| x.0 == item.location.room_id && x.1 == item.location.node_id).unwrap()
+                                );
+                            }
+                        }
+
+                        window.draw_with_renderstates(&item_spr, &states);
+                        x_idx += 1;
+                    }
+
+                    spoiler_window_bounds.height = row_height * (y_idx + 1) as f32;
+                }
             }
             spoiler_window_bounds.width = new_max_width;
+        }
+
+        if !click_consumed && is_mouse_clicked.is_some() {
+            sidebar_selection = None;
+            spoiler_type = SpoilerType::None;
+        }
+        if sidebar_selection.is_some() {
+            spoiler_type = SpoilerType::None;
         }
 
         // Draw Menu Bar
@@ -1477,6 +1503,228 @@ fn main() {
                 });
             }).response.rect.width();
 
+            // Draw Spoiler Details Window
+            if spoiler_type != SpoilerType::None && plando.randomization.is_some() {
+                let r = plando.randomization.as_ref().unwrap();
+                let window = egui::Window::new("Spoiler Details")
+                    .resizable(false)
+                    .title_bar(false)
+                    .movable(false)
+                    .vscroll(false)
+                    .show(ctx, |ui| {
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            ui.style_mut().spacing.item_spacing = Vec2::new(2.0, 2.0);
+                            let details = &r.spoiler_log.details[spoiler_step];
+                            ui.heading(format!("STEP {}", details.step));
+                            ui.label("PREVIOUSLY COLLECTIBLE");
+
+                            let mut collectible_items = [0; ITEM_VALUES.len() - 1];
+                            let mut collectible_flags = vec![false; plando.game_data.flag_ids.len()];
+                            for prev_step in 0..spoiler_step {
+                                let prev_details = &r.spoiler_log.details[prev_step];
+                                for item_details in &prev_details.items {
+                                    let item_id = plando.game_data.item_isv.index_by_key[&item_details.item];
+                                    collectible_items[item_id] += 1;
+                                }
+                                for flag_details in &prev_details.flags {
+                                    let flag_id = plando.game_data.flag_isv.index_by_key[&flag_details.flag];
+                                    let flag_idx = plando.game_data.flag_ids.iter().position(|x| *x == flag_id).unwrap();
+                                    collectible_flags[flag_idx] = true;
+                                }
+                            }
+
+                            let mut new_spoiler_type = spoiler_type.clone();
+
+                            let minor_indices = [Item::Missile as usize, Item::Super as usize, Item::PowerBomb as usize, Item::ETank as usize, Item::ReserveTank as usize];
+                            // Render Minor Items
+                            ui.horizontal(|ui| {
+                                for i in 0..minor_indices.len() {
+                                    let idx = minor_indices[i];
+                                    if collectible_items[idx] == 0 {
+                                        continue;
+                                    }
+                                    let placeable_idx = Placeable::ETank as u64 + idx as u64;
+                                    let img = egui::Image::new(user_tex_source.get_image_source(placeable_idx)).fit_to_exact_size(Vec2::new(16.0, 16.0));
+                                    ui.add(img);
+                                    let ammo_collected = (collectible_items[idx] as f32 * plando.randomizer_settings.item_progression_settings.ammo_collect_fraction).round() as i32 * 5;
+                                    let label = if idx == Item::ETank as usize || idx == Item::ReserveTank as usize {
+                                        collectible_items[idx].to_string()
+                                    } else {
+                                        ammo_collected.to_string() + " / " + &(collectible_items[idx] * 5).to_string()
+                                    };
+                                    ui.label(label);
+                                }
+                            });
+                            // Render Major Items
+                            ui.horizontal(|ui| {
+                                for i in 0..ITEM_VALUES.len() - 1 {
+                                    if collectible_items[i] == 0 || minor_indices.contains(&i) {
+                                        continue;
+                                    }
+                                    let placeable_idx = Placeable::ETank as u64 + i as u64;
+                                    let img = egui::Image::new(user_tex_source.get_image_source(placeable_idx)).fit_to_exact_size(Vec2::new(16.0, 16.0));
+                                    ui.add(img);
+                                }
+                            });
+                            // Render Flags
+                            ui.horizontal(|ui| {
+                                for i in 0..collectible_flags.len() {
+                                    if !collectible_flags[i] || !flag_has_tex.contains(&i) {
+                                        continue;
+                                    }
+                                    let flag_id = plando.game_data.flag_ids[i];
+                                    let flag_tex_idx = FLAG_TEX_START + flag_id as u64;
+                                    let img = egui::Image::new(user_tex_source.get_image_source(flag_tex_idx)).fit_to_exact_size(Vec2::new(24.0, 24.0)).sense(Sense::click());
+                                    let resp = ui.add(img);
+                                    if resp.clicked() {
+                                        new_spoiler_type = SpoilerType::Flag(i);
+                                    }
+                                }
+                            });
+
+                            ui.label("COLLECTIBLE ON THIS STEP");
+                            // Items
+                            ui.horizontal(|ui| {
+                                for item_details in &details.items {
+                                    let item_id = plando.game_data.item_isv.index_by_key[&item_details.item];
+                                    let placeable_id = Placeable::ETank as u64 + item_id as u64;
+                                    let img = egui::Image::new(user_tex_source.get_image_source(placeable_id)).fit_to_exact_size(Vec2::new(16.0, 16.0)).sense(Sense::click());
+                                    if ui.add(img).clicked() {
+                                        let item_idx = plando.game_data.item_locations.iter().position(
+                                            |x| x.0 == item_details.location.room_id && x.1 == item_details.location.node_id
+                                        ).unwrap();
+                                        new_spoiler_type = SpoilerType::Item(item_idx);
+                                    }
+                                }
+                            });
+                            // Flags
+                            ui.horizontal(|ui| {
+                                for flag_details in &details.flags {
+                                    let flag_id = plando.game_data.flag_isv.index_by_key[&flag_details.flag];
+                                    let flag_tex_id = FLAG_TEX_START + flag_id as u64;
+                                    let img = egui::Image::new(user_tex_source.get_image_source(flag_tex_id)).fit_to_exact_size(Vec2::new(24.0, 24.0)).sense(Sense::click());
+                                    if ui.add(img).clicked() {
+                                        let flag_idx = plando.game_data.flag_ids.iter().position(
+                                            |x| *x == flag_id
+                                        ).unwrap();
+                                        new_spoiler_type = SpoilerType::Flag(flag_idx);
+                                    }
+                                }
+                            });
+
+                            let details_name: String;
+                            let details_location: String;
+                            let details_area: String;
+                            let details_obtain_route: &Vec<SpoilerRouteEntry>;
+                            let details_return_route: &Vec<SpoilerRouteEntry>;
+
+                            match spoiler_type {
+                                SpoilerType::Item(item) => {
+                                    let (room_id, node_id) = plando.game_data.item_locations[item];
+                                    let item_details = details.items.iter().find(
+                                        |x| x.location.room_id == room_id && x.location.node_id == node_id
+                                    ).unwrap();
+                                    details_name = item_details.item.clone() + item_details.difficulty.as_ref().unwrap_or(&String::new());
+                                    details_location = item_details.location.room.clone() + ": " + &item_details.location.node;
+                                    details_area = item_details.location.area.clone();
+                                    details_obtain_route = &item_details.obtain_route;
+                                    details_return_route = &item_details.return_route;
+                                }
+                                SpoilerType::Flag(flag_idx) => {
+                                    let flag_id = plando.game_data.flag_ids[flag_idx];
+                                    let flag_name = plando.game_data.flag_isv.keys[flag_id].clone();
+                                    let flag_details = details.flags.iter().find(
+                                        |x| x.flag == flag_name
+                                    ).unwrap();
+                                    details_name = flag_name;
+                                    details_location = flag_details.location.room.clone() + ": " + &flag_details.location.node;
+                                    details_area = flag_details.location.area.clone();
+                                    details_obtain_route = &flag_details.obtain_route;
+                                    details_return_route = &flag_details.return_route;
+                                }
+                                _ => {
+                                    details_name = "Hub Route".to_string();
+                                    details_location = plando.start_location_data.hub_location.name.clone();
+                                    details_area = String::new();
+                                    details_obtain_route = &plando.start_location_data.hub_obtain_route;
+                                    details_return_route = &plando.start_location_data.hub_return_route;
+                                }
+                            };
+                            ui.heading(details_name);
+                            ui.label("LOCATION");
+                            ui.label(details_location);
+                            ui.label(details_area);
+
+                            ui.separator();
+                            ui.label("OBTAIN ROUTE");
+                            for entry in details_obtain_route {
+                                ui.label(entry.room.clone() + ": " + &entry.node);
+                                if !entry.strat_name.is_empty() && !entry.strat_name.starts_with("Base") {
+                                    ui.label("Strat: ".to_string() + &entry.strat_name);
+                                }
+                                if !entry.relevant_flags.is_empty() {
+                                    let mut str = "Relevant flags: ".to_string();
+                                    for flag in &entry.relevant_flags {
+                                        str += flag;
+                                    }
+                                    ui.label(str);
+                                }
+                                if let Some(x) = entry.missiles_used {
+                                    ui.label(format!("Missiles used: {}", x));
+                                }
+                                if let Some(x) = entry.supers_used {
+                                    ui.label(format!("Supers used: {}", x));
+                                }
+                                if let Some(x) = entry.power_bombs_used {
+                                    ui.label(format!("Power Bombs used: {}", x));
+                                }
+                                if let Some(x) = entry.energy_used {
+                                    ui.label(format!("Energy used: {}", x));
+                                }
+                                if let Some(x) = entry.reserves_used {
+                                    ui.label(format!("Reserves used: {}", x));
+                                }
+                            }
+
+                            ui.separator();
+                            ui.label("RETURN ROUTE");
+                            for entry in details_return_route {
+                                ui.label(entry.room.clone() + ": " + &entry.node);
+                                if !entry.strat_name.is_empty() && !entry.strat_name.starts_with("Base") {
+                                    ui.label("Strat: ".to_string() + &entry.strat_name);
+                                }
+                                if !entry.relevant_flags.is_empty() {
+                                    let mut str = "Relevant flags: ".to_string();
+                                    for flag in &entry.relevant_flags {
+                                        str += flag;
+                                    }
+                                    ui.label(str);
+                                }
+                                if let Some(x) = entry.missiles_used {
+                                    ui.label(format!("Missiles used: {}", x));
+                                }
+                                if let Some(x) = entry.supers_used {
+                                    ui.label(format!("Supers used: {}", x));
+                                }
+                                if let Some(x) = entry.power_bombs_used {
+                                    ui.label(format!("Power Bombs used: {}", x));
+                                }
+                                if let Some(x) = entry.energy_used {
+                                    ui.label(format!("Energy used: {}", x));
+                                }
+                                if let Some(x) = entry.reserves_used {
+                                    ui.label(format!("Reserves used: {}", x));
+                                }
+                            }
+
+                            spoiler_type = new_spoiler_type;
+                        });
+                    }).unwrap().response;
+                if window.contains_pointer() {
+                    spoiler_details_hovered = true;
+                }
+            }
+
             if let Some(err_msg) = error_modal_message.clone() {
                 let modal = egui::Modal::new(Id::new("modal_error")).show(ctx, |ui| {
                     ui.set_min_width(256.0);
@@ -1492,16 +1740,7 @@ fn main() {
             }
         }).unwrap();
         sfegui.draw(gui, &mut window, Some(&mut user_tex_source));
-
         window.display();
-
-        let elapsed = now.elapsed();
-        frame_count += 1;
-        if elapsed.as_secs() >= 1 {
-            println!("FPS: {}", frame_count);
-            frame_count = 0;
-            now = time::Instant::now();
-        }
     }
 }
 
