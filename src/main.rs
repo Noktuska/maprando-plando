@@ -100,15 +100,17 @@ impl CustomControllerConfig {
     }
 
     fn is_valid(&self) -> bool {
-        let mut vec = Vec::new();
-        vec.insert(self.shot as usize, true);
-        vec.insert(self.jump as usize, true);
-        vec.insert(self.dash as usize, true);
-        vec.insert(self.item_cancel as usize, true);
-        vec.insert(self.item_select as usize, true);
-        vec.insert(self.angle_down as usize, true);
-        vec.insert(self.angle_up as usize, true);
-        vec.iter().all(|&x| x)
+        let mut vec = vec![];
+        vec.push(self.shot as usize);
+        vec.push(self.jump as usize);
+        vec.push(self.dash as usize);
+        vec.push(self.item_cancel as usize);
+        vec.push(self.item_select as usize);
+        vec.push(self.angle_down as usize);
+        vec.push(self.angle_up as usize);
+        vec.sort();
+        vec.dedup();
+        vec.len() == 7
     }
 
     fn to_controller_config(&self) -> ControllerConfig {
@@ -192,9 +194,8 @@ impl Customization {
             _ => DoorTheme::Vanilla
         };
         let music = match self.music {
-            1 => MusicSettings::AreaThemed,
-            2 => MusicSettings::Disabled,
-            _ => MusicSettings::Vanilla
+            1 => MusicSettings::Disabled,
+            _ => MusicSettings::AreaThemed
         };
         let shaking = match self.shaking {
             1 => ShakingSetting::Reduced,
@@ -294,6 +295,46 @@ fn load_settings(path: &Path) -> Result<Settings> {
     Ok(result)
 }
 
+fn get_seed_data(plando: &Plando) -> SeedData {
+    let mut door_locks = Vec::new();
+    for door_lock in &plando.locked_doors {
+        let (room_id, node_id) = plando.game_data.door_ptr_pair_map[&door_lock.src_ptr_pair];
+        let (room_idx, door_idx) = plando.game_data.room_and_door_idxs_by_door_ptr_pair[&door_lock.src_ptr_pair];
+        let direction = plando.game_data.room_geometry[room_idx].doors[door_idx].direction.clone();
+
+        let door_type = match door_lock.door_type {
+            DoorType::Beam(beam) => 5 + beam as usize,
+            DoorType::Blue => 0,
+            DoorType::Gray => 1,
+            DoorType::Red => 2,
+            DoorType::Green => 3,
+            DoorType::Yellow => 4
+        };
+
+        door_locks.push(LockedDoorSerializable {
+            room_id,
+            node_id,
+            door_type,
+            direction
+        });
+    }
+
+    let start_room_id = plando.start_location_data.start_location.room_id;
+    let start_node_id = plando.start_location_data.start_location.node_id;
+    let start_location_id = if start_room_id == 8 && start_node_id == 5 {
+        plando.game_data.start_locations.len()
+    } else {
+        plando.game_data.start_location_id_map[&(start_room_id, start_node_id)]
+    };
+
+    SeedData {
+        map: plando.map.clone(),
+        start_location: start_location_id,
+        item_placements: plando.item_locations.clone(),
+        door_locks
+    }
+}
+
 fn load_seed(plando: &mut Plando, path: &Path) -> Result<()> {
     let mut file = File::open(path)?;
 
@@ -351,43 +392,7 @@ fn load_seed(plando: &mut Plando, path: &Path) -> Result<()> {
 fn save_seed(plando: &Plando, path: &Path) -> Result<()> {
     let mut file = File::create(path)?;
 
-    let mut door_locks = Vec::new();
-    for door_lock in &plando.locked_doors {
-        let (room_id, node_id) = plando.game_data.door_ptr_pair_map[&door_lock.src_ptr_pair];
-        let (room_idx, door_idx) = plando.game_data.room_and_door_idxs_by_door_ptr_pair[&door_lock.src_ptr_pair];
-        let direction = plando.game_data.room_geometry[room_idx].doors[door_idx].direction.clone();
-
-        let door_type = match door_lock.door_type {
-            DoorType::Beam(beam) => 5 + beam as usize,
-            DoorType::Blue => 0,
-            DoorType::Gray => 1,
-            DoorType::Red => 2,
-            DoorType::Green => 3,
-            DoorType::Yellow => 4
-        };
-
-        door_locks.push(LockedDoorSerializable {
-            room_id,
-            node_id,
-            door_type,
-            direction
-        });
-    }
-
-    let start_room_id = plando.start_location_data.start_location.room_id;
-    let start_node_id = plando.start_location_data.start_location.node_id;
-    let start_location_id = if start_room_id == 8 && start_node_id == 5 {
-        plando.game_data.start_locations.len()
-    } else {
-        plando.game_data.start_location_id_map[&(start_room_id, start_node_id)]
-    };
-
-    let seed_data = SeedData {
-        map: plando.map.clone(),
-        start_location: start_location_id,
-        item_placements: plando.item_locations.clone(),
-        door_locks
-    };
+    let seed_data = get_seed_data(plando);
 
     let out = serde_json::to_string(&seed_data)?;
 
@@ -797,47 +802,18 @@ fn generate_door_sprites() -> Result<FBox<graphics::Image>> {
     Ok(img_doors)
 }
 
-fn create_rom_patch(plando: &mut Plando, rom: &Rom, save_path: &Path) -> Result<()> {
+fn patch_rom(plando: &Plando, rom_vanilla: &Rom, settings: &CustomizeSettings, save_path: &Path) -> Result<()> {
     if plando.randomization.is_none() {
-        plando.update_spoiler_data();
-        if plando.randomization.is_none() {
-            bail!("Could not generate randomization for current placements");
-        }
+        bail!("No randomization generated");
     }
-    let new_rom = maprando::patch::make_rom(&rom, plando.randomization.as_ref().unwrap(), &plando.game_data)?;
-    let ips_patch = maprando::patch::ips_write::create_ips_patch(&rom.data, &new_rom.data);
-
-    let dir = save_path.parent().unwrap();
-    let file_name = save_path.file_name().unwrap().to_str().unwrap().strip_suffix(".ips").unwrap().to_string() + ".json";
-    let map_path = dir.join(file_name);
-
-    let mut file = File::create(save_path)?;
-    file.write_all(&ips_patch)?;
-
-    file = File::create(map_path)?;
-    file.write_all(serde_json::to_string(&plando.map)?.as_bytes())?;
-
-    Ok(())
-}
-
-fn patch_rom(plando: &Plando, orig_rom: &Rom, settings: &CustomizeSettings, patch_path: &Path, map_path: &Path, out_path: &Path) -> Result<()> {
-    let rom_digest = crypto_hash::hex_digest(crypto_hash::Algorithm::SHA256, &orig_rom.data);
-    if rom_digest != "12b77c4bc9c1832cee8881244659065ee1d84c70c3d29e6eaf92e6798cc2ca72" {
-        bail!("Invalid ROM Hash");
-    }
-
-    let mut file_patch = File::open(patch_path)?;
-    let mut patch: Vec<u8> = Vec::new();
-    file_patch.read_to_end(&mut patch)?;
-
-    let mut rom = orig_rom.clone();
-
-    let map: Map = serde_json::from_str(&std::fs::read_to_string(map_path)?)?;
+    let mut new_rom = maprando::patch::make_rom(&rom_vanilla, plando.randomization.as_ref().unwrap(), &plando.game_data)?;
+    let ips_patch = maprando::patch::ips_write::create_ips_patch(&rom_vanilla.data, &new_rom.data);
+    let map = plando.map.clone();
 
     maprando::customize::customize_rom(
-        &mut rom,
-        orig_rom,
-        &patch,
+        &mut new_rom,
+        rom_vanilla,
+        &ips_patch,
         &Some(map),
         settings,
         &plando.game_data,
@@ -845,8 +821,8 @@ fn patch_rom(plando: &Plando, orig_rom: &Rom, settings: &CustomizeSettings, patc
         &plando.mosaic_themes
     )?;
 
-    let mut file_out = File::create(out_path)?;
-    file_out.write_all(&rom.data)?;
+    let mut file = File::create(save_path)?;
+    file.write_all(&new_rom.data)?;
 
     Ok(())
 }
@@ -1012,6 +988,7 @@ fn main() {
     let mut error_modal_message: Option<String> = None;
     let mut settings_open = false;
     let mut customize_open = false;
+    let mut reset_after_patch = false;
 
     let mut sidebar_selection: Option<Placeable> = None;
     let mut spoiler_step = 0;
@@ -1115,529 +1092,532 @@ fn main() {
         states.transform.scale(zoom, zoom);
 
         let mut info_overlay_opt: Option<String> = None;
-        // Draw the entire map
-        for i in 0..room_data.len() {
-            let data = &room_data[i];
-            let (x, y) = plando.map.rooms[data.room_idx];
-            let room_geometry = &plando.game_data.room_geometry[data.room_idx];
-            let room_flag_idx = plando.game_data.flag_vertex_ids.iter().position(
-                |vert_vec| plando.get_vertex_info(vert_vec[0]).room_id == data.room_id
-            );
-            let room_flag_id = if let Some(idx) = room_flag_idx { Some(plando.game_data.flag_ids[idx]) } else { None };
-            let is_objective = if let Some(id) = room_flag_id {
-                data.room_id == 238 || plando.objectives.iter().any(
-                    |obj| obj.get_flag_name() == plando.game_data.flag_isv.keys[id]
-                )
-            } else { false };
+        // Don't render map if we're patching from a seed file to not spoiler the user
+        if !reset_after_patch {
+            // Draw the entire map
+            for i in 0..room_data.len() {
+                let data = &room_data[i];
+                let (x, y) = plando.map.rooms[data.room_idx];
+                let room_geometry = &plando.game_data.room_geometry[data.room_idx];
+                let room_flag_idx = plando.game_data.flag_vertex_ids.iter().position(
+                    |vert_vec| plando.get_vertex_info(vert_vec[0]).room_id == data.room_id
+                );
+                let room_flag_id = if let Some(idx) = room_flag_idx { Some(plando.game_data.flag_ids[idx]) } else { None };
+                let is_objective = if let Some(id) = room_flag_id {
+                    data.room_id == 238 || plando.objectives.iter().any(
+                        |obj| obj.get_flag_name() == plando.game_data.flag_isv.keys[id]
+                    )
+                } else { false };
 
-            // Draw the background color
-            for (local_y, row) in room_geometry.map.iter().enumerate() {
-                for (local_x, &cell) in row.iter().enumerate() {
-                    if cell == 0 {
-                        continue;
-                    }
-
-                    let mut color_div = 1;
-                    if let Some(r) = &plando.randomization {
-                        if r.spoiler_log.all_rooms[data.room_idx].map_bireachable_step[local_y][local_x] > spoiler_step as u8 {
-                            color_div *= 2;
+                // Draw the background color
+                for (local_y, row) in room_geometry.map.iter().enumerate() {
+                    for (local_x, &cell) in row.iter().enumerate() {
+                        if cell == 0 {
+                            continue;
                         }
-                        if r.spoiler_log.all_rooms[data.room_idx].map_reachable_step[local_y][local_x] > spoiler_step as u8 {
-                            color_div *= 3;
+
+                        let mut color_div = 1;
+                        if let Some(r) = &plando.randomization {
+                            if r.spoiler_log.all_rooms[data.room_idx].map_bireachable_step[local_y][local_x] > spoiler_step as u8 {
+                                color_div *= 2;
+                            }
+                            if r.spoiler_log.all_rooms[data.room_idx].map_reachable_step[local_y][local_x] > spoiler_step as u8 {
+                                color_div *= 3;
+                            }
                         }
-                    }
 
-                    let cell_x = (local_x + x) * 8;
-                    let cell_y = (local_y + y) * 8;
-                    let color_value = if room_geometry.heated { 2 } else { 1 };
-                    let mut cell_color = get_explored_color(color_value, plando.map.area[data.room_idx]);
-                    cell_color.r /= color_div;
-                    cell_color.g /= color_div;
-                    cell_color.b /= color_div;
+                        let cell_x = (local_x + x) * 8;
+                        let cell_y = (local_y + y) * 8;
+                        let color_value = if room_geometry.heated { 2 } else { 1 };
+                        let mut cell_color = get_explored_color(color_value, plando.map.area[data.room_idx]);
+                        cell_color.r /= color_div;
+                        cell_color.g /= color_div;
+                        cell_color.b /= color_div;
 
-                    let mut bg_rect = graphics::RectangleShape::with_size(Vector2f::new(8.0, 8.0));
-                    bg_rect.set_position(Vector2f::new(cell_x as f32, cell_y as f32));
-                    bg_rect.set_fill_color(cell_color);
-                    window.draw_with_renderstates(&bg_rect, &states);
+                        let mut bg_rect = graphics::RectangleShape::with_size(Vector2f::new(8.0, 8.0));
+                        bg_rect.set_position(Vector2f::new(cell_x as f32, cell_y as f32));
+                        bg_rect.set_fill_color(cell_color);
+                        window.draw_with_renderstates(&bg_rect, &states);
 
-                    // Set up an info overlay we'll draw later, so it'll be on top
-                    if info_overlay_opt.is_none() && graphics::FloatRect::new(cell_x as f32, cell_y as f32, 8.0, 8.0).contains2(local_mouse_x, local_mouse_y) {
-                        let mut info_str = data.room_name.to_string();
-                        if plando.start_location_data.hub_location.room_id == data.room_id {
-                            info_str += " (Hub)";
+                        // Set up an info overlay we'll draw later, so it'll be on top
+                        if info_overlay_opt.is_none() && graphics::FloatRect::new(cell_x as f32, cell_y as f32, 8.0, 8.0).contains2(local_mouse_x, local_mouse_y) {
+                            let mut info_str = data.room_name.to_string();
+                            if plando.start_location_data.hub_location.room_id == data.room_id {
+                                info_str += " (Hub)";
+                            }
+                            info_overlay_opt = Some(info_str);
                         }
-                        info_overlay_opt = Some(info_str);
+
+                        // Draw Tile Outline
+                        let sprite_tile_rect = IntRect::new(8 * (data.atlas_x_offset as i32 + local_x as i32), 8 * (data.atlas_y_offset as i32 + local_y as i32), 8, 8);
+                        let mut sprite_tile = if is_objective {
+                            graphics::Sprite::with_texture(&tex_obj)
+                        } else {
+                            graphics::Sprite::with_texture_and_rect(&atlas_tex, sprite_tile_rect)
+                        };
+                        sprite_tile.set_position(Vector2f::new(cell_x as f32, cell_y as f32));
+                        sprite_tile.set_color(Color::rgb(255 / color_div, 255 / color_div, 255 / color_div));
+                        window.draw_with_renderstates(&sprite_tile, &states);
+
+                        let (tex_helm_w, _, tex_helm) = user_tex_source.get_texture(Placeable::Helm as u64);
+                        let mut sprite_helm = graphics::Sprite::with_texture(tex_helm);
+                        sprite_helm.set_scale(8.0 / tex_helm_w);
                     }
-
-                    // Draw Tile Outline
-                    let sprite_tile_rect = IntRect::new(8 * (data.atlas_x_offset as i32 + local_x as i32), 8 * (data.atlas_y_offset as i32 + local_y as i32), 8, 8);
-                    let mut sprite_tile = if is_objective {
-                        graphics::Sprite::with_texture(&tex_obj)
-                    } else {
-                        graphics::Sprite::with_texture_and_rect(&atlas_tex, sprite_tile_rect)
-                    };
-                    sprite_tile.set_position(Vector2f::new(cell_x as f32, cell_y as f32));
-                    sprite_tile.set_color(Color::rgb(255 / color_div, 255 / color_div, 255 / color_div));
-                    window.draw_with_renderstates(&sprite_tile, &states);
-
-                    let (tex_helm_w, _, tex_helm) = user_tex_source.get_texture(Placeable::Helm as u64);
-                    let mut sprite_helm = graphics::Sprite::with_texture(tex_helm);
-                    sprite_helm.set_scale(8.0 / tex_helm_w);
                 }
             }
-        }
 
-        // Draw Possible Start Locations
-        {
-            let (tex_helm_w, _, tex_helm) = user_tex_source.get_texture(Placeable::Helm as u64);
-            let mut sprite_helm = graphics::Sprite::with_texture(tex_helm);
-            sprite_helm.set_color(Color::rgba(0xAF, 0xAF, 0xAF, 0x5F));
+            // Draw Possible Start Locations
+            {
+                let (tex_helm_w, _, tex_helm) = user_tex_source.get_texture(Placeable::Helm as u64);
+                let mut sprite_helm = graphics::Sprite::with_texture(tex_helm);
+                sprite_helm.set_color(Color::rgba(0xAF, 0xAF, 0xAF, 0x5F));
 
-            if sidebar_selection.is_some_and(|sel| sel == Placeable::Helm) {
-                for i in 0..plando.game_data.start_locations.len() {
-                    let room_idx = plando.room_id_to_idx(plando.game_data.start_locations[i].room_id);
+                if sidebar_selection.is_some_and(|sel| sel == Placeable::Helm) {
+                    for i in 0..plando.game_data.start_locations.len() {
+                        let room_idx = plando.room_id_to_idx(plando.game_data.start_locations[i].room_id);
+                        let (room_x, room_y) = plando.map.rooms[room_idx];
+                        let tile_x = (plando.game_data.start_locations[i].x / 16.0).floor();
+                        let tile_y = (plando.game_data.start_locations[i].y / 16.0).floor();
+
+                        sprite_helm.set_position(Vector2f::new(room_x as f32 + tile_x, room_y as f32 + tile_y) * 8.0);
+                        sprite_helm.set_scale(8.0 / tex_helm_w);
+
+                        if sprite_helm.global_bounds().contains2(local_mouse_x, local_mouse_y) {
+                            sprite_helm.scale(1.2);
+                            if let Some(bt) = is_mouse_clicked {
+                                let mut res = Ok(());
+                                if bt == mouse::Button::Left {
+                                    res = plando.place_start_location(plando.game_data.start_locations[i].clone());
+                                } else if bt == mouse::Button::Right {
+                                    res = plando.place_start_location(Plando::get_ship_start());
+                                }
+                                click_consumed = true;
+                                if let Err(err) = res {
+                                    error_modal_message = Some(err.to_string());
+                                }
+                            }
+                        }
+
+                        window.draw_with_renderstates(&sprite_helm, &states);
+                    }
+                }
+                sprite_helm.set_color(Color::WHITE);
+                sprite_helm.set_scale(8.0 / tex_helm_w);
+
+                // Draw current start location
+                let room_idx = plando.room_id_to_idx(plando.start_location_data.start_location.room_id);
+                let (room_x, room_y) = plando.map.rooms[room_idx];
+                let start_tile_x = (plando.start_location_data.start_location.x / 16.0).floor();
+                let start_tile_y = (plando.start_location_data.start_location.y / 16.0).floor();
+                sprite_helm.set_position(Vector2f::new(room_x as f32 + start_tile_x, room_y as f32 + start_tile_y) * 8.0);
+                window.draw_with_renderstates(&sprite_helm, &states);
+
+                if sidebar_selection.is_none() && sprite_helm.global_bounds().contains2(local_mouse_x, local_mouse_y) {
+                    sprite_helm.scale(1.2);
+                    if is_mouse_clicked.is_some_and(|x| x == mouse::Button::Left) {
+                        spoiler_type = SpoilerType::Hub;
+                        click_consumed = true;
+                    }
+                }
+            }
+
+            // Draw Doors
+            for door in &plando.locked_doors {
+                if door.door_type == DoorType::Blue {
+                    continue;
+                }
+
+                let (room_src_idx, _door_src_idx) = plando.game_data.room_and_door_idxs_by_door_ptr_pair[&door.src_ptr_pair];
+                let (room_dst_idx, _door_dst_idx) = plando.game_data.room_and_door_idxs_by_door_ptr_pair[&door.dst_ptr_pair];
+                let room_idxs = vec![(room_src_idx, door.src_ptr_pair), (room_dst_idx, door.dst_ptr_pair)];
+                for (room_idx, ptr_pair) in room_idxs {
                     let (room_x, room_y) = plando.map.rooms[room_idx];
-                    let tile_x = (plando.game_data.start_locations[i].x / 16.0).floor();
-                    let tile_y = (plando.game_data.start_locations[i].y / 16.0).floor();
+                    let room_geometry = &plando.game_data.room_geometry[room_idx];
+                    let (tile_x, tile_y, dir) = room_geometry.doors.iter().find_map(|door| {
+                        if door.exit_ptr == ptr_pair.0 && door.entrance_ptr == ptr_pair.1 { Some((door.x, door.y, door.direction.clone())) } else { None }
+                    }).expect("LockedDoor vector contains non-existent door");
+                    let x = ((room_x + tile_x) * 8) as f32;
+                    let y = ((room_y + tile_y) * 8) as f32;
 
-                    sprite_helm.set_position(Vector2f::new(room_x as f32 + tile_x, room_y as f32 + tile_y) * 8.0);
-                    sprite_helm.set_scale(8.0 / tex_helm_w);
+                    let door_tex_id = match door.door_type {
+                        DoorType::Red => Placeable::DoorMissile,
+                        DoorType::Green => Placeable::DoorSuper,
+                        DoorType::Yellow => Placeable::DoorPowerBomb,
+                        DoorType::Beam(beam_type) => match beam_type {
+                            BeamType::Charge => Placeable::DoorCharge,
+                            BeamType::Ice => Placeable::DoorIce,
+                            BeamType::Wave => Placeable::DoorWave,
+                            BeamType::Spazer => Placeable::DoorSpazer,
+                            BeamType::Plasma => Placeable::DoorPlasma,
+                        },
+                        _ => Placeable::DoorMissile
+                    } as u64;
+                    let (_tex_w, _tex_h, door_tex) = user_tex_source.get_texture(door_tex_id);
+                    let mut door_spr = graphics::Sprite::with_texture(door_tex);
+                    door_spr.set_origin((4.0, 4.0));
+                    door_spr.set_position((x + 4.0, y + 4.0));
+                    door_spr.set_rotation(match dir.as_str() {
+                        "up" => 90.0,
+                        "right" => 180.0,
+                        "down" => 270.0,
+                        _ => 0.0
+                    });
 
-                    if sprite_helm.global_bounds().contains2(local_mouse_x, local_mouse_y) {
-                        sprite_helm.scale(1.2);
+                    window.draw_with_renderstates(&door_spr, &states);
+                }
+            }
+
+            // Draw items
+            if sidebar_selection.is_none() || sidebar_selection.is_some_and(|x| x >= Placeable::ETank && x <= Placeable::WalljumpBoots) {
+                for i in 0..plando.item_locations.len() {
+                    let item = plando.item_locations[i];
+                    let (room_id, node_id) = plando.game_data.item_locations[i];
+                    let room_ptr = plando.game_data.room_ptr_by_id[&room_id];
+                    let room_idx = plando.game_data.room_idx_by_ptr[&room_ptr];
+                    let (room_x, room_y) = plando.map.rooms[room_idx];
+                    let (tile_x, tile_y) = plando.game_data.node_coords[&(room_id, node_id)];
+
+                    let item_index = match item {
+                        Item::Nothing => 23,
+                        item => item as i32
+                    };
+
+                    let mut spr_item = graphics::Sprite::with_texture_and_rect(&tex_items,
+                        IntRect::new(tex_item_width * item_index, 0, tex_item_width, tex_item_width));
+                    spr_item.set_origin(Vector2f::new(tex_item_width as f32 / 2.0, tex_item_width as f32 / 2.0));
+                    let double_item = plando::get_double_item_offset(room_id, node_id);
+                    let item_x_offset = match double_item {
+                        DoubleItemPlacement::Left => 2,
+                        DoubleItemPlacement::Middle => 4,
+                        DoubleItemPlacement::Right => 6
+                    };
+                    spr_item.set_position(Vector2f::new((8 * (tile_x + room_x) + item_x_offset) as f32, (8 * (tile_y + room_y) + 4) as f32));
+                    spr_item.set_scale(6.0 / tex_item_width as f32);
+                    if spr_item.global_bounds().contains2(local_mouse_x, local_mouse_y) {
+                        spr_item.scale(1.2);
+                        let item_name = if item_index == 23 {
+                            &"Nothing".to_string()
+                        } else {
+                            &plando.game_data.item_isv.keys[item_index as usize]
+                        };
+                        info_overlay_opt = Some(item_name.clone());
+
                         if let Some(bt) = is_mouse_clicked {
-                            let mut res = Ok(());
-                            if bt == mouse::Button::Left {
-                                res = plando.place_start_location(plando.game_data.start_locations[i].clone());
-                            } else if bt == mouse::Button::Right {
-                                res = plando.place_start_location(Plando::get_ship_start());
+                            if sidebar_selection.is_some() && sidebar_selection.unwrap().to_item().is_some() {
+                                if bt == mouse::Button::Left {
+                                    let item_to_place = sidebar_selection.unwrap().to_item().unwrap();
+                                    let as_placeable = Placeable::VALUES[item_to_place as usize + Placeable::ETank as usize];
+                                    if plando.placed_item_count[as_placeable as usize] < plando.get_max_placeable_count(as_placeable).unwrap() {
+                                        plando.place_item(i, item_to_place);
+                                    }
+                                } else if bt == mouse::Button::Right {
+                                    plando.place_item(i, Item::Nothing);
+                                }
+                            } else if sidebar_selection.is_none() {
+                                spoiler_type = SpoilerType::Item(i);
                             }
                             click_consumed = true;
-                            if let Err(err) = res {
-                                error_modal_message = Some(err.to_string());
-                            }
                         }
                     }
 
-                    window.draw_with_renderstates(&sprite_helm, &states);
+                    window.draw_with_renderstates(&spr_item, &states);
                 }
             }
-            sprite_helm.set_color(Color::WHITE);
-            sprite_helm.set_scale(8.0 / tex_helm_w);
 
-            // Draw current start location
-            let room_idx = plando.room_id_to_idx(plando.start_location_data.start_location.room_id);
-            let (room_x, room_y) = plando.map.rooms[room_idx];
-            let start_tile_x = (plando.start_location_data.start_location.x / 16.0).floor();
-            let start_tile_y = (plando.start_location_data.start_location.y / 16.0).floor();
-            sprite_helm.set_position(Vector2f::new(room_x as f32 + start_tile_x, room_y as f32 + start_tile_y) * 8.0);
-            window.draw_with_renderstates(&sprite_helm, &states);
+            // Draw flags
+            for (i, &flag_id) in plando.game_data.flag_ids.iter().enumerate() {
+                let vertex_info = &plando.get_vertex_info(plando.game_data.flag_vertex_ids[i][0]);
+                let room_idx = plando.room_id_to_idx(vertex_info.room_id);
+                let (room_x, room_y) = plando.map.rooms[room_idx];
 
-            if sidebar_selection.is_none() && sprite_helm.global_bounds().contains2(local_mouse_x, local_mouse_y) {
-                sprite_helm.scale(1.2);
-                if is_mouse_clicked.is_some_and(|x| x == mouse::Button::Left) {
-                    spoiler_type = SpoilerType::Hub;
-                    click_consumed = true;
+                let flag_str_short = &plando.game_data.flag_isv.keys[flag_id];
+                let flag_info = get_flag_info(flag_str_short);
+                if flag_info.is_err() {
+                    continue;
                 }
-            }
-        }
+                let (flag_x, flag_y, flag_type, flag_str) = flag_info.unwrap();
+                let flag_position = Vector2f::new(room_x as f32 + flag_x + 0.5, room_y as f32 + flag_y + 0.5);
+                let (tex_w, tex_h, tex) = user_tex_source.get_texture(flag_type as u64);
+                let mut spr_flag = graphics::Sprite::with_texture(tex);
+                spr_flag.set_origin(Vector2f::new(tex_w / 2.0, tex_h / 2.0));
+                spr_flag.set_position(flag_position * 8.0);
+                spr_flag.set_scale(8.0 / tex_w);
 
-        // Draw Doors
-        for door in &plando.locked_doors {
-            if door.door_type == DoorType::Blue {
-                continue;
-            }
+                if spr_flag.global_bounds().contains2(local_mouse_x, local_mouse_y) {
+                    spr_flag.scale(1.3);
 
-            let (room_src_idx, _door_src_idx) = plando.game_data.room_and_door_idxs_by_door_ptr_pair[&door.src_ptr_pair];
-            let (room_dst_idx, _door_dst_idx) = plando.game_data.room_and_door_idxs_by_door_ptr_pair[&door.dst_ptr_pair];
-            let room_idxs = vec![(room_src_idx, door.src_ptr_pair), (room_dst_idx, door.dst_ptr_pair)];
-            for (room_idx, ptr_pair) in room_idxs {
-                let (room_x, room_y) = plando.map.rooms[room_idx];
-                let room_geometry = &plando.game_data.room_geometry[room_idx];
-                let (tile_x, tile_y, dir) = room_geometry.doors.iter().find_map(|door| {
-                    if door.exit_ptr == ptr_pair.0 && door.entrance_ptr == ptr_pair.1 { Some((door.x, door.y, door.direction.clone())) } else { None }
-                }).expect("LockedDoor vector contains non-existent door");
-                let x = ((room_x + tile_x) * 8) as f32;
-                let y = ((room_y + tile_y) * 8) as f32;
+                    info_overlay_opt = Some(flag_str.to_string());
 
-                let door_tex_id = match door.door_type {
-                    DoorType::Red => Placeable::DoorMissile,
-                    DoorType::Green => Placeable::DoorSuper,
-                    DoorType::Yellow => Placeable::DoorPowerBomb,
-                    DoorType::Beam(beam_type) => match beam_type {
-                        BeamType::Charge => Placeable::DoorCharge,
-                        BeamType::Ice => Placeable::DoorIce,
-                        BeamType::Wave => Placeable::DoorWave,
-                        BeamType::Spazer => Placeable::DoorSpazer,
-                        BeamType::Plasma => Placeable::DoorPlasma,
-                    },
-                    _ => Placeable::DoorMissile
-                } as u64;
-                let (_tex_w, _tex_h, door_tex) = user_tex_source.get_texture(door_tex_id);
-                let mut door_spr = graphics::Sprite::with_texture(door_tex);
-                door_spr.set_origin((4.0, 4.0));
-                door_spr.set_position((x + 4.0, y + 4.0));
-                door_spr.set_rotation(match dir.as_str() {
-                    "up" => 90.0,
-                    "right" => 180.0,
-                    "down" => 270.0,
-                    _ => 0.0
-                });
-
-                window.draw_with_renderstates(&door_spr, &states);
-            }
-        }
-
-        // Draw items
-        if sidebar_selection.is_none() || sidebar_selection.is_some_and(|x| x >= Placeable::ETank && x <= Placeable::WalljumpBoots) {
-            for i in 0..plando.item_locations.len() {
-                let item = plando.item_locations[i];
-                let (room_id, node_id) = plando.game_data.item_locations[i];
-                let room_ptr = plando.game_data.room_ptr_by_id[&room_id];
-                let room_idx = plando.game_data.room_idx_by_ptr[&room_ptr];
-                let (room_x, room_y) = plando.map.rooms[room_idx];
-                let (tile_x, tile_y) = plando.game_data.node_coords[&(room_id, node_id)];
-
-                let item_index = match item {
-                    Item::Nothing => 23,
-                    item => item as i32
-                };
-
-                let mut spr_item = graphics::Sprite::with_texture_and_rect(&tex_items,
-                    IntRect::new(tex_item_width * item_index, 0, tex_item_width, tex_item_width));
-                spr_item.set_origin(Vector2f::new(tex_item_width as f32 / 2.0, tex_item_width as f32 / 2.0));
-                let double_item = plando::get_double_item_offset(room_id, node_id);
-                let item_x_offset = match double_item {
-                    DoubleItemPlacement::Left => 2,
-                    DoubleItemPlacement::Middle => 4,
-                    DoubleItemPlacement::Right => 6
-                };
-                spr_item.set_position(Vector2f::new((8 * (tile_x + room_x) + item_x_offset) as f32, (8 * (tile_y + room_y) + 4) as f32));
-                spr_item.set_scale(6.0 / tex_item_width as f32);
-                if spr_item.global_bounds().contains2(local_mouse_x, local_mouse_y) {
-                    spr_item.scale(1.2);
-                    let item_name = if item_index == 23 {
-                        &"Nothing".to_string()
-                    } else {
-                        &plando.game_data.item_isv.keys[item_index as usize]
-                    };
-                    info_overlay_opt = Some(item_name.clone());
-
-                    if let Some(bt) = is_mouse_clicked {
-                        if sidebar_selection.is_some() && sidebar_selection.unwrap().to_item().is_some() {
-                            if bt == mouse::Button::Left {
-                                let item_to_place = sidebar_selection.unwrap().to_item().unwrap();
-                                let as_placeable = Placeable::VALUES[item_to_place as usize + Placeable::ETank as usize];
-                                if plando.placed_item_count[as_placeable as usize] < plando.get_max_placeable_count(as_placeable).unwrap() {
-                                    plando.place_item(i, item_to_place);
-                                }
-                            } else if bt == mouse::Button::Right {
-                                plando.place_item(i, Item::Nothing);
-                            }
-                        } else if sidebar_selection.is_none() {
-                            spoiler_type = SpoilerType::Item(i);
-                        }
+                    if sidebar_selection.is_none() && is_mouse_clicked.is_some_and(|bt| bt == mouse::Button::Left) {
+                        spoiler_type = SpoilerType::Flag(i);
                         click_consumed = true;
                     }
                 }
 
-                window.draw_with_renderstates(&spr_item, &states);
+                window.draw_with_renderstates(&spr_flag, &states);
             }
-        }
+        
+            // Draw Door hover
+            if sidebar_selection.is_some_and(|x| x.to_door_type().is_some()) && tile_hovered_opt.is_some() {
+                let tile = tile_hovered_opt.unwrap();
+                let door_type = sidebar_selection.unwrap();
+                let tr = (local_mouse_x / 8.0).fract() > (local_mouse_y / 8.0).fract();
+                let br = (local_mouse_x / 8.0).fract() > 1.0 - (local_mouse_y / 8.0).fract();
+                let direction = (if tr && br { "right" } else if tr && !br { "up" } else if !tr && br { "down" } else { "left" }).to_string();
 
-        // Draw flags
-        for (i, &flag_id) in plando.game_data.flag_ids.iter().enumerate() {
-            let vertex_info = &plando.get_vertex_info(plando.game_data.flag_vertex_ids[i][0]);
-            let room_idx = plando.room_id_to_idx(vertex_info.room_id);
-            let (room_x, room_y) = plando.map.rooms[room_idx];
+                let room_idx = plando.room_id_to_idx(tile.room_id);
+                let door_idx_opt = plando.game_data.room_geometry[room_idx].doors.iter().position(
+                    |x| x.direction == direction && x.x == tile.tile_x && x.y == tile.tile_y
+                );
+                if let Some(door_idx) = door_idx_opt {
+                    let (room_x, room_y) = plando.map.rooms[room_idx];
+                    let x = (room_x + tile.tile_x) as f32;
+                    let y = (room_y + tile.tile_y) as f32;
 
-            let flag_str_short = &plando.game_data.flag_isv.keys[flag_id];
-            let flag_info = get_flag_info(flag_str_short);
-            if flag_info.is_err() {
-                continue;
-            }
-            let (flag_x, flag_y, flag_type, flag_str) = flag_info.unwrap();
-            let flag_position = Vector2f::new(room_x as f32 + flag_x + 0.5, room_y as f32 + flag_y + 0.5);
-            let (tex_w, tex_h, tex) = user_tex_source.get_texture(flag_type as u64);
-            let mut spr_flag = graphics::Sprite::with_texture(tex);
-            spr_flag.set_origin(Vector2f::new(tex_w / 2.0, tex_h / 2.0));
-            spr_flag.set_position(flag_position * 8.0);
-            spr_flag.set_scale(8.0 / tex_w);
+                    let (_tex_w, _tex_h, tex) = user_tex_source.get_texture(door_type as u64);
+                    let mut spr_ghost = graphics::Sprite::with_texture(tex);
+                    spr_ghost.set_position(Vector2f::new(x, y) * 8.0);
+                    spr_ghost.move_(4.0);
+                    spr_ghost.set_origin(4.0);
+                    spr_ghost.set_rotation(match direction.as_str() {
+                        "up" => 90.0,
+                        "right" => 180.0,
+                        "down" => 270.0,
+                        _ => 0.0
+                    });
+                    spr_ghost.set_color(Color::rgba(0xFF, 0xFF, 0xFF, 0x7F));
 
-            if spr_flag.global_bounds().contains2(local_mouse_x, local_mouse_y) {
-                spr_flag.scale(1.3);
-
-                info_overlay_opt = Some(flag_str.to_string());
-
-                if sidebar_selection.is_none() && is_mouse_clicked.is_some_and(|bt| bt == mouse::Button::Left) {
-                    spoiler_type = SpoilerType::Flag(i);
-                    click_consumed = true;
-                }
-            }
-
-            window.draw_with_renderstates(&spr_flag, &states);
-        }
-    
-        // Draw Door hover
-        if sidebar_selection.is_some_and(|x| x.to_door_type().is_some()) && tile_hovered_opt.is_some() {
-            let tile = tile_hovered_opt.unwrap();
-            let door_type = sidebar_selection.unwrap();
-            let tr = (local_mouse_x / 8.0).fract() > (local_mouse_y / 8.0).fract();
-            let br = (local_mouse_x / 8.0).fract() > 1.0 - (local_mouse_y / 8.0).fract();
-            let direction = (if tr && br { "right" } else if tr && !br { "up" } else if !tr && br { "down" } else { "left" }).to_string();
-
-            let room_idx = plando.room_id_to_idx(tile.room_id);
-            let door_idx_opt = plando.game_data.room_geometry[room_idx].doors.iter().position(
-                |x| x.direction == direction && x.x == tile.tile_x && x.y == tile.tile_y
-            );
-            if let Some(door_idx) = door_idx_opt {
-                let (room_x, room_y) = plando.map.rooms[room_idx];
-                let x = (room_x + tile.tile_x) as f32;
-                let y = (room_y + tile.tile_y) as f32;
-
-                let (_tex_w, _tex_h, tex) = user_tex_source.get_texture(door_type as u64);
-                let mut spr_ghost = graphics::Sprite::with_texture(tex);
-                spr_ghost.set_position(Vector2f::new(x, y) * 8.0);
-                spr_ghost.move_(4.0);
-                spr_ghost.set_origin(4.0);
-                spr_ghost.set_rotation(match direction.as_str() {
-                    "up" => 90.0,
-                    "right" => 180.0,
-                    "down" => 270.0,
-                    _ => 0.0
-                });
-                spr_ghost.set_color(Color::rgba(0xFF, 0xFF, 0xFF, 0x7F));
-
-                if let Some(bt) = is_mouse_clicked {
-                    let mut res = Ok(());
-                    if bt == mouse::Button::Left {
-                        res = plando.place_door(room_idx, door_idx, door_type.to_door_type(), false);
-                    } else if bt == mouse::Button::Right {
-                        res = plando.place_door(room_idx, door_idx, None, true);
-                    }
-                    click_consumed = true;
-                    if let Err(err) = res {
-                        error_modal_message = Some(err.to_string());
-                    }
-                }
-
-                window.draw_with_renderstates(&spr_ghost, &states);
-            }
-        }
-
-        // Draw the info overlay
-        if let Some(info_overlay) = info_overlay_opt {
-            let mut text = graphics::Text::new(&info_overlay, &font_default, 16);
-            text.set_fill_color(graphics::Color::WHITE);
-            text.set_position(Vector2f::new(mouse_x as f32 + 16.0, mouse_y as f32));
-            let mut bg_rect = graphics::RectangleShape::new();
-            bg_rect.set_position(Vector2f::new(mouse_x as f32 + 12.0, mouse_y as f32));
-            bg_rect.set_size(Vector2f::new(text.global_bounds().size().x + 8.0, 24.0));
-            bg_rect.set_fill_color(graphics::Color::rgba(0x1F, 0x1F, 0x1F, 0xBF));
-
-            window.draw(&bg_rect);
-            window.draw(&text);
-        }
-
-        // Draw spoiler route
-        if spoiler_type != SpoilerType::None && plando.randomization.is_some() {
-            let r = plando.randomization.as_ref().unwrap();
-            let mut obtain_route = None;
-            let mut return_route = None;
-            let mut show_escape_route = false;
-
-            match spoiler_type {
-                SpoilerType::Hub => {
-                    obtain_route = Some(&r.spoiler_log.hub_obtain_route);
-                    return_route = Some(&r.spoiler_log.hub_return_route);
-                    spoiler_step = 0;
-                }
-                SpoilerType::Item(spoiler_idx) => {
-                    let (room_id, node_id) = plando.game_data.item_locations[spoiler_idx];
-                    let mut details_opt = None;
-                    while details_opt.is_none() {
-                        if spoiler_step < r.spoiler_log.details.len() {
-                            details_opt = r.spoiler_log.details[spoiler_step].items.iter().find(
-                                |x| x.location.room_id == room_id && x.location.node_id == node_id
-                            );
+                    if let Some(bt) = is_mouse_clicked {
+                        let mut res = Ok(());
+                        if bt == mouse::Button::Left {
+                            res = plando.place_door(room_idx, door_idx, door_type.to_door_type(), false);
+                        } else if bt == mouse::Button::Right {
+                            res = plando.place_door(room_idx, door_idx, None, true);
                         }
-                        if details_opt.is_none() {
-                            let step_opt = r.spoiler_log.details.iter().position(
-                                |x| x.items.iter().any(|y| y.location.room_id == room_id && y.location.node_id == node_id)
-                            );
-                            if step_opt.is_none() {
-                                break;
+                        click_consumed = true;
+                        if let Err(err) = res {
+                            error_modal_message = Some(err.to_string());
+                        }
+                    }
+
+                    window.draw_with_renderstates(&spr_ghost, &states);
+                }
+            }
+
+            // Draw the info overlay
+            if let Some(info_overlay) = info_overlay_opt {
+                let mut text = graphics::Text::new(&info_overlay, &font_default, 16);
+                text.set_fill_color(graphics::Color::WHITE);
+                text.set_position(Vector2f::new(mouse_x as f32 + 16.0, mouse_y as f32));
+                let mut bg_rect = graphics::RectangleShape::new();
+                bg_rect.set_position(Vector2f::new(mouse_x as f32 + 12.0, mouse_y as f32));
+                bg_rect.set_size(Vector2f::new(text.global_bounds().size().x + 8.0, 24.0));
+                bg_rect.set_fill_color(graphics::Color::rgba(0x1F, 0x1F, 0x1F, 0xBF));
+
+                window.draw(&bg_rect);
+                window.draw(&text);
+            }
+
+            // Draw spoiler route
+            if spoiler_type != SpoilerType::None && plando.randomization.is_some() {
+                let r = plando.randomization.as_ref().unwrap();
+                let mut obtain_route = None;
+                let mut return_route = None;
+                let mut show_escape_route = false;
+
+                match spoiler_type {
+                    SpoilerType::Hub => {
+                        obtain_route = Some(&r.spoiler_log.hub_obtain_route);
+                        return_route = Some(&r.spoiler_log.hub_return_route);
+                        spoiler_step = 0;
+                    }
+                    SpoilerType::Item(spoiler_idx) => {
+                        let (room_id, node_id) = plando.game_data.item_locations[spoiler_idx];
+                        let mut details_opt = None;
+                        while details_opt.is_none() {
+                            if spoiler_step < r.spoiler_log.details.len() {
+                                details_opt = r.spoiler_log.details[spoiler_step].items.iter().find(
+                                    |x| x.location.room_id == room_id && x.location.node_id == node_id
+                                );
                             }
-                            spoiler_step = step_opt.unwrap();
-                        }
-                    }
-                    if let Some(details) = details_opt {
-                        obtain_route = Some(&details.obtain_route);
-                        return_route = Some(&details.return_route);
-                    } else {
-                        error_modal_message = Some("Item not logically bireachable".to_string());
-                        spoiler_type = SpoilerType::None;
-                    }
-                }
-                SpoilerType::Flag(spoiler_idx) => {
-                    let flag_id = plando.game_data.flag_ids[spoiler_idx];
-                    let flag_name = &plando.game_data.flag_isv.keys[flag_id];
-                    
-                    let mut details_opt = None;
-                    while details_opt.is_none() {
-                        if spoiler_step < r.spoiler_log.details.len() {
-                            details_opt = r.spoiler_log.details[spoiler_step].flags.iter().find(
-                                |x| x.flag == *flag_name
-                            );
-                        }
-                        if details_opt.is_none() {
-                            let step_opt = r.spoiler_log.details.iter().position(
-                                |x| x.flags.iter().any(|y| y.flag == *flag_name)
-                            );
-                            if step_opt.is_none() {
-                                break;
+                            if details_opt.is_none() {
+                                let step_opt = r.spoiler_log.details.iter().position(
+                                    |x| x.items.iter().any(|y| y.location.room_id == room_id && y.location.node_id == node_id)
+                                );
+                                if step_opt.is_none() {
+                                    break;
+                                }
+                                spoiler_step = step_opt.unwrap();
                             }
-                            spoiler_step = step_opt.unwrap();
+                        }
+                        if let Some(details) = details_opt {
+                            obtain_route = Some(&details.obtain_route);
+                            return_route = Some(&details.return_route);
+                        } else {
+                            error_modal_message = Some("Item not logically bireachable".to_string());
+                            spoiler_type = SpoilerType::None;
                         }
                     }
-                    if let Some(details) = details_opt {
-                        obtain_route = Some(&details.obtain_route);
-                        return_route = Some(&details.return_route);
-                        show_escape_route = flag_id == plando.game_data.mother_brain_defeated_flag_id;
-                    } else {
-                        error_modal_message = Some("Flag not logically clearable".to_string());
-                        spoiler_type = SpoilerType::None;
+                    SpoilerType::Flag(spoiler_idx) => {
+                        let flag_id = plando.game_data.flag_ids[spoiler_idx];
+                        let flag_name = &plando.game_data.flag_isv.keys[flag_id];
+                        
+                        let mut details_opt = None;
+                        while details_opt.is_none() {
+                            if spoiler_step < r.spoiler_log.details.len() {
+                                details_opt = r.spoiler_log.details[spoiler_step].flags.iter().find(
+                                    |x| x.flag == *flag_name
+                                );
+                            }
+                            if details_opt.is_none() {
+                                let step_opt = r.spoiler_log.details.iter().position(
+                                    |x| x.flags.iter().any(|y| y.flag == *flag_name)
+                                );
+                                if step_opt.is_none() {
+                                    break;
+                                }
+                                spoiler_step = step_opt.unwrap();
+                            }
+                        }
+                        if let Some(details) = details_opt {
+                            obtain_route = Some(&details.obtain_route);
+                            return_route = Some(&details.return_route);
+                            show_escape_route = flag_id == plando.game_data.mother_brain_defeated_flag_id;
+                        } else {
+                            error_modal_message = Some("Flag not logically clearable".to_string());
+                            spoiler_type = SpoilerType::None;
+                        }
+                    }
+                    _ => {
+                        spoiler_step = r.spoiler_log.details.len();
                     }
                 }
-                _ => {
-                    spoiler_step = r.spoiler_log.details.len();
-                }
-            }
 
-            if obtain_route.is_some() && return_route.is_some() {
-                let mut vertex_return = Vec::new();
-                let mut vertex_obtain = Vec::new();
-                let mut vertex_escape = Vec::new();
-                for entry in return_route.unwrap() {
-                    if let Some((x, y)) = entry.coords {
-                        let vertex = graphics::Vertex::with_pos_color(Vector2f::new(x as f32 + 0.5, y as f32 + 0.5) * 8.0, Color::YELLOW);
-                        vertex_return.push(vertex);
+                if obtain_route.is_some() && return_route.is_some() {
+                    let mut vertex_return = Vec::new();
+                    let mut vertex_obtain = Vec::new();
+                    let mut vertex_escape = Vec::new();
+                    for entry in return_route.unwrap() {
+                        if let Some((x, y)) = entry.coords {
+                            let vertex = graphics::Vertex::with_pos_color(Vector2f::new(x as f32 + 0.5, y as f32 + 0.5) * 8.0, Color::YELLOW);
+                            vertex_return.push(vertex);
+                        }
                     }
-                }
-                for entry in obtain_route.unwrap() {
-                    if let Some((x, y)) = entry.coords {
-                        let vertex = graphics::Vertex::with_pos_color(Vector2f::new(x as f32 + 0.5, y as f32 + 0.5) * 8.0, Color::WHITE);
-                        vertex_obtain.push(vertex);
+                    for entry in obtain_route.unwrap() {
+                        if let Some((x, y)) = entry.coords {
+                            let vertex = graphics::Vertex::with_pos_color(Vector2f::new(x as f32 + 0.5, y as f32 + 0.5) * 8.0, Color::WHITE);
+                            vertex_obtain.push(vertex);
+                        }
                     }
-                }
-                if show_escape_route {
-                    if let Some(animal_route) = r.spoiler_log.escape.animals_route.as_ref() {
-                        for entry in animal_route {
+                    if show_escape_route {
+                        if let Some(animal_route) = r.spoiler_log.escape.animals_route.as_ref() {
+                            for entry in animal_route {
+                                let v1 = graphics::Vertex::with_pos_color(Vector2f::new(entry.from.x as f32 + 0.5, entry.from.y as f32 + 0.5) * 8.0, Color::CYAN);
+                                let v2 = graphics::Vertex::with_pos_color(Vector2f::new(entry.to.x as f32 + 0.5, entry.to.y as f32 + 0.5) * 8.0, Color::CYAN);
+                                vertex_escape.push(v1);
+                                vertex_escape.push(v2);
+                            }
+                        }
+                        for entry in &r.spoiler_log.escape.ship_route {
                             let v1 = graphics::Vertex::with_pos_color(Vector2f::new(entry.from.x as f32 + 0.5, entry.from.y as f32 + 0.5) * 8.0, Color::CYAN);
                             let v2 = graphics::Vertex::with_pos_color(Vector2f::new(entry.to.x as f32 + 0.5, entry.to.y as f32 + 0.5) * 8.0, Color::CYAN);
                             vertex_escape.push(v1);
                             vertex_escape.push(v2);
                         }
                     }
-                    for entry in &r.spoiler_log.escape.ship_route {
-                        let v1 = graphics::Vertex::with_pos_color(Vector2f::new(entry.from.x as f32 + 0.5, entry.from.y as f32 + 0.5) * 8.0, Color::CYAN);
-                        let v2 = graphics::Vertex::with_pos_color(Vector2f::new(entry.to.x as f32 + 0.5, entry.to.y as f32 + 0.5) * 8.0, Color::CYAN);
-                        vertex_escape.push(v1);
-                        vertex_escape.push(v2);
-                    }
+
+                    draw_thick_line_strip(&mut *window, &states, &vertex_escape, 1.0);
+                    draw_thick_line_strip(&mut *window, &states, &vertex_return, 1.0);
+                    draw_thick_line_strip(&mut *window, &states, &vertex_obtain, 1.0);
                 }
-
-                draw_thick_line_strip(&mut *window, &states, &vertex_escape, 1.0);
-                draw_thick_line_strip(&mut *window, &states, &vertex_return, 1.0);
-                draw_thick_line_strip(&mut *window, &states, &vertex_obtain, 1.0);
             }
-        }
 
-        // Draw Spoiler Window
-        if let Some(r) = &plando.randomization {
-            let x_offset = 32.0;
-            let y_offset = 48.0;
-            let row_height = 24.0;
-            let column_width = 20.0;
+            // Draw Spoiler Window
+            if let Some(r) = &plando.randomization {
+                let x_offset = 32.0;
+                let y_offset = 48.0;
+                let row_height = 24.0;
+                let column_width = 20.0;
 
-            let mut states = RenderStates::default();
-            states.transform.translate(x_offset, y_offset);
+                let mut states = RenderStates::default();
+                states.transform.translate(x_offset, y_offset);
 
-            //let mpos = states.transform.transform_point(Vector2f::new(mouse_x as f32, mouse_y as f32));
-            let mx = mouse_x as f32 - x_offset;
-            let my = mouse_y as f32 - y_offset;
-            let mpos = Vector2f::new(mx, my);
+                //let mpos = states.transform.transform_point(Vector2f::new(mouse_x as f32, mouse_y as f32));
+                let mx = mouse_x as f32 - x_offset;
+                let my = mouse_y as f32 - y_offset;
+                let mpos = Vector2f::new(mx, my);
 
-            let mut text = graphics::Text::new("", &font_default, (row_height * 0.5) as u32);
-            let mut spoiler_bg_rect = graphics::RectangleShape::from_rect(spoiler_window_bounds);
-            spoiler_bg_rect.set_size(spoiler_bg_rect.size() + Vector2f::new(column_width, row_height) / 2.0);
-            spoiler_bg_rect.move_(Vector2f::new(column_width, row_height) / -4.0);
-            spoiler_bg_rect.set_fill_color(Color::rgba(0x2F, 0x2F, 0x2F, 0xEF));
+                let mut text = graphics::Text::new("", &font_default, (row_height * 0.5) as u32);
+                let mut spoiler_bg_rect = graphics::RectangleShape::from_rect(spoiler_window_bounds);
+                spoiler_bg_rect.set_size(spoiler_bg_rect.size() + Vector2f::new(column_width, row_height) / 2.0);
+                spoiler_bg_rect.move_(Vector2f::new(column_width, row_height) / -4.0);
+                spoiler_bg_rect.set_fill_color(Color::rgba(0x2F, 0x2F, 0x2F, 0xEF));
 
-            window.draw_with_renderstates(&spoiler_bg_rect, &states);
+                window.draw_with_renderstates(&spoiler_bg_rect, &states);
 
-            let mut new_max_width = 0.0;
+                let mut new_max_width = 0.0;
 
-            // Spoiler Summary
-            if spoiler_type == SpoilerType::None {
-                let mut found_item = [false; ITEM_VALUES.len()];
+                // Spoiler Summary
+                if spoiler_type == SpoilerType::None {
+                    let mut found_item = [false; ITEM_VALUES.len()];
 
-                for (y_idx, step) in r.spoiler_log.summary.iter().enumerate() {
-                    let row_rect = FloatRect::new(0.0, row_height * y_idx as f32, spoiler_window_bounds.width, row_height);
-                    spoiler_bg_rect.set_position((row_rect.left, row_rect.top));
-                    spoiler_bg_rect.set_size((row_rect.width, row_rect.height));
-                    if y_idx == spoiler_step {
-                        spoiler_bg_rect.set_fill_color(Color::from(0x404074));
-                        window.draw_with_renderstates(&spoiler_bg_rect, &states);
-                    } else if row_rect.contains(mpos) {
-                        spoiler_bg_rect.set_fill_color(Color::rgba(0x4F, 0x4F, 0x4F, 0xEF));
-                        window.draw_with_renderstates(&spoiler_bg_rect, &states);
+                    for (y_idx, step) in r.spoiler_log.summary.iter().enumerate() {
+                        let row_rect = FloatRect::new(0.0, row_height * y_idx as f32, spoiler_window_bounds.width, row_height);
+                        spoiler_bg_rect.set_position((row_rect.left, row_rect.top));
+                        spoiler_bg_rect.set_size((row_rect.width, row_rect.height));
+                        if y_idx == spoiler_step {
+                            spoiler_bg_rect.set_fill_color(Color::from(0x404074));
+                            window.draw_with_renderstates(&spoiler_bg_rect, &states);
+                        } else if row_rect.contains(mpos) {
+                            spoiler_bg_rect.set_fill_color(Color::rgba(0x4F, 0x4F, 0x4F, 0xEF));
+                            window.draw_with_renderstates(&spoiler_bg_rect, &states);
 
-                        if is_mouse_clicked.is_some_and(|bt| bt == mouse::Button::Left) {
-                            spoiler_step = y_idx;
-                            spoiler_type = SpoilerType::None;
-                        }
-                    }
-
-                    text.set_string(&step.step.to_string());
-                    let text_bounds = text.global_bounds();
-                    text.set_position(((column_width - text_bounds.width) / 2.0, row_height * y_idx as f32 + (row_height - text_bounds.height) / 2.0));
-                    window.draw_with_renderstates(&text, &states);
-
-                    let mut x_idx = 0;
-                    for item in &step.items {
-                        let item_type = Item::from_str(&item.item).unwrap() as usize;
-                        if found_item[item_type] {
-                            continue;
-                        }
-                        found_item[item_type] = true;
-                        let mut item_spr = graphics::Sprite::with_texture_and_rect(&tex_items, IntRect::new(tex_item_width * item_type as i32, 0, tex_item_width, tex_item_width));
-                        item_spr.set_position((column_width * (x_idx + 1) as f32, row_height * y_idx as f32));
-                        item_spr.set_scale(row_height / 1.5 / tex_item_width as f32);
-                        item_spr.set_origin(Vector2f::new(item_spr.global_bounds().width, item_spr.global_bounds().height) / 2.0);
-                        item_spr.move_((item_spr.origin().x, row_height / 2.0));
-
-                        // Set new spoiler window bounds. This will be rendered a frame later and is just a consequence of immediate mode GUIs
-                        let right = item_spr.global_bounds().left + item_spr.global_bounds().width;
-                        new_max_width = right.max(new_max_width);
-
-                        if item_spr.global_bounds().contains(mpos) {
-                            item_spr.scale(1.5);
                             if is_mouse_clicked.is_some_and(|bt| bt == mouse::Button::Left) {
-                                spoiler_type = SpoilerType::Item(
-                                    plando.game_data.item_locations.iter().position(|x| x.0 == item.location.room_id && x.1 == item.location.node_id).unwrap()
-                                );
+                                spoiler_step = y_idx;
+                                spoiler_type = SpoilerType::None;
                             }
                         }
 
-                        window.draw_with_renderstates(&item_spr, &states);
-                        x_idx += 1;
-                    }
+                        text.set_string(&step.step.to_string());
+                        let text_bounds = text.global_bounds();
+                        text.set_position(((column_width - text_bounds.width) / 2.0, row_height * y_idx as f32 + (row_height - text_bounds.height) / 2.0));
+                        window.draw_with_renderstates(&text, &states);
 
-                    spoiler_window_bounds.height = row_height * (y_idx + 1) as f32;
+                        let mut x_idx = 0;
+                        for item in &step.items {
+                            let item_type = Item::from_str(&item.item).unwrap() as usize;
+                            if found_item[item_type] {
+                                continue;
+                            }
+                            found_item[item_type] = true;
+                            let mut item_spr = graphics::Sprite::with_texture_and_rect(&tex_items, IntRect::new(tex_item_width * item_type as i32, 0, tex_item_width, tex_item_width));
+                            item_spr.set_position((column_width * (x_idx + 1) as f32, row_height * y_idx as f32));
+                            item_spr.set_scale(row_height / 1.5 / tex_item_width as f32);
+                            item_spr.set_origin(Vector2f::new(item_spr.global_bounds().width, item_spr.global_bounds().height) / 2.0);
+                            item_spr.move_((item_spr.origin().x, row_height / 2.0));
+
+                            // Set new spoiler window bounds. This will be rendered a frame later and is just a consequence of immediate mode GUIs
+                            let right = item_spr.global_bounds().left + item_spr.global_bounds().width;
+                            new_max_width = right.max(new_max_width);
+
+                            if item_spr.global_bounds().contains(mpos) {
+                                item_spr.scale(1.5);
+                                if is_mouse_clicked.is_some_and(|bt| bt == mouse::Button::Left) {
+                                    spoiler_type = SpoilerType::Item(
+                                        plando.game_data.item_locations.iter().position(|x| x.0 == item.location.room_id && x.1 == item.location.node_id).unwrap()
+                                    );
+                                }
+                            }
+
+                            window.draw_with_renderstates(&item_spr, &states);
+                            x_idx += 1;
+                        }
+
+                        spoiler_window_bounds.height = row_height * (y_idx + 1) as f32;
+                    }
                 }
+                spoiler_window_bounds.width = new_max_width;
             }
-            spoiler_window_bounds.width = new_max_width;
         }
 
         if !click_consumed && is_mouse_clicked.is_some() {
@@ -1664,6 +1644,7 @@ fn main() {
                                     error_modal_message = Some(res.unwrap_err().to_string());
                                 }
                             }
+                            ui.close_menu();
                         }
                         if ui.button("Load Seed").clicked() {
                             let file_opt = FileDialog::new()
@@ -1676,6 +1657,7 @@ fn main() {
                                     error_modal_message = Some(res.unwrap_err().to_string());
                                 }
                             }
+                            ui.close_menu();
                         }
                         if ui.button("Load Settings Preset").clicked() {
                             let file_opt = FileDialog::new()
@@ -1688,32 +1670,24 @@ fn main() {
                                     error_modal_message = Some(res.unwrap_err().to_string());
                                 }
                             }
+                            ui.close_menu();
                         }
-                        if ui.button("Create Patch").clicked() {
-                            if rom_vanilla.is_none() {
-                                if let Some(file) = FileDialog::new().set_title("Select vanilla ROM")
-                                .set_directory("/").add_filter("Snes ROM", &["sfc", "smc"]).pick_file() {
-                                    settings.rom_path = file.to_str().unwrap().to_string();
-                                    match load_vanilla_rom(&Path::new(&settings.rom_path)) {
-                                        Ok(rom) => rom_vanilla = Some(rom),
-                                        Err(err) => error_modal_message = Some(err.to_string())
-                                    }
-                                }
-                            }
-                            if let Some(rom) = rom_vanilla.as_ref() {
-                                let file_opt = FileDialog::new().set_title("Select output location")
-                                    .set_directory("/")
-                                    .add_filter("ips Patch", &["ips"])
-                                    .save_file();
-                                if let Some(file) = file_opt {
-                                    if let Err(err) = create_rom_patch(&mut plando, rom, &file) {
-                                        error_modal_message = Some(err.to_string());
-                                    }
-                                }
-                            }
-                        }
-                        if ui.button("Apply Patch").clicked() {
+                        if ui.button("Create ROM").clicked() {
                             customize_open = true;
+                            ui.close_menu();
+                        }
+                        if ui.button("Create ROM from seed file").clicked() {
+                            if let Some(file) = FileDialog::new()
+                            .set_directory("/").add_filter("JSON File", &["json"]).pick_file() {
+                                match load_seed(&mut plando, &file) {
+                                    Ok(_) => {
+                                        customize_open = true;
+                                        reset_after_patch = true;
+                                    }
+                                    Err(err) => error_modal_message = Some(err.to_string())
+                                }
+                                ui.close_menu();
+                            }
                         }
                     });
                     ui.menu_button("Map", |ui| {
@@ -1740,6 +1714,7 @@ fn main() {
                                     error_modal_message = Some(res.unwrap_err().to_string());
                                 }
                             }
+                            ui.close_menu();
                         }
                     });
                     ui.menu_button("Items", |ui| {
@@ -1753,10 +1728,12 @@ fn main() {
                             }
                             plando.auto_update_spoiler = auto_update;
                             plando.update_spoiler_data();
+                            ui.close_menu();
                         }
                     });
                     if ui.button("Settings").clicked() {
                         settings_open = true;
+                        ui.close_menu();
                     }
                 });
             });
@@ -2113,9 +2090,8 @@ fn main() {
 
                         ui.label("Music");
                         ui.horizontal(|ui| {
-                            ui.selectable_value(&mut settings.customization.music, 0, "Vanilla");
-                            ui.selectable_value(&mut settings.customization.music, 1, "Area");
-                            ui.selectable_value(&mut settings.customization.music, 2, "Disabled");
+                            ui.selectable_value(&mut settings.customization.music, 0, "On");
+                            ui.selectable_value(&mut settings.customization.music, 1, "Off");
                         });
                         ui.end_row();
 
@@ -2298,28 +2274,29 @@ fn main() {
                                 break;
                             }
                             let rom = rom_vanilla.as_ref().unwrap();
-                            if let Some(file_patch) = FileDialog::new().set_title("Select IPS Patch")
+                            if let Some(file_out) = FileDialog::new().set_title("Select output location")
                             .set_directory("/")
-                            .add_filter("ips Patch", &["ips"])
-                            .pick_file() {
-                                if let Some(file_out) = FileDialog::new().set_title("Select output location")
-                                .set_directory("/")
-                                .add_filter("Snes ROM", &["sfc"])
-                                .save_file() {
-                                    let customize_settings = settings.customization.to_settings(&plando.mosaic_themes);
-                                    let patch_dir = file_patch.parent().unwrap();
-                                    let map_name = file_patch.file_name().unwrap().to_str().unwrap().strip_suffix(".ips").unwrap().to_string() + ".json";
-                                    let map_path = patch_dir.join(map_name);
-                                    if let Err(err) = patch_rom(&mut plando, rom, &customize_settings, &file_patch, &map_path, &file_out) {
-                                        error_modal_message = Some(err.to_string());
-                                    }
-                                    customize_open = false;
+                            .add_filter("Snes ROM", &["sfc"])
+                            .save_file() {
+                                let customize_settings = settings.customization.to_settings(&plando.mosaic_themes);
+                                if let Err(err) = patch_rom(&mut plando, rom, &customize_settings, &file_out) {
+                                    error_modal_message = Some(err.to_string());
                                 }
+                                customize_open = false;
+                            }
+
+                            if reset_after_patch {
+                                let _ = plando.reroll_map(MapRepositoryType::Vanilla);
+                                reset_after_patch = false;
                             }
                             break;
                         }
                         if ui.button("Cancel").clicked() {
                             customize_open = false;
+                            if reset_after_patch {
+                                let _ = plando.reroll_map(MapRepositoryType::Vanilla);
+                                reset_after_patch = false;
+                            }
                         }
                     });
                 });
