@@ -4,9 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-maprando = { path = "../maprando" }
-maprando-game = { path = "../maprando-game" }
-maprando-logic = { path = "../maprando-logic" }
+maprando = { path = "../MapRandomizer/rust/maprando" }
+maprando-game = { path = "../MapRandomizer/rust/maprando-game" }
+maprando-logic = { path = "../MapRandomizer/rust/maprando-logic" }
 anyhow = { version = "1.0.68", features = ["backtrace"] }
 crypto-hash = "0.3.4"
 egui-sfml = "0.9.0"

@@ -806,14 +806,13 @@ fn patch_rom(plando: &Plando, rom_vanilla: &Rom, settings: &CustomizeSettings, s
     if plando.randomization.is_none() {
         bail!("No randomization generated");
     }
-    let mut new_rom = maprando::patch::make_rom(&rom_vanilla, plando.randomization.as_ref().unwrap(), &plando.game_data)?;
+    let mut new_rom = maprando::patch::make_rom(&rom_vanilla, &plando.randomizer_settings, plando.randomization.as_ref().unwrap(), &plando.game_data)?;
     let ips_patch = maprando::patch::ips_write::create_ips_patch(&rom_vanilla.data, &new_rom.data);
     let map = plando.map.clone();
 
     maprando::customize::customize_rom(
         &mut new_rom,
         rom_vanilla,
-        &ips_patch,
         &Some(map),
         settings,
         &plando.game_data,
