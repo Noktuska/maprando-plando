@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::{anyhow, bail, Result};
 use hashbrown::{HashMap, HashSet};
-use maprando::{customize::{mosaic::MosaicTheme, samus_sprite::SamusSpriteCategory}, map_repository::MapRepository, preset::PresetData, randomize::{DebugData, DifficultyConfig, DoorState, FlagLocationState, ItemLocationState, LockedDoor, Randomization, RandomizationState, Randomizer, SaveLocationState, SpoilerDetails, SpoilerDoorDetails, SpoilerDoorSummary, SpoilerFlagDetails, SpoilerFlagSummary, SpoilerSummary, StartLocationData}, settings::{Objective, RandomizerSettings, WallJump}, traverse::{apply_requirement, get_bireachable_idxs, get_spoiler_route, traverse, LockedDoorData}};
+use maprando::{customize::{mosaic::MosaicTheme, samus_sprite::SamusSpriteCategory}, map_repository::MapRepository, preset::PresetData, randomize::{DebugData, DifficultyConfig, DoorState, FlagLocationState, ItemLocationState, LockedDoor, Randomization, RandomizationState, Randomizer, SaveLocationState, SpoilerDetails, SpoilerDoorDetails, SpoilerDoorSummary, SpoilerFlagDetails, SpoilerFlagSummary, SpoilerLog, SpoilerSummary, StartLocationData}, settings::{Objective, RandomizerSettings, WallJump}, traverse::{apply_requirement, get_bireachable_idxs, get_spoiler_route, traverse, LockedDoorData}};
 use maprando_game::{BeamType, DoorPtrPair, DoorType, GameData, HubLocation, Item, ItemLocationId, LinksDataGroup, Map, NodeId, RoomId, StartLocation, VertexKey};
 use maprando_logic::{GlobalState, Inventory, LocalState};
 use rand::{rngs::StdRng, RngCore, SeedableRng};
@@ -178,7 +178,7 @@ pub struct Plando {
     door_beam_loc: Vec<(usize, usize, usize)>,
     total_door_count: usize,
 
-    pub randomization: Option<Randomization>,
+    pub randomization: Option<(Randomization, SpoilerLog)>,
 
     pub rng: StdRng,
     pub auto_update_spoiler: bool

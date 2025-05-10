@@ -531,8 +531,8 @@ fn load_room_sprites(game_data: &GameData) -> Result<(FBox<graphics::Image>, Vec
             let x_offset = tile.coords.0 as u32 * 8;
             let y_offset = tile.coords.1 as u32 * 8;
             
-            if let Some(water_level) = tile.water_level {
-                let start_index = (water_level * 8.0).round() as u32;
+            if let Some(liquid_level) = tile.liquid_level {
+                let start_index = (liquid_level * 8.0).round() as u32;
                 for y in start_index..8 {
                     for x in 0..8 {
                         if (x + y) % 2 == 0 {
@@ -806,8 +806,8 @@ fn patch_rom(plando: &Plando, rom_vanilla: &Rom, settings: &CustomizeSettings, s
     if plando.randomization.is_none() {
         bail!("No randomization generated");
     }
-    let mut new_rom = maprando::patch::make_rom(&rom_vanilla, &plando.randomizer_settings, plando.randomization.as_ref().unwrap(), &plando.game_data)?;
-    let ips_patch = maprando::patch::ips_write::create_ips_patch(&rom_vanilla.data, &new_rom.data);
+    let (r, _spoiler_log) = plando.randomization.as_ref().unwrap();
+    let mut new_rom = maprando::patch::make_rom(&rom_vanilla, &plando.randomizer_settings, r, &plando.game_data)?;
     let map = plando.map.clone();
 
     maprando::customize::customize_rom(
@@ -1116,11 +1116,11 @@ fn main() {
                         }
 
                         let mut color_div = 1;
-                        if let Some(r) = &plando.randomization {
-                            if r.spoiler_log.all_rooms[data.room_idx].map_bireachable_step[local_y][local_x] > spoiler_step as u8 {
+                        if let Some((_r, spoiler_log)) = &plando.randomization {
+                            if spoiler_log.all_rooms[data.room_idx].map_bireachable_step[local_y][local_x] > spoiler_step as u8 {
                                 color_div *= 2;
                             }
-                            if r.spoiler_log.all_rooms[data.room_idx].map_reachable_step[local_y][local_x] > spoiler_step as u8 {
+                            if spoiler_log.all_rooms[data.room_idx].map_reachable_step[local_y][local_x] > spoiler_step as u8 {
                                 color_div *= 3;
                             }
                         }
@@ -1419,28 +1419,28 @@ fn main() {
 
             // Draw spoiler route
             if spoiler_type != SpoilerType::None && plando.randomization.is_some() {
-                let r = plando.randomization.as_ref().unwrap();
+                let (_r, spoiler_log) = plando.randomization.as_ref().unwrap();
                 let mut obtain_route = None;
                 let mut return_route = None;
                 let mut show_escape_route = false;
 
                 match spoiler_type {
                     SpoilerType::Hub => {
-                        obtain_route = Some(&r.spoiler_log.hub_obtain_route);
-                        return_route = Some(&r.spoiler_log.hub_return_route);
+                        obtain_route = Some(&spoiler_log.hub_obtain_route);
+                        return_route = Some(&spoiler_log.hub_return_route);
                         spoiler_step = 0;
                     }
                     SpoilerType::Item(spoiler_idx) => {
                         let (room_id, node_id) = plando.game_data.item_locations[spoiler_idx];
                         let mut details_opt = None;
                         while details_opt.is_none() {
-                            if spoiler_step < r.spoiler_log.details.len() {
-                                details_opt = r.spoiler_log.details[spoiler_step].items.iter().find(
+                            if spoiler_step < spoiler_log.details.len() {
+                                details_opt = spoiler_log.details[spoiler_step].items.iter().find(
                                     |x| x.location.room_id == room_id && x.location.node_id == node_id
                                 );
                             }
                             if details_opt.is_none() {
-                                let step_opt = r.spoiler_log.details.iter().position(
+                                let step_opt = spoiler_log.details.iter().position(
                                     |x| x.items.iter().any(|y| y.location.room_id == room_id && y.location.node_id == node_id)
                                 );
                                 if step_opt.is_none() {
@@ -1463,13 +1463,13 @@ fn main() {
                         
                         let mut details_opt = None;
                         while details_opt.is_none() {
-                            if spoiler_step < r.spoiler_log.details.len() {
-                                details_opt = r.spoiler_log.details[spoiler_step].flags.iter().find(
+                            if spoiler_step < spoiler_log.details.len() {
+                                details_opt = spoiler_log.details[spoiler_step].flags.iter().find(
                                     |x| x.flag == *flag_name
                                 );
                             }
                             if details_opt.is_none() {
-                                let step_opt = r.spoiler_log.details.iter().position(
+                                let step_opt = spoiler_log.details.iter().position(
                                     |x| x.flags.iter().any(|y| y.flag == *flag_name)
                                 );
                                 if step_opt.is_none() {
@@ -1488,7 +1488,7 @@ fn main() {
                         }
                     }
                     _ => {
-                        spoiler_step = r.spoiler_log.details.len();
+                        spoiler_step = spoiler_log.details.len();
                     }
                 }
 
@@ -1509,7 +1509,7 @@ fn main() {
                         }
                     }
                     if show_escape_route {
-                        if let Some(animal_route) = r.spoiler_log.escape.animals_route.as_ref() {
+                        if let Some(animal_route) = spoiler_log.escape.animals_route.as_ref() {
                             for entry in animal_route {
                                 let v1 = graphics::Vertex::with_pos_color(Vector2f::new(entry.from.x as f32 + 0.5, entry.from.y as f32 + 0.5) * 8.0, Color::CYAN);
                                 let v2 = graphics::Vertex::with_pos_color(Vector2f::new(entry.to.x as f32 + 0.5, entry.to.y as f32 + 0.5) * 8.0, Color::CYAN);
@@ -1517,7 +1517,7 @@ fn main() {
                                 vertex_escape.push(v2);
                             }
                         }
-                        for entry in &r.spoiler_log.escape.ship_route {
+                        for entry in &spoiler_log.escape.ship_route {
                             let v1 = graphics::Vertex::with_pos_color(Vector2f::new(entry.from.x as f32 + 0.5, entry.from.y as f32 + 0.5) * 8.0, Color::CYAN);
                             let v2 = graphics::Vertex::with_pos_color(Vector2f::new(entry.to.x as f32 + 0.5, entry.to.y as f32 + 0.5) * 8.0, Color::CYAN);
                             vertex_escape.push(v1);
@@ -1532,7 +1532,7 @@ fn main() {
             }
 
             // Draw Spoiler Window
-            if let Some(r) = &plando.randomization {
+            if let Some((_r, spoiler_log)) = &plando.randomization {
                 let x_offset = 32.0;
                 let y_offset = 48.0;
                 let row_height = 24.0;
@@ -1560,7 +1560,7 @@ fn main() {
                 if spoiler_type == SpoilerType::None {
                     let mut found_item = [false; ITEM_VALUES.len()];
 
-                    for (y_idx, step) in r.spoiler_log.summary.iter().enumerate() {
+                    for (y_idx, step) in spoiler_log.summary.iter().enumerate() {
                         let row_rect = FloatRect::new(0.0, row_height * y_idx as f32, spoiler_window_bounds.width, row_height);
                         spoiler_bg_rect.set_position((row_rect.left, row_rect.top));
                         spoiler_bg_rect.set_size((row_rect.width, row_rect.height));
@@ -1779,7 +1779,7 @@ fn main() {
 
             // Draw Spoiler Details Window
             if spoiler_type != SpoilerType::None && plando.randomization.is_some() {
-                let r = plando.randomization.as_ref().unwrap();
+                let (_r, spoiler_log) = plando.randomization.as_ref().unwrap();
                 let window = egui::Window::new("Spoiler Details")
                     .resizable(false)
                     .title_bar(false)
@@ -1788,14 +1788,14 @@ fn main() {
                     .show(ctx, |ui| {
                         egui::ScrollArea::vertical().show(ui, |ui| {
                             ui.style_mut().spacing.item_spacing = Vec2::new(2.0, 2.0);
-                            let details = &r.spoiler_log.details[spoiler_step];
+                            let details = &spoiler_log.details[spoiler_step];
                             ui.heading(format!("STEP {}", details.step));
                             ui.label("PREVIOUSLY COLLECTIBLE");
 
                             let mut collectible_items = [0; ITEM_VALUES.len() - 1];
                             let mut collectible_flags = vec![false; plando.game_data.flag_ids.len()];
                             for prev_step in 0..spoiler_step {
-                                let prev_details = &r.spoiler_log.details[prev_step];
+                                let prev_details = &spoiler_log.details[prev_step];
                                 for item_details in &prev_details.items {
                                     let item_id = plando.game_data.item_isv.index_by_key[&item_details.item];
                                     collectible_items[item_id] += 1;
