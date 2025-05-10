@@ -1,6 +1,6 @@
 use {
     anyhow::{anyhow, bail, Context, Result}, egui_sfml::{egui::{self, Color32, Id, Sense, TextureId, Vec2}, SfEgui, UserTexSource}, hashbrown::HashMap, maprando::{
-        patch::Rom, randomize::SpoilerRouteEntry, settings::DoorsMode
+        customize::{mosaic::MosaicTheme, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, MusicSettings, PaletteTheme, ShakingSetting, TileTheme}, patch::Rom, randomize::SpoilerRouteEntry, settings::DoorsMode
     }, maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType}, plando::{DoubleItemPlacement, MapRepositoryType, Placeable, Plando, ITEM_VALUES}, rfd::FileDialog, serde::{Deserialize, Serialize}, sfml::{
         cpp::FBox, graphics::{
             self, Color, FloatRect, IntRect, PrimitiveType, RenderStates, RenderTarget, RenderWindow, Shape, Transformable, Vertex
@@ -29,6 +29,106 @@ struct Settings {
     mouse_click_delay_tolerance: i32,
     rom_path: String,
     spoiler_auto_update: bool,
+}
+
+struct Customization {
+    pub samus_sprite: String,
+    pub etank_color: [f32; 3],
+    pub reserve_hud_style: bool,
+    pub vanilla_screw_attack_animation: bool,
+    pub palette_theme: usize,
+    pub tile_theme: usize,
+    pub door_theme: usize,
+    pub music: usize,
+    pub disable_beeping: bool,
+    pub shaking: usize,
+    pub flashing: usize,
+    pub controller_config: ControllerConfig,
+}
+
+impl Customization {
+    fn default() -> Self {
+        Customization {
+            samus_sprite: "samus_vanilla".to_string(),
+            etank_color: [0xDE as f32 / 255.0, 0x38 as f32 / 255.0, 0x94 as f32 / 255.0],
+            reserve_hud_style: false,
+            vanilla_screw_attack_animation: false,
+            palette_theme: 0,
+            tile_theme: 0,
+            door_theme: 0,
+            music: 0,
+            disable_beeping: false,
+            shaking: 1,
+            flashing: 1,
+            controller_config: ControllerConfig::default()
+        }
+    }
+    
+    fn to_settings(&self, themes: &[MosaicTheme]) -> CustomizeSettings {
+        let etank_color = Some((
+            (self.etank_color[0] * 255.0) as u8,
+            (self.etank_color[1] * 255.0) as u8,
+            (self.etank_color[2] * 255.0) as u8
+        ));
+
+        let palette_theme = match self.palette_theme {
+            1 => PaletteTheme::AreaThemed,
+            _ => PaletteTheme::Vanilla
+        };
+        let tile_theme = match self.tile_theme {
+            0 => TileTheme::Vanilla,
+            1 => TileTheme::AreaThemed,
+            2 => TileTheme::Scrambled,
+            i => {
+                let idx = i - 2;
+                if idx == themes.len() {
+                    TileTheme::Constant("Outline".to_string())
+                } else if idx > themes.len() {
+                    TileTheme::Constant("Invisible".to_string())
+                } else {
+                    TileTheme::Constant(themes[idx].name.clone())
+                }
+            }
+            _ => TileTheme::Vanilla
+        };
+        let door_theme = match self.door_theme {
+            1 => DoorTheme::Alternate,
+            _ => DoorTheme::Vanilla
+        };
+        let music = match self.music {
+            1 => MusicSettings::AreaThemed,
+            2 => MusicSettings::Disabled,
+            _ => MusicSettings::Vanilla
+        };
+        let shaking = match self.shaking {
+            1 => ShakingSetting::Reduced,
+            2 => ShakingSetting::Disabled,
+            _ => ShakingSetting::Vanilla
+        };
+        let flashing = match self.flashing {
+            1 => FlashingSetting::Reduced,
+            _ => FlashingSetting::Vanilla
+        };
+
+        CustomizeSettings {
+            samus_sprite: Some(self.samus_sprite.clone()),
+            etank_color,
+            reserve_hud_style: self.reserve_hud_style,
+            vanilla_screw_attack_animation: self.vanilla_screw_attack_animation,
+            palette_theme,
+            tile_theme,
+            door_theme,
+            music,
+            disable_beeping: self.disable_beeping,
+            shaking,
+            flashing,
+            controller_config: ControllerConfig {
+                spin_lock_buttons: self.controller_config.spin_lock_buttons.clone(),
+                quick_reload_buttons: self.controller_config.quick_reload_buttons.clone(),
+                ..self.controller_config
+            }
+        }
+    }
 }
 
 impl Default for Settings {
@@ -604,17 +704,56 @@ fn generate_door_sprites() -> Result<FBox<graphics::Image>> {
     Ok(img_doors)
 }
 
-fn patch_rom(plando: &mut Plando, rom: &Rom, save_path: &Path) -> Result<()> {
+fn create_rom_patch(plando: &mut Plando, rom: &Rom, save_path: &Path) -> Result<()> {
     if plando.randomization.is_none() {
         plando.update_spoiler_data();
         if plando.randomization.is_none() {
             bail!("Could not generate randomization for current placements");
         }
     }
-    let rom = maprando::patch::make_rom(&rom, plando.randomization.as_ref().unwrap(), &plando.game_data)?;
+    let new_rom = maprando::patch::make_rom(&rom, plando.randomization.as_ref().unwrap(), &plando.game_data)?;
+    let ips_patch = maprando::patch::ips_write::create_ips_patch(&rom.data, &new_rom.data);
+
+    let dir = save_path.parent().unwrap();
+    let file_name = save_path.file_name().unwrap().to_str().unwrap().strip_suffix(".ips").unwrap().to_string() + ".json";
+    let map_path = dir.join(file_name);
 
     let mut file = File::create(save_path)?;
-    file.write_all(&rom.data)?;
+    file.write_all(&ips_patch)?;
+
+    file = File::create(map_path)?;
+    file.write_all(serde_json::to_string(&plando.map)?.as_bytes())?;
+
+    Ok(())
+}
+
+fn patch_rom(plando: &Plando, orig_rom: &Rom, settings: &CustomizeSettings, patch_path: &Path, map_path: &Path, out_path: &Path) -> Result<()> {
+    let rom_digest = crypto_hash::hex_digest(crypto_hash::Algorithm::SHA256, &orig_rom.data);
+    if rom_digest != "12b77c4bc9c1832cee8881244659065ee1d84c70c3d29e6eaf92e6798cc2ca72" {
+        bail!("Invalid ROM Hash");
+    }
+
+    let mut file_patch = File::open(patch_path)?;
+    let mut patch: Vec<u8> = Vec::new();
+    file_patch.read_to_end(&mut patch)?;
+
+    let mut rom = orig_rom.clone();
+
+    let map: Map = serde_json::from_str(&std::fs::read_to_string(map_path)?)?;
+
+    maprando::customize::customize_rom(
+        &mut rom,
+        orig_rom,
+        &patch,
+        &Some(map),
+        settings,
+        &plando.game_data,
+        &plando.samus_sprite_categories,
+        &plando.mosaic_themes
+    )?;
+
+    let mut file_out = File::create(out_path)?;
+    file_out.write_all(&rom.data)?;
 
     Ok(())
 }
@@ -782,6 +921,7 @@ fn main() {
     let mut error_modal_message: Option<String> = None;
     let mut settings_open = false;
     let mut customize_open = false;
+    let mut customize_config = Customization::default();
 
     let mut sidebar_selection: Option<Placeable> = None;
     let mut spoiler_step = 0;
@@ -1452,7 +1592,7 @@ fn main() {
                                 }
                             }
                         }
-                        if ui.button("Create ROM").clicked() {
+                        if ui.button("Create Patch").clicked() {
                             if rom_vanilla.is_none() {
                                 if let Some(file) = FileDialog::new().set_title("Select vanilla ROM")
                                 .set_directory("/").add_filter("Snes ROM", &["sfc", "smc"]).pick_file() {
@@ -1466,14 +1606,42 @@ fn main() {
                             if let Some(rom) = rom_vanilla.as_ref() {
                                 let file_opt = FileDialog::new().set_title("Select output location")
                                     .set_directory("/")
-                                    .add_filter("Snes ROM", &["sfc"])
+                                    .add_filter("ips Patch", &["ips"])
                                     .save_file();
                                 if let Some(file) = file_opt {
-                                    if let Err(err) = patch_rom(&mut plando, rom, &file) {
+                                    if let Err(err) = create_rom_patch(&mut plando, rom, &file) {
                                         error_modal_message = Some(err.to_string());
                                     }
                                 }
                             }
+                        }
+                        if ui.button("Apply Patch").clicked() {
+                            /*if rom_vanilla.is_none() {
+                                if let Some(file) = FileDialog::new().set_title("Select vanilla ROM")
+                                .set_directory("/").add_filter("Snes ROM", &["sfc", "smc"]).pick_file() {
+                                    settings.rom_path = file.to_str().unwrap().to_string();
+                                    match load_vanilla_rom(&Path::new(&settings.rom_path)) {
+                                        Ok(rom) => rom_vanilla = Some(rom),
+                                        Err(err) => error_modal_message = Some(err.to_string())
+                                    }
+                                }
+                            }
+                            if let Some(rom) = rom_vanilla.as_ref() {
+                                if let Some(file_patch) = FileDialog::new().set_title("Select IPS Patch")
+                                .set_directory("/")
+                                .add_filter("ips Patch", &["ips"])
+                                .pick_file() {
+                                    if let Some(file_out) = FileDialog::new().set_title("Select output location")
+                                    .set_directory("/")
+                                    .add_filter("Snes ROM", &["sfc"])
+                                    .save_file() {
+                                        //if let Err(err) = patch_rom(&mut plando, rom, customization, file_patch, file_out) {
+                                        //    error_modal_message = Some(err.to_string());
+                                        //}
+                                    }
+                                }
+                            }*/
+                            customize_open = true;
                         }
                     });
                     ui.menu_button("Map", |ui| {
@@ -1840,6 +2008,102 @@ fn main() {
                         if ui.button("Reset All").clicked() {
                             settings = Settings::default();
                         }
+                    });
+                });
+            }
+
+            if customize_open {
+                egui::Window::new("Customize")
+                .resizable(false)
+                .title_bar(false)
+                .show(ctx, |ui| {
+                    egui::Grid::new("grid_customize").num_columns(2).striped(true).show(ui, |ui| {
+                        ui.label("Samus sprite");
+                        egui::ComboBox::from_id_salt("combo_customize").selected_text(&customize_config.samus_sprite).show_ui(ui, |ui| {
+                            for category in &plando.samus_sprite_categories {
+                                for sprite in &category.sprites {
+                                    ui.selectable_value(&mut customize_config.samus_sprite, sprite.name.clone(), sprite.display_name.clone());
+                                }
+                            }
+                        });
+                        ui.end_row();
+
+                        ui.label("Energy tank color");
+                        ui.color_edit_button_rgb(&mut customize_config.etank_color);
+                        ui.end_row();
+
+                        ui.label("Door colors");
+                        ui.horizontal(|ui| {
+                            ui.selectable_value(&mut customize_config.door_theme, 0, "Vanilla");
+                            ui.selectable_value(&mut customize_config.door_theme, 1, "Alternate");
+                        });
+                        ui.end_row();
+
+                        ui.label("Music");
+                        ui.horizontal(|ui| {
+                            ui.selectable_value(&mut customize_config.music, 0, "Vanilla");
+                            ui.selectable_value(&mut customize_config.music, 1, "Area");
+                            ui.selectable_value(&mut customize_config.music, 2, "Disabled");
+                        });
+                        ui.end_row();
+
+                        ui.label("Screen shaking");
+                        ui.horizontal(|ui| {
+                            ui.selectable_value(&mut customize_config.shaking, 0, "Vanilla");
+                            ui.selectable_value(&mut customize_config.shaking, 1, "Reduced");
+                            ui.selectable_value(&mut customize_config.shaking, 2, "Disabled");
+                        });
+                        ui.end_row();
+
+                        ui.label("Screen flashing");
+                        ui.horizontal(|ui| {
+                            ui.selectable_value(&mut customize_config.flashing, 0, "Vanilla");
+                            ui.selectable_value(&mut customize_config.flashing, 1, "Reduced");
+                        });
+                        ui.end_row();
+
+                        ui.label("Low-energy beeping");
+                        ui.horizontal(|ui| {
+                            ui.selectable_value(&mut customize_config.disable_beeping, false, "Vanilla");
+                            ui.selectable_value(&mut customize_config.disable_beeping, true, "Disabled");
+                        });
+                        ui.end_row();
+
+                        ui.separator();
+
+                        ui.label("Room palettes");
+                        ui.horizontal(|ui| {
+                            ui.selectable_value(&mut customize_config.palette_theme, 0, "Vanilla");
+                            ui.selectable_value(&mut customize_config.palette_theme, 1, "Area-themed");
+                        });
+                        ui.end_row();
+
+                        ui.label("Tile theme");
+                        egui::ComboBox::from_id_salt("combo_customize_tile").show_ui(ui, |ui| {
+                            ui.selectable_value(&mut customize_config.tile_theme, 0, "Vanilla");
+                            ui.selectable_value(&mut customize_config.tile_theme, 1, "Area-themed");
+                            ui.selectable_value(&mut customize_config.tile_theme, 2, "Scrambled");
+                            for (i, theme) in plando.mosaic_themes.iter().enumerate() {
+                                ui.selectable_value(&mut customize_config.tile_theme, 3 + i, &theme.display_name);
+                            }
+                            ui.selectable_value(&mut customize_config.tile_theme, 3 + plando.mosaic_themes.len(), "Practice Outlines");
+                            ui.selectable_value(&mut customize_config.tile_theme, 4 + plando.mosaic_themes.len(), "Invisible");
+                        });
+                        ui.end_row();
+
+                        ui.label("Reserve tank HUD style");
+                        ui.horizontal(|ui| {
+                            ui.selectable_value(&mut customize_config.reserve_hud_style, true, "Vanilla");
+                            ui.selectable_value(&mut customize_config.reserve_hud_style, false, "Revamped");
+                        });
+                        ui.end_row();
+
+                        ui.label("Screw Attack animation");
+                        ui.horizontal(|ui| {
+                            ui.selectable_value(&mut customize_config.vanilla_screw_attack_animation, true, "Vanilla");
+                            ui.selectable_value(&mut customize_config.vanilla_screw_attack_animation, false, "Split");
+                        });
+                        ui.end_row();
                     });
                 });
             }

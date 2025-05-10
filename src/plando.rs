@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::{anyhow, bail, Result};
 use hashbrown::{HashMap, HashSet};
-use maprando::{map_repository::MapRepository, preset::PresetData, randomize::{DebugData, DifficultyConfig, DoorState, FlagLocationState, ItemLocationState, LockedDoor, Randomization, RandomizationState, Randomizer, SaveLocationState, SpoilerDetails, SpoilerDoorDetails, SpoilerDoorSummary, SpoilerFlagDetails, SpoilerFlagSummary, SpoilerSummary, StartLocationData}, settings::{Objective, RandomizerSettings, WallJump}, traverse::{apply_requirement, get_bireachable_idxs, get_spoiler_route, traverse, LockedDoorData}};
+use maprando::{customize::{mosaic::MosaicTheme, samus_sprite::SamusSpriteCategory}, map_repository::MapRepository, preset::PresetData, randomize::{DebugData, DifficultyConfig, DoorState, FlagLocationState, ItemLocationState, LockedDoor, Randomization, RandomizationState, Randomizer, SaveLocationState, SpoilerDetails, SpoilerDoorDetails, SpoilerDoorSummary, SpoilerFlagDetails, SpoilerFlagSummary, SpoilerSummary, StartLocationData}, settings::{Objective, RandomizerSettings, WallJump}, traverse::{apply_requirement, get_bireachable_idxs, get_spoiler_route, traverse, LockedDoorData}};
 use maprando_game::{BeamType, DoorPtrPair, DoorType, GameData, HubLocation, Item, ItemLocationId, LinksDataGroup, Map, NodeId, RoomId, StartLocation, VertexKey};
 use maprando_logic::{GlobalState, Inventory, LocalState};
 use rand::{rngs::StdRng, RngCore, SeedableRng};
@@ -159,6 +159,8 @@ pub enum MapRepositoryType {
 pub struct Plando {
     pub game_data: GameData,
     pub preset_data: PresetData,
+    pub samus_sprite_categories: Vec<SamusSpriteCategory>,
+    pub mosaic_themes: Vec<MosaicTheme>,
     pub difficulty_tiers: Vec<DifficultyConfig>,
     pub maps_vanilla: MapRepository,
     pub maps_standard: MapRepository,
@@ -185,6 +187,30 @@ pub struct Plando {
 impl Plando {
     pub fn new() -> Self {
         let game_data = load_game_data().unwrap();
+
+        let samus_sprites_path = Path::new("../MapRandoSprites/samus_sprites/manifest.json");
+        let samus_sprite_categories: Vec<SamusSpriteCategory> = serde_json::from_str(&std::fs::read_to_string(&samus_sprites_path).unwrap()).unwrap();
+        let mosaic_themes = vec![
+            ("OuterCrateria", "Outer Crateria"),
+            ("InnerCrateria", "Inner Crateria"),
+            ("BlueBrinstar", "Blue Brinstar"),
+            ("GreenBrinstar", "Green Brinstar"),
+            ("PinkBrinstar", "Pink Brinstar"),
+            ("RedBrinstar", "Red Brinstar"),
+            ("UpperNorfair", "Upper Norfair"),
+            ("LowerNorfair", "Lower Norfair"),
+            ("WreckedShip", "Wrecked Ship"),
+            ("WestMaridia", "West Maridia"),
+            ("YellowMaridia", "Yellow Maridia"),
+            ("MechaTourian", "Mecha Tourian"),
+            ("MetroidHabitat", "Metroid Habitat"),
+        ]
+        .into_iter()
+        .map(|(x, y)| MosaicTheme {
+            name: x.to_string(),
+            display_name: y.to_string(),
+        })
+        .collect();
 
         let vanilla_map_path = Path::new("../maps/vanilla");
         let standard_maps_path = Path::new("../maps/v117c-standard");
@@ -232,6 +258,8 @@ impl Plando {
         let mut plando = Plando {
             game_data,
             preset_data,
+            samus_sprite_categories,
+            mosaic_themes,
             difficulty_tiers: Vec::new(),
             maps_vanilla,
             maps_standard,
@@ -518,7 +546,7 @@ impl Plando {
         bail!("Could not find suitable hub location to given start location")
     }
 
-    pub fn place_item(&mut self, item_loc: usize, item: Item) -> Result<()> {
+    pub fn place_item(&mut self, item_loc: usize, item: Item) {
         // Remove old item from placed_item_count
         if self.item_locations[item_loc] != Item::Nothing {
             self.placed_item_count[Placeable::ETank as usize + self.item_locations[item_loc] as usize] -= 1;
@@ -531,7 +559,6 @@ impl Plando {
         if self.auto_update_spoiler {
             self.update_spoiler_data();
         }
-        Ok(())
     }
 
     pub fn place_door(&mut self, room_idx: usize, door_idx: usize, door_type_opt: Option<DoorType>, replace: bool) -> Result<()> {
