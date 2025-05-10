@@ -7,7 +7,7 @@ use {
         }, system::{Vector2f, Vector2i}, window::{
             mouse, Event, Key, Style
         }
-    }, std::{cmp::max, fs::File, io::{Read, Write}, path::Path, str::FromStr, u32}
+    }, std::{cmp::{max, min}, fs::File, io::{Read, Write}, path::Path, u32}
 };
 
 mod plando;
@@ -477,6 +477,16 @@ fn get_special_room_mask(room_type: SpecialRoom) -> [[u8; 8]; 8] {
     }
 }
 
+fn get_objective_mask(room_id: usize, tile_x: usize, tile_y: usize) -> bool {
+    match room_id {
+        219 => !(tile_x == 1 && tile_y == 2), // Plasma Room
+        161 => tile_x == 4 && tile_y == 1, // Bowling
+        149 => tile_x == 0 && tile_y == 0, // Acid Chozo
+        150 => tile_y == 1, // GT
+        _ => true
+    }
+}
+
 fn get_explored_color(value: u8, area: usize) -> graphics::Color {
     let cool_area_color = match area {
         0 => graphics::Color::rgb(148, 0, 222), // Crateria
@@ -899,10 +909,9 @@ enum SpoilerType {
 }
 
 fn main() {
-
     let mut plando = Plando::new();
 
-    let settings_path = Path::new("./plando_settings.json");
+    let settings_path = Path::new("../plando_settings.json");
     let mut settings = load_settings(settings_path).unwrap_or_default();
 
     let mut rom_vanilla = load_vanilla_rom(&Path::new(&settings.rom_path)).ok();
@@ -924,7 +933,7 @@ fn main() {
     let mut window = RenderWindow::new((1080, 720), "Maprando Plando", Style::DEFAULT, &Default::default()).expect("Could not create Window");
     window.set_vertical_sync_enabled(true);
 
-    let font_default = graphics::Font::from_file("./res/segoeui.ttf").expect("Could not load default font");
+    let font_default = graphics::Font::from_file("../res/segoeui.ttf").expect("Could not load default font");
 
     let mut x_offset = 0.0;
     let mut y_offset = 0.0;
@@ -1017,7 +1026,7 @@ fn main() {
                     window.close();
                 }
                 Event::MouseButtonPressed { button, x, y } => {
-                    if x < window.size().x as i32 - sidebar_width as i32 && !spoiler_details_hovered && !settings_open && !customize_open {
+                    if x < window.size().x as i32 - sidebar_width as i32 && !spoiler_details_hovered && !settings_open && !customize_open && !spoiler_window_bounds.contains2(x as f32, y as f32) {
                         if button == mouse::Button::Left {
                             is_mouse_down = true;
                         } else if button == mouse::Button::Middle {
@@ -1038,12 +1047,12 @@ fn main() {
 
                     let new_mouse_pos = Vector2i::new(x, y);
                     if (mouse_click_pos - new_mouse_pos).length_sq() < settings.mouse_click_pos_tolerance && mouse_click_timer > 0 && !spoiler_details_hovered
-                        && !settings_open && !customize_open {
+                        && !settings_open && !customize_open && !spoiler_window_bounds.contains2(x as f32, y as f32) {
                         is_mouse_clicked = Some(button);
                     }
                 },
-                Event::MouseWheelScrolled { wheel: _, delta, x, .. } => {
-                    if x < window.size().x as i32 - sidebar_width as i32 && !spoiler_details_hovered && !settings_open && !customize_open {
+                Event::MouseWheelScrolled { wheel: _, delta, x, y } => {
+                    if x < window.size().x as i32 - sidebar_width as i32 && !spoiler_details_hovered && !settings_open && !customize_open && !spoiler_window_bounds.contains2(x as f32, y as f32) {
                         let factor = 1.1;
                         if delta > 0.0 && zoom < 20.0 {
                             zoom *= factor;
@@ -1149,7 +1158,7 @@ fn main() {
 
                         // Draw Tile Outline
                         let sprite_tile_rect = IntRect::new(8 * (data.atlas_x_offset as i32 + local_x as i32), 8 * (data.atlas_y_offset as i32 + local_y as i32), 8, 8);
-                        let mut sprite_tile = if is_objective {
+                        let mut sprite_tile = if is_objective && get_objective_mask(data.room_id, local_x, local_y) {
                             graphics::Sprite::with_texture(&tex_obj)
                         } else {
                             graphics::Sprite::with_texture_and_rect(&atlas_tex, sprite_tile_rect)
@@ -1267,7 +1276,7 @@ fn main() {
             }
 
             // Draw items
-            if sidebar_selection.is_none() || sidebar_selection.is_some_and(|x| x >= Placeable::ETank && x <= Placeable::WalljumpBoots) {
+            if sidebar_selection.is_none() || sidebar_selection.is_some_and(|x| x >= Placeable::ETank) {
                 for i in 0..plando.item_locations.len() {
                     let item = plando.item_locations[i];
                     let (room_id, node_id) = plando.game_data.item_locations[i];
@@ -1532,7 +1541,7 @@ fn main() {
             }
 
             // Draw Spoiler Window
-            if let Some((_r, spoiler_log)) = &plando.randomization {
+            /*if let Some((_r, spoiler_log)) = &plando.randomization {
                 let x_offset = 32.0;
                 let y_offset = 48.0;
                 let row_height = 24.0;
@@ -1616,7 +1625,7 @@ fn main() {
                     }
                 }
                 spoiler_window_bounds.width = new_max_width;
-            }
+            }*/
         }
 
         if !click_consumed && is_mouse_clicked.is_some() {
@@ -1671,6 +1680,7 @@ fn main() {
                             }
                             ui.close_menu();
                         }
+                        ui.separator();
                         if ui.button("Create ROM").clicked() {
                             customize_open = true;
                             ui.close_menu();
@@ -1771,7 +1781,10 @@ fn main() {
                             if ui.add(label_count).clicked() {
                                 sidebar_selection = Some(Placeable::VALUES[row]);
                             }
-                            ui.end_row();
+                            // So it doesn't create an empty row at the very end
+                            if row + 1 < Placeable::VALUES.len() {
+                                ui.end_row();
+                            }
                         }
                     });
                 });
@@ -1785,6 +1798,7 @@ fn main() {
                     .title_bar(false)
                     .movable(false)
                     .vscroll(false)
+                    .fixed_pos(Vec2::new(16.0, 32.0).to_pos2())
                     .show(ctx, |ui| {
                         egui::ScrollArea::vertical().show(ui, |ui| {
                             ui.style_mut().spacing.item_spacing = Vec2::new(2.0, 2.0);
@@ -1999,6 +2013,64 @@ fn main() {
                     }).unwrap().response;
                 if window.contains_pointer() {
                     spoiler_details_hovered = true;
+                }
+            } else if plando.randomization.is_some() {
+                // Draw Spoiler Summary
+                let resp_opt = egui::Window::new("Spoiler Summary")
+                .resizable(false).movable(false).title_bar(false).min_width(160.0)
+                .fixed_pos(Vec2::new(16.0, 32.0).to_pos2()).show(ctx, |ui| {
+                    let (_r, spoiler_log) = plando.randomization.as_ref().unwrap();
+                    let ui_builder = egui::UiBuilder::new().sense(Sense::click());
+
+                    let resp = ui.scope_builder(ui_builder, |ui| {
+                        egui::Grid::new("spoiler_summary").num_columns(2).with_row_color(move |row, _style| {
+                            if row != spoiler_step { Some(Color32::from_rgb(0x20, 0x20, 0x20)) } else { Some(Color32::from_rgb(0x40, 0x40, 0x74)) }
+                        }).show(ui, |ui| {
+                            ui.style_mut().spacing.item_spacing = Vec2::new(2.0, 2.0);
+                            let mut items_found = [false; ITEM_VALUES.len()];
+                            for summary in &spoiler_log.summary {
+                                ui.label(summary.step.to_string());
+                                ui.horizontal_wrapped(|ui| {
+                                    for item_summary in &summary.items {
+                                        let item = plando.game_data.item_isv.index_by_key[&item_summary.item];
+                                        if items_found[item] {
+                                            continue;
+                                        }
+                                        items_found[item] = true;
+                                        let placeable_id = Placeable::ETank as u64 + item as u64;
+                                        let img = egui::Image::new(user_tex_source.get_image_source(placeable_id))
+                                            .fit_to_exact_size(Vec2::new(16.0, 16.0)).sense(Sense::click());
+                                        if ui.add(img).clicked() {
+                                            spoiler_step = summary.step - 1;
+                                            let item_loc = plando.game_data.item_locations.iter().position(
+                                                |x| x.0 == item_summary.location.room_id && x.1 == item_summary.location.node_id
+                                            ).unwrap();
+                                            spoiler_type = SpoilerType::Item(item_loc);
+                                        }
+                                    }
+                                });
+                                ui.end_row();
+                            }
+                        });
+                    }).response;
+                    
+                    let local_my = mouse_y as f32 - spoiler_window_bounds.top;
+                    let idx_unchecked = (spoiler_log.summary.len() as f32 * local_my / spoiler_window_bounds.height).floor() as i32;
+                    let idx = min(max(idx_unchecked, 0), spoiler_log.summary.len() as i32 - 1) as usize;
+                    if resp.clicked() {
+                        spoiler_step = idx;
+                    }
+                    if resp.double_clicked() && !spoiler_log.summary[idx].items.is_empty() {
+                        spoiler_step = idx;
+                        let item_loc = &spoiler_log.summary[idx].items[0].location;
+                        let item = plando.game_data.item_locations.iter().position(
+                            |x| x.0 == item_loc.room_id && x.1 == item_loc.node_id
+                        ).unwrap();
+                        spoiler_type = SpoilerType::Item(item);
+                    }
+                }).map(|x| x.response);
+                if let Some(resp) = resp_opt {
+                    spoiler_window_bounds = FloatRect::new(resp.rect.left(), resp.rect.top(), resp.rect.width(), resp.rect.height());
                 }
             }
 

@@ -188,7 +188,7 @@ impl Plando {
     pub fn new() -> Self {
         let game_data = load_game_data().unwrap();
 
-        let samus_sprites_path = Path::new("../MapRandoSprites/samus_sprites/manifest.json");
+        let samus_sprites_path = Path::new("../MapRandomizer/MapRandoSprites/samus_sprites/manifest.json");
         let samus_sprite_categories: Vec<SamusSpriteCategory> = serde_json::from_str(&std::fs::read_to_string(&samus_sprites_path).unwrap()).unwrap();
         let mosaic_themes = vec![
             ("OuterCrateria", "Outer Crateria"),
@@ -212,16 +212,16 @@ impl Plando {
         })
         .collect();
 
-        let vanilla_map_path = Path::new("../maps/vanilla");
-        let standard_maps_path = Path::new("../maps/v117c-standard");
-        let wild_maps_path = Path::new("../maps/v117c-wild");
+        let vanilla_map_path = Path::new("../MapRandomizer/maps/vanilla");
+        let standard_maps_path = Path::new("../MapRandomizer/maps/v117c-standard");
+        let wild_maps_path = Path::new("../MapRandomizer/maps/v117c-wild");
     
         let maps_vanilla = MapRepository::new("Vanilla", vanilla_map_path).unwrap();
         let maps_standard = MapRepository::new("Standard", standard_maps_path).unwrap();
         let maps_wild = MapRepository::new("Wild", wild_maps_path).unwrap();
 
         let map = roll_map(&maps_vanilla, &game_data).unwrap();
-        let preset_path = Path::new("./data/presets/full-settings/Community Race Season 3 (No animals).json");
+        let preset_path = Path::new("../MapRandomizer/rust/data/presets/full-settings/Community Race Season 3 (No animals).json");
         let randomizer_settings = load_preset(preset_path).unwrap();
 
         let mut rng = rand::rngs::StdRng::from_entropy();
@@ -1052,15 +1052,15 @@ impl Plando {
 }
 
 fn load_game_data() -> Result<GameData> {
-    let sm_json_data_path = Path::new("../sm-json-data");
-    let room_geometry_path = Path::new("../room_geometry.json");
-    let escape_timings_path = Path::new("data/escape_timings.json");
-    let start_locations_path = Path::new("data/start_locations.json");
-    let hub_locations_path = Path::new("data/hub_locations.json");
-    let title_screen_path = Path::new("../TitleScreen/Images");
-    let reduced_flashing_path = Path::new("data/reduced_flashing.json");
-    let strat_videos_path = Path::new("data/strat_videos.json");
-    let map_tiles_path = Path::new("data/map_tiles.json");
+    let sm_json_data_path = Path::new("../MapRandomizer/sm-json-data");
+    let room_geometry_path = Path::new("../MapRandomizer/room_geometry.json");
+    let escape_timings_path = Path::new("../MapRandomizer/rust/data/escape_timings.json");
+    let start_locations_path = Path::new("../MapRandomizer/rust/data/start_locations.json");
+    let hub_locations_path = Path::new("../MapRandomizer/rust/data/hub_locations.json");
+    let title_screen_path = Path::new("../MapRandomizer/TitleScreen/Images");
+    let reduced_flashing_path = Path::new("../MapRandomizer/rust/data/reduced_flashing.json");
+    let strat_videos_path = Path::new("../MapRandomizer/rust/data/strat_videos.json");
+    let map_tiles_path = Path::new("../MapRandomizer/rust/data/map_tiles.json");
 
     let game_data = GameData::load(
         sm_json_data_path,
@@ -1084,9 +1084,9 @@ fn load_preset(path: &Path) -> Result<RandomizerSettings> {
 }
 
 fn load_preset_data(game_data: &GameData) -> Result<PresetData> {
-    let tech_path = Path::new("data/tech_data.json");
-    let notable_path = Path::new("data/notable_data.json");
-    let presets_path = Path::new("data/presets/");
+    let tech_path = Path::new("../MapRandomizer/rust/data/tech_data.json");
+    let notable_path = Path::new("../MapRandomizer/rust/data/notable_data.json");
+    let presets_path = Path::new("../MapRandomizer/rust/data/presets/");
 
     let preset_data = PresetData::load(tech_path, notable_path, presets_path, game_data);
     preset_data
