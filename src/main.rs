@@ -1,6 +1,6 @@
 use {
     anyhow::{anyhow, bail, Context, Result}, egui_sfml::{egui::{self, Color32, Id, Sense, TextureId, Vec2}, SfEgui, UserTexSource}, hashbrown::HashMap, maprando::{
-        customize::{mosaic::MosaicTheme, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, MusicSettings, PaletteTheme, ShakingSetting, TileTheme}, patch::Rom, randomize::SpoilerRouteEntry, settings::DoorsMode
+        customize::{mosaic::MosaicTheme, ControllerButton, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, MusicSettings, PaletteTheme, ShakingSetting, TileTheme}, patch::Rom, randomize::SpoilerRouteEntry, settings::DoorsMode
     }, maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType}, plando::{DoubleItemPlacement, MapRepositoryType, Placeable, Plando, ITEM_VALUES}, rfd::FileDialog, serde::{Deserialize, Serialize}, sfml::{
         cpp::FBox, graphics::{
             self, Color, FloatRect, IntRect, PrimitiveType, RenderStates, RenderTarget, RenderWindow, Shape, Transformable, Vertex
@@ -29,8 +29,105 @@ struct Settings {
     mouse_click_delay_tolerance: i32,
     rom_path: String,
     spoiler_auto_update: bool,
+    customization: Customization
 }
 
+#[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Copy)]
+pub enum CustomControllerButton {
+    Left,
+    Right,
+    Up,
+    Down,
+    X,
+    Y,
+    A,
+    B,
+    L,
+    R,
+    Select,
+    Start,
+}
+
+impl CustomControllerButton {
+    fn convert(&self) -> ControllerButton {
+        use ControllerButton::*;
+        match self {
+            CustomControllerButton::Left => Left,
+            CustomControllerButton::Right => Right,
+            CustomControllerButton::Up => Up,
+            CustomControllerButton::Down => Down,
+            CustomControllerButton::X => X,
+            CustomControllerButton::Y => Y,
+            CustomControllerButton::A => A,
+            CustomControllerButton::B => B,
+            CustomControllerButton::L => L,
+            CustomControllerButton::R => R,
+            CustomControllerButton::Select => Select,
+            CustomControllerButton::Start => Start,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct CustomControllerConfig {
+    pub shot: CustomControllerButton,
+    pub jump: CustomControllerButton,
+    pub dash: CustomControllerButton,
+    pub item_select: CustomControllerButton,
+    pub item_cancel: CustomControllerButton,
+    pub angle_up: CustomControllerButton,
+    pub angle_down: CustomControllerButton,
+    pub spin_lock_buttons: Vec<CustomControllerButton>,
+    pub quick_reload_buttons: Vec<CustomControllerButton>,
+    pub moonwalk: bool,
+}
+
+impl CustomControllerConfig {
+    fn default() -> Self {
+        use CustomControllerButton::*;
+        CustomControllerConfig {
+            shot: X,
+            jump: A,
+            dash: B,
+            item_select: Select,
+            item_cancel: Y,
+            angle_up: R,
+            angle_down: L,
+            spin_lock_buttons: vec![L, R, Select, Start],
+            quick_reload_buttons: vec![X, L, R, Up],
+            moonwalk: false
+        }
+    }
+
+    fn is_valid(&self) -> bool {
+        let mut vec = Vec::new();
+        vec.insert(self.shot as usize, true);
+        vec.insert(self.jump as usize, true);
+        vec.insert(self.dash as usize, true);
+        vec.insert(self.item_cancel as usize, true);
+        vec.insert(self.item_select as usize, true);
+        vec.insert(self.angle_down as usize, true);
+        vec.insert(self.angle_up as usize, true);
+        vec.iter().all(|&x| x)
+    }
+
+    fn to_controller_config(&self) -> ControllerConfig {
+        ControllerConfig {
+            shot: self.shot.convert(),
+            jump: self.jump.convert(),
+            dash: self.dash.convert(),
+            item_select: self.item_select.convert(),
+            item_cancel: self.item_cancel.convert(),
+            angle_up: self.angle_up.convert(),
+            angle_down: self.angle_down.convert(),
+            spin_lock_buttons: self.spin_lock_buttons.iter().map(|x| x.convert()).collect(),
+            quick_reload_buttons: self.quick_reload_buttons.iter().map(|x| x.convert()).collect(),
+            moonwalk: self.moonwalk
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
 struct Customization {
     pub samus_sprite: String,
     pub etank_color: [f32; 3],
@@ -43,7 +140,7 @@ struct Customization {
     pub disable_beeping: bool,
     pub shaking: usize,
     pub flashing: usize,
-    pub controller_config: ControllerConfig,
+    pub controller_config: CustomControllerConfig,
 }
 
 impl Customization {
@@ -60,7 +157,7 @@ impl Customization {
             disable_beeping: false,
             shaking: 1,
             flashing: 1,
-            controller_config: ControllerConfig::default()
+            controller_config: CustomControllerConfig::default()
         }
     }
     
@@ -89,7 +186,6 @@ impl Customization {
                     TileTheme::Constant(themes[idx].name.clone())
                 }
             }
-            _ => TileTheme::Vanilla
         };
         let door_theme = match self.door_theme {
             1 => DoorTheme::Alternate,
@@ -122,11 +218,7 @@ impl Customization {
             disable_beeping: self.disable_beeping,
             shaking,
             flashing,
-            controller_config: ControllerConfig {
-                spin_lock_buttons: self.controller_config.spin_lock_buttons.clone(),
-                quick_reload_buttons: self.controller_config.quick_reload_buttons.clone(),
-                ..self.controller_config
-            }
+            controller_config: self.controller_config.to_controller_config()
         }
     }
 }
@@ -138,6 +230,7 @@ impl Default for Settings {
             mouse_click_delay_tolerance: 60,
             rom_path: String::new(),
             spoiler_auto_update: false,
+            customization: Customization::default()
         }
     }
 }
@@ -873,8 +966,6 @@ fn main() {
     let tex_items = graphics::Texture::from_image(&img_items, IntRect::default()).unwrap();
     let tex_item_width = (tex_items.size().x / 24) as i32;
 
-    //let (tex_flags, tex_flag_map) = load_flag_texture(&plando.game_data, "../visualizer/".to_string()).unwrap();
-
     let img_doors = generate_door_sprites().unwrap();
     let img_door_width = (img_doors.size().x / 8) as i32;
 
@@ -921,7 +1012,6 @@ fn main() {
     let mut error_modal_message: Option<String> = None;
     let mut settings_open = false;
     let mut customize_open = false;
-    let mut customize_config = Customization::default();
 
     let mut sidebar_selection: Option<Placeable> = None;
     let mut spoiler_step = 0;
@@ -1115,8 +1205,15 @@ fn main() {
 
                     if sprite_helm.global_bounds().contains2(local_mouse_x, local_mouse_y) {
                         sprite_helm.scale(1.2);
-                        if is_mouse_clicked.is_some_and(|bt| bt == mouse::Button::Left) {
-                            if let Err(err) = plando.place_start_location(plando.game_data.start_locations[i].clone()) {
+                        if let Some(bt) = is_mouse_clicked {
+                            let mut res = Ok(());
+                            if bt == mouse::Button::Left {
+                                res = plando.place_start_location(plando.game_data.start_locations[i].clone());
+                            } else if bt == mouse::Button::Right {
+                                res = plando.place_start_location(Plando::get_ship_start());
+                            }
+                            click_consumed = true;
+                            if let Err(err) = res {
                                 error_modal_message = Some(err.to_string());
                             }
                         }
@@ -1616,31 +1713,6 @@ fn main() {
                             }
                         }
                         if ui.button("Apply Patch").clicked() {
-                            /*if rom_vanilla.is_none() {
-                                if let Some(file) = FileDialog::new().set_title("Select vanilla ROM")
-                                .set_directory("/").add_filter("Snes ROM", &["sfc", "smc"]).pick_file() {
-                                    settings.rom_path = file.to_str().unwrap().to_string();
-                                    match load_vanilla_rom(&Path::new(&settings.rom_path)) {
-                                        Ok(rom) => rom_vanilla = Some(rom),
-                                        Err(err) => error_modal_message = Some(err.to_string())
-                                    }
-                                }
-                            }
-                            if let Some(rom) = rom_vanilla.as_ref() {
-                                if let Some(file_patch) = FileDialog::new().set_title("Select IPS Patch")
-                                .set_directory("/")
-                                .add_filter("ips Patch", &["ips"])
-                                .pick_file() {
-                                    if let Some(file_out) = FileDialog::new().set_title("Select output location")
-                                    .set_directory("/")
-                                    .add_filter("Snes ROM", &["sfc"])
-                                    .save_file() {
-                                        //if let Err(err) = patch_rom(&mut plando, rom, customization, file_patch, file_out) {
-                                        //    error_modal_message = Some(err.to_string());
-                                        //}
-                                    }
-                                }
-                            }*/
                             customize_open = true;
                         }
                     });
@@ -2019,91 +2091,236 @@ fn main() {
                 .show(ctx, |ui| {
                     egui::Grid::new("grid_customize").num_columns(2).striped(true).show(ui, |ui| {
                         ui.label("Samus sprite");
-                        egui::ComboBox::from_id_salt("combo_customize").selected_text(&customize_config.samus_sprite).show_ui(ui, |ui| {
+                        egui::ComboBox::from_id_salt("combo_customize").selected_text(&settings.customization.samus_sprite).show_ui(ui, |ui| {
                             for category in &plando.samus_sprite_categories {
                                 for sprite in &category.sprites {
-                                    ui.selectable_value(&mut customize_config.samus_sprite, sprite.name.clone(), sprite.display_name.clone());
+                                    ui.selectable_value(&mut settings.customization.samus_sprite, sprite.name.clone(), sprite.display_name.clone());
                                 }
                             }
                         });
                         ui.end_row();
 
                         ui.label("Energy tank color");
-                        ui.color_edit_button_rgb(&mut customize_config.etank_color);
+                        ui.color_edit_button_rgb(&mut settings.customization.etank_color);
                         ui.end_row();
 
                         ui.label("Door colors");
                         ui.horizontal(|ui| {
-                            ui.selectable_value(&mut customize_config.door_theme, 0, "Vanilla");
-                            ui.selectable_value(&mut customize_config.door_theme, 1, "Alternate");
+                            ui.selectable_value(&mut settings.customization.door_theme, 0, "Vanilla");
+                            ui.selectable_value(&mut settings.customization.door_theme, 1, "Alternate");
                         });
                         ui.end_row();
 
                         ui.label("Music");
                         ui.horizontal(|ui| {
-                            ui.selectable_value(&mut customize_config.music, 0, "Vanilla");
-                            ui.selectable_value(&mut customize_config.music, 1, "Area");
-                            ui.selectable_value(&mut customize_config.music, 2, "Disabled");
+                            ui.selectable_value(&mut settings.customization.music, 0, "Vanilla");
+                            ui.selectable_value(&mut settings.customization.music, 1, "Area");
+                            ui.selectable_value(&mut settings.customization.music, 2, "Disabled");
                         });
                         ui.end_row();
 
                         ui.label("Screen shaking");
                         ui.horizontal(|ui| {
-                            ui.selectable_value(&mut customize_config.shaking, 0, "Vanilla");
-                            ui.selectable_value(&mut customize_config.shaking, 1, "Reduced");
-                            ui.selectable_value(&mut customize_config.shaking, 2, "Disabled");
+                            ui.selectable_value(&mut settings.customization.shaking, 0, "Vanilla");
+                            ui.selectable_value(&mut settings.customization.shaking, 1, "Reduced");
+                            ui.selectable_value(&mut settings.customization.shaking, 2, "Disabled");
                         });
                         ui.end_row();
 
                         ui.label("Screen flashing");
                         ui.horizontal(|ui| {
-                            ui.selectable_value(&mut customize_config.flashing, 0, "Vanilla");
-                            ui.selectable_value(&mut customize_config.flashing, 1, "Reduced");
+                            ui.selectable_value(&mut settings.customization.flashing, 0, "Vanilla");
+                            ui.selectable_value(&mut settings.customization.flashing, 1, "Reduced");
                         });
                         ui.end_row();
 
                         ui.label("Low-energy beeping");
                         ui.horizontal(|ui| {
-                            ui.selectable_value(&mut customize_config.disable_beeping, false, "Vanilla");
-                            ui.selectable_value(&mut customize_config.disable_beeping, true, "Disabled");
+                            ui.selectable_value(&mut settings.customization.disable_beeping, false, "Vanilla");
+                            ui.selectable_value(&mut settings.customization.disable_beeping, true, "Disabled");
                         });
                         ui.end_row();
 
                         ui.separator();
+                        ui.end_row();
 
                         ui.label("Room palettes");
                         ui.horizontal(|ui| {
-                            ui.selectable_value(&mut customize_config.palette_theme, 0, "Vanilla");
-                            ui.selectable_value(&mut customize_config.palette_theme, 1, "Area-themed");
+                            ui.selectable_value(&mut settings.customization.palette_theme, 0, "Vanilla");
+                            ui.selectable_value(&mut settings.customization.palette_theme, 1, "Area-themed");
                         });
                         ui.end_row();
 
                         ui.label("Tile theme");
                         egui::ComboBox::from_id_salt("combo_customize_tile").show_ui(ui, |ui| {
-                            ui.selectable_value(&mut customize_config.tile_theme, 0, "Vanilla");
-                            ui.selectable_value(&mut customize_config.tile_theme, 1, "Area-themed");
-                            ui.selectable_value(&mut customize_config.tile_theme, 2, "Scrambled");
+                            ui.selectable_value(&mut settings.customization.tile_theme, 0, "Vanilla");
+                            ui.selectable_value(&mut settings.customization.tile_theme, 1, "Area-themed");
+                            ui.selectable_value(&mut settings.customization.tile_theme, 2, "Scrambled");
                             for (i, theme) in plando.mosaic_themes.iter().enumerate() {
-                                ui.selectable_value(&mut customize_config.tile_theme, 3 + i, &theme.display_name);
+                                ui.selectable_value(&mut settings.customization.tile_theme, 3 + i, &theme.display_name);
                             }
-                            ui.selectable_value(&mut customize_config.tile_theme, 3 + plando.mosaic_themes.len(), "Practice Outlines");
-                            ui.selectable_value(&mut customize_config.tile_theme, 4 + plando.mosaic_themes.len(), "Invisible");
+                            ui.selectable_value(&mut settings.customization.tile_theme, 3 + plando.mosaic_themes.len(), "Practice Outlines");
+                            ui.selectable_value(&mut settings.customization.tile_theme, 4 + plando.mosaic_themes.len(), "Invisible");
                         });
                         ui.end_row();
 
                         ui.label("Reserve tank HUD style");
                         ui.horizontal(|ui| {
-                            ui.selectable_value(&mut customize_config.reserve_hud_style, true, "Vanilla");
-                            ui.selectable_value(&mut customize_config.reserve_hud_style, false, "Revamped");
+                            ui.selectable_value(&mut settings.customization.reserve_hud_style, true, "Vanilla");
+                            ui.selectable_value(&mut settings.customization.reserve_hud_style, false, "Revamped");
                         });
                         ui.end_row();
 
                         ui.label("Screw Attack animation");
                         ui.horizontal(|ui| {
-                            ui.selectable_value(&mut customize_config.vanilla_screw_attack_animation, true, "Vanilla");
-                            ui.selectable_value(&mut customize_config.vanilla_screw_attack_animation, false, "Split");
+                            ui.selectable_value(&mut settings.customization.vanilla_screw_attack_animation, true, "Vanilla");
+                            ui.selectable_value(&mut settings.customization.vanilla_screw_attack_animation, false, "Split");
                         });
                         ui.end_row();
+
+                        use CustomControllerButton::*;
+                        const VALUES: [CustomControllerButton; 12] = [X, Y, A, B, L, R, Select, Start, Up, Down, Left, Right];
+                        const STRINGS: [&str; 12] = ["X", "Y", "A", "B", "L", "R", "Select", "Start", "↑", "↓", "←", "→"];
+                        let config = &mut settings.customization.controller_config;
+
+                        ui.label("Shot");
+                        ui.horizontal(|ui| {
+                            for i in 0..7 {
+                                ui.selectable_value(&mut config.shot, VALUES[i], STRINGS[i]);
+                            }
+                        });
+                        ui.end_row();
+
+                        ui.label("Jump");
+                        ui.horizontal(|ui| {
+                            for i in 0..7 {
+                                ui.selectable_value(&mut config.jump, VALUES[i], STRINGS[i]);
+                            }
+                        });
+                        ui.end_row();
+
+                        ui.label("Dash");
+                        ui.horizontal(|ui| {
+                            for i in 0..7 {
+                                ui.selectable_value(&mut config.dash, VALUES[i], STRINGS[i]);
+                            }
+                        });
+                        ui.end_row();
+
+                        ui.label("Item Select");
+                        ui.horizontal(|ui| {
+                            for i in 0..7 {
+                                ui.selectable_value(&mut config.item_select, VALUES[i], STRINGS[i]);
+                            }
+                        });
+                        ui.end_row();
+
+                        ui.label("Item Cancel");
+                        ui.horizontal(|ui| {
+                            for i in 0..7 {
+                                ui.selectable_value(&mut config.item_cancel, VALUES[i], STRINGS[i]);
+                            }
+                        });
+                        ui.end_row();
+
+                        ui.label("Angle Up");
+                        ui.horizontal(|ui| {
+                            for i in 0..7 {
+                                ui.selectable_value(&mut config.angle_up, VALUES[i], STRINGS[i]);
+                            }
+                        });
+                        ui.end_row();
+
+                        ui.label("Angle Down");
+                        ui.horizontal(|ui| {
+                            for i in 0..7 {
+                                ui.selectable_value(&mut config.angle_down, VALUES[i], STRINGS[i]);
+                            }
+                        });
+                        ui.end_row();
+
+                        ui.label("Quick reload");
+                        ui.horizontal(|ui| {
+                            for i in 0..VALUES.len() {
+                                let resp = ui.selectable_label(config.quick_reload_buttons.contains(&VALUES[i]), STRINGS[i]);
+                                if resp.clicked() {
+                                    if let Some(pos) = config.quick_reload_buttons.iter().position(|x| *x == VALUES[i]) {
+                                        config.quick_reload_buttons.remove(pos);
+                                    } else {
+                                        config.quick_reload_buttons.push(VALUES[i]);
+                                    }
+                                }
+                            }
+                        });
+                        ui.end_row();
+
+                        ui.label("Spin lock");
+                        ui.horizontal(|ui| {
+                            for i in 0..VALUES.len() {
+                                let resp = ui.selectable_label(config.spin_lock_buttons.contains(&VALUES[i]), STRINGS[i]);
+                                if resp.clicked() {
+                                    if let Some(pos) = config.spin_lock_buttons.iter().position(|x| *x == VALUES[i]) {
+                                        config.spin_lock_buttons.remove(pos);
+                                    } else {
+                                        config.spin_lock_buttons.push(VALUES[i]);
+                                    }
+                                }
+                            }
+                        });
+                        ui.end_row();
+
+                        ui.label("Moonwalk");
+                        ui.horizontal(|ui| {
+                            ui.selectable_value(&mut settings.customization.controller_config.moonwalk, false, "No");
+                            ui.selectable_value(&mut settings.customization.controller_config.moonwalk, true, "Yes");
+                        });
+                        ui.end_row();
+
+                        ui.separator();
+                        ui.end_row();
+
+                        while ui.button("Patch ROM").clicked() {
+                            if !settings.customization.controller_config.is_valid() {
+                                error_modal_message = Some("Controller config is invalid".to_string());
+                                break;
+                            }
+                            if rom_vanilla.is_none() {
+                                if let Some(file) = FileDialog::new().set_title("Select vanilla ROM")
+                                .set_directory("/").add_filter("Snes ROM", &["sfc", "smc"]).pick_file() {
+                                    settings.rom_path = file.to_str().unwrap().to_string();
+                                    match load_vanilla_rom(&Path::new(&settings.rom_path)) {
+                                        Ok(rom) => rom_vanilla = Some(rom),
+                                        Err(err) => error_modal_message = Some(err.to_string())
+                                    }
+                                }
+                            }
+                            if rom_vanilla.is_none() {
+                                break;
+                            }
+                            let rom = rom_vanilla.as_ref().unwrap();
+                            if let Some(file_patch) = FileDialog::new().set_title("Select IPS Patch")
+                            .set_directory("/")
+                            .add_filter("ips Patch", &["ips"])
+                            .pick_file() {
+                                if let Some(file_out) = FileDialog::new().set_title("Select output location")
+                                .set_directory("/")
+                                .add_filter("Snes ROM", &["sfc"])
+                                .save_file() {
+                                    let customize_settings = settings.customization.to_settings(&plando.mosaic_themes);
+                                    let patch_dir = file_patch.parent().unwrap();
+                                    let map_name = file_patch.file_name().unwrap().to_str().unwrap().strip_suffix(".ips").unwrap().to_string() + ".json";
+                                    let map_path = patch_dir.join(map_name);
+                                    if let Err(err) = patch_rom(&mut plando, rom, &customize_settings, &file_patch, &map_path, &file_out) {
+                                        error_modal_message = Some(err.to_string());
+                                    }
+                                    customize_open = false;
+                                }
+                            }
+                            break;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            customize_open = false;
+                        }
                     });
                 });
             }
