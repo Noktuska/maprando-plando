@@ -909,6 +909,9 @@ enum SpoilerType {
 }
 
 fn main() {
+    let work_dir = Path::new("./data/maprando-data/");
+    std::env::set_current_dir(work_dir).unwrap();
+
     let mut plando = Plando::new();
 
     let settings_path = Path::new("../plando_settings.json");
@@ -933,7 +936,7 @@ fn main() {
     let mut window = RenderWindow::new((1080, 720), "Maprando Plando", Style::DEFAULT, &Default::default()).expect("Could not create Window");
     window.set_vertical_sync_enabled(true);
 
-    let font_default = graphics::Font::from_file("../res/segoeui.ttf").expect("Could not load default font");
+    let font_default = graphics::Font::from_file("../segoeui.ttf").expect("Could not load default font");
 
     let mut x_offset = 0.0;
     let mut y_offset = 0.0;
