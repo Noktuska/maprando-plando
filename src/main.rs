@@ -165,9 +165,9 @@ impl Customization {
     
     fn to_settings(&self, themes: &[MosaicTheme]) -> CustomizeSettings {
         let etank_color = Some((
-            (self.etank_color[0] * 255.0) as u8,
-            (self.etank_color[1] * 255.0) as u8,
-            (self.etank_color[2] * 255.0) as u8
+            (self.etank_color[0] * 31.0) as u8,
+            (self.etank_color[1] * 31.0) as u8,
+            (self.etank_color[2] * 31.0) as u8
         ));
 
         let palette_theme = match self.palette_theme {
@@ -934,6 +934,7 @@ fn main() {
 
     let settings_path = Path::new("../plando_settings.json");
     let mut settings = load_settings(settings_path).unwrap_or_default();
+    plando.auto_update_spoiler = settings.spoiler_auto_update;
 
     let mut rom_vanilla = load_vanilla_rom(&Path::new(&settings.rom_path)).ok();
 
@@ -1055,6 +1056,8 @@ fn main() {
             }
         }
 
+        let ignore_click = spoiler_details_hovered || settings_open || customize_open || status_message.is_some() || error_modal_message.is_some();
+
         while let Some(ev) = window.poll_event() {
             sfegui.add_event(&ev);
 
@@ -1064,7 +1067,7 @@ fn main() {
                     window.close();
                 }
                 Event::MouseButtonPressed { button, x, y } => {
-                    if x < window.size().x as i32 - sidebar_width as i32 && !spoiler_details_hovered && !settings_open && !customize_open && !spoiler_window_bounds.contains2(x as f32, y as f32) {
+                    if x < window.size().x as i32 - sidebar_width as i32 && !ignore_click && !spoiler_window_bounds.contains2(x as f32, y as f32) {
                         if button == mouse::Button::Left {
                             is_mouse_down = true;
                         } else if button == mouse::Button::Middle {
@@ -1084,13 +1087,12 @@ fn main() {
                     }
 
                     let new_mouse_pos = Vector2i::new(x, y);
-                    if (mouse_click_pos - new_mouse_pos).length_sq() < settings.mouse_click_pos_tolerance && mouse_click_timer > 0 && !spoiler_details_hovered
-                        && !settings_open && !customize_open && !spoiler_window_bounds.contains2(x as f32, y as f32) {
+                    if (mouse_click_pos - new_mouse_pos).length_sq() < settings.mouse_click_pos_tolerance && mouse_click_timer > 0 && !ignore_click && !spoiler_window_bounds.contains2(x as f32, y as f32) {
                         is_mouse_clicked = Some(button);
                     }
                 },
                 Event::MouseWheelScrolled { wheel: _, delta, x, y } => {
-                    if x < window.size().x as i32 - sidebar_width as i32 && !spoiler_details_hovered && !settings_open && !customize_open && !spoiler_window_bounds.contains2(x as f32, y as f32) {
+                    if x < window.size().x as i32 - sidebar_width as i32 && !ignore_click && !spoiler_window_bounds.contains2(x as f32, y as f32) {
                         let factor = 1.1;
                         if delta > 0.0 && zoom < 20.0 {
                             zoom *= factor;

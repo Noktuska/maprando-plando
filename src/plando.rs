@@ -665,7 +665,7 @@ impl Plando {
         }
 
         if let DoorType::Beam(_) = door_type {
-            if self.door_beam_loc.contains(&loc_src) || self.door_beam_loc.contains(&loc_dst) {
+            if self.door_beam_loc.iter().any(|x| x.0 == loc_src.0 || x.0 == loc_dst.0) {
                 if replace {
                     todo!("Implement door replacing");
                 } else {
