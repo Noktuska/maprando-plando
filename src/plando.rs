@@ -163,8 +163,8 @@ pub struct Plando {
     pub mosaic_themes: Vec<MosaicTheme>,
     pub difficulty_tiers: Vec<DifficultyConfig>,
     pub maps_vanilla: MapRepository,
-    pub maps_standard: MapRepository,
-    pub maps_wild: MapRepository,
+    pub maps_standard: Option<MapRepository>,
+    pub maps_wild: Option<MapRepository>,
     pub map: Map,
     pub randomizer_settings: RandomizerSettings,
     pub objectives: Vec<Objective>,
@@ -211,17 +211,20 @@ impl Plando {
             display_name: y.to_string(),
         })
         .collect();
-
-        let vanilla_map_path = Path::new("../maps/vanilla");
-        let standard_maps_path = Path::new("../maps/v117c-standard");
-        let wild_maps_path = Path::new("../maps/v117c-wild");
     
-        let maps_vanilla = MapRepository::new("Vanilla", vanilla_map_path).unwrap();
-        let maps_standard = MapRepository::new("Standard", standard_maps_path).unwrap();
-        let maps_wild = MapRepository::new("Wild", wild_maps_path).unwrap();
+        let maps_vanilla = Plando::load_map_repository(MapRepositoryType::Vanilla).expect("Vanilla Map Repository not found");
+        let maps_standard = Plando::load_map_repository(MapRepositoryType::Standard);
+        let maps_wild = Plando::load_map_repository(MapRepositoryType::Wild);
+
+        if maps_standard.is_none() {
+            println!("WARN: Standard Map Repository not found");
+        }
+        if maps_wild.is_none() {
+            println!("WARN: Wild Map Repository not found");
+        }
 
         let map = roll_map(&maps_vanilla, &game_data).unwrap();
-        let preset_path = Path::new("./presets/full-settings/Community Race Season 3 (No animals).json");
+        let preset_path = Path::new("./data/presets/full-settings/Community Race Season 3 (No animals).json");
         let randomizer_settings = load_preset(preset_path).unwrap();
 
         let mut rng = rand::rngs::StdRng::from_entropy();
@@ -322,11 +325,23 @@ impl Plando {
         self.randomizable_door_connections = get_randomizable_door_connections(&self.game_data, &self.map, &self.objectives);
     }
 
+    pub fn load_map_repository(map_repo_type: MapRepositoryType) -> Option<MapRepository> {
+        let vanilla_map_path = Path::new("../maps/vanilla");
+        let standard_maps_path = Path::new("../maps/v117c-standard");
+        let wild_maps_path = Path::new("../maps/v117c-wild");
+
+        match map_repo_type {
+            MapRepositoryType::Vanilla => MapRepository::new("Vanilla", vanilla_map_path).ok(),
+            MapRepositoryType::Standard => MapRepository::new("Standard", standard_maps_path).ok(),
+            MapRepositoryType::Wild => MapRepository::new("Wild", wild_maps_path).ok()
+        }
+    }
+
     pub fn reroll_map(&mut self, map_repository: MapRepositoryType) -> Result<()> {
         let map_repository = match map_repository {
             MapRepositoryType::Vanilla => &self.maps_vanilla,
-            MapRepositoryType::Standard => &self.maps_standard,
-            MapRepositoryType::Wild => &self.maps_wild
+            MapRepositoryType::Standard => self.maps_standard.as_ref().unwrap(),
+            MapRepositoryType::Wild => self.maps_wild.as_ref().unwrap()
         };
         self.map = roll_map(&map_repository, &self.game_data)?;
         self.clear_item_locations();
@@ -1084,9 +1099,9 @@ fn load_preset(path: &Path) -> Result<RandomizerSettings> {
 }
 
 fn load_preset_data(game_data: &GameData) -> Result<PresetData> {
-    let tech_path = Path::new("../MapRandomizer/rust/data/tech_data.json");
-    let notable_path = Path::new("../MapRandomizer/rust/data/notable_data.json");
-    let presets_path = Path::new("../MapRandomizer/rust/data/presets/");
+    let tech_path = Path::new("./data/tech_data.json");
+    let notable_path = Path::new("./data/notable_data.json");
+    let presets_path = Path::new("./data/presets/");
 
     let preset_data = PresetData::load(tech_path, notable_path, presets_path, game_data);
     preset_data

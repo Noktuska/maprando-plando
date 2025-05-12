@@ -1,5 +1,5 @@
 use {
-    anyhow::{anyhow, bail, Context, Result}, egui_sfml::{egui::{self, Color32, Id, Sense, TextureId, Vec2}, SfEgui, UserTexSource}, hashbrown::HashMap, maprando::{
+    anyhow::{anyhow, bail, Context, Result}, egui_sfml::{egui::{self, Color32, Id, Sense, TextureId, Vec2}, SfEgui, UserTexSource}, flate2::read::GzDecoder, hashbrown::HashMap, maprando::{
         customize::{mosaic::MosaicTheme, ControllerButton, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, MusicSettings, PaletteTheme, ShakingSetting, TileTheme}, patch::Rom, randomize::SpoilerRouteEntry, settings::DoorsMode
     }, maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType}, plando::{DoubleItemPlacement, MapRepositoryType, Placeable, Plando, ITEM_VALUES}, rfd::FileDialog, serde::{Deserialize, Serialize}, sfml::{
         cpp::FBox, graphics::{
@@ -406,6 +406,24 @@ fn load_map(plando: &mut Plando, path: &Path) -> Result<()> {
     file.read_to_string(&mut data_str)?;
     let map: Map = serde_json::from_str(&data_str)?;
     plando.load_map(map);
+    Ok(())
+}
+
+fn download_map_repos() -> Result<()> {
+    for pool in ["v117c-standard", "v117c-wild"] {
+        let url = format!("https://map-rando-artifacts.s3.us-west-004.backblazeb2.com/maps/{pool}.tgz");
+        let client = reqwest::blocking::Client::new();
+        let resp = client.get(&url).send()?;
+
+        println!("Attempting to download {url}");
+        let bytes = resp.bytes()?;
+        let cursor = std::io::Cursor::new(&bytes);
+        let decoder = GzDecoder::new(cursor);
+        let mut archive = tar::Archive::new(decoder);
+        println!("Unpacking archive, this may take a while...");
+        archive.unpack("../maps/")?;
+    }
+    println!("Done!");
     Ok(())
 }
 
@@ -1621,11 +1639,11 @@ fn main() {
                             plando.reroll_map(MapRepositoryType::Vanilla).unwrap();
                             ui.close_menu();
                         }
-                        if ui.button("Reroll Map (Standard)").clicked() {
+                        if ui.add_enabled(plando.maps_standard.is_some(), egui::Button::new("Reroll Map (Standard)")).clicked() {
                             plando.reroll_map(MapRepositoryType::Standard).unwrap();
                             ui.close_menu();
                         }
-                        if ui.button("Reroll Map (Wild)").clicked() {
+                        if ui.add_enabled(plando.maps_wild.is_some(), egui::Button::new("Reroll Map (Wild)")).clicked() {
                             plando.reroll_map(MapRepositoryType::Wild).unwrap();
                             ui.close_menu();
                         }
@@ -1641,6 +1659,15 @@ fn main() {
                                 }
                             }
                             ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.button("Download Map Repositories").clicked() {
+                            if let Err(err) = download_map_repos() {
+                                error_modal_message = Some(err.to_string());
+                            } else {
+                                plando.maps_standard = Plando::load_map_repository(MapRepositoryType::Standard);
+                                plando.maps_wild = Plando::load_map_repository(MapRepositoryType::Wild);
+                            }
                         }
                     });
                     ui.menu_button("Items", |ui| {
