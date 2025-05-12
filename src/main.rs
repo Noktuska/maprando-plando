@@ -7,7 +7,7 @@ use {
         }, system::{Vector2f, Vector2i}, window::{
             mouse, Event, Key, Style
         }
-    }, std::{cmp::{max, min}, fs::File, io::{Read, Write}, path::Path, u32}
+    }, std::{cmp::{max, min}, fs::File, io::{Read, Write}, path::Path, thread::{self, JoinHandle}, u32}
 };
 
 mod plando;
@@ -423,7 +423,7 @@ fn download_map_repos() -> Result<()> {
         println!("Unpacking archive, this may take a while...");
         archive.unpack("../maps/")?;
     }
-    println!("Done!");
+    println!("Done");
     Ok(())
 }
 
@@ -1025,6 +1025,10 @@ fn main() {
     let mut spoiler_window_bounds = FloatRect::default();
     let mut spoiler_details_hovered = false;
 
+    let mut download_thread_active = false;
+    let mut download_thread_handle: JoinHandle<Result<(), anyhow::Error>> = thread::spawn(|| { Ok(()) });
+    let mut status_message = None;
+
     while window.is_open() {
         let local_mouse_x = (mouse_x as f32 - x_offset) / zoom;
         let local_mouse_y = (mouse_y as f32 - y_offset) / zoom;
@@ -1037,6 +1041,19 @@ fn main() {
             mouse_click_timer -= 1;
         }
         let mut click_consumed = false;
+
+        if download_thread_active {
+            if download_thread_handle.is_finished() {
+                let res = download_thread_handle.join().unwrap();
+                match res {
+                    Ok(_) => {},
+                    Err(err) => error_modal_message = Some(err.to_string())
+                }
+                status_message = None;
+                download_thread_active = false;
+                download_thread_handle = thread::spawn(|| { Ok(()) }); // Reset the handle
+            }
+        }
 
         while let Some(ev) = window.poll_event() {
             sfegui.add_event(&ev);
@@ -1661,13 +1678,10 @@ fn main() {
                             ui.close_menu();
                         }
                         ui.separator();
-                        if ui.button("Download Map Repositories").clicked() {
-                            if let Err(err) = download_map_repos() {
-                                error_modal_message = Some(err.to_string());
-                            } else {
-                                plando.maps_standard = Plando::load_map_repository(MapRepositoryType::Standard);
-                                plando.maps_wild = Plando::load_map_repository(MapRepositoryType::Wild);
-                            }
+                        if ui.add_enabled(status_message.is_none(), egui::Button::new("Download Map Repositories")).clicked() {
+                            download_thread_handle = thread::spawn(download_map_repos);
+                            download_thread_active = true;
+                            status_message = Some("Downloading/Unpacking... This might take a while");
                         }
                     });
                     ui.menu_button("Items", |ui| {
@@ -2314,6 +2328,14 @@ fn main() {
                             }
                         }
                     });
+                });
+            }
+
+            if let Some(msg) = status_message.clone() {
+                egui::Modal::new(Id::new("modal_status")).show(ctx, |ui| {
+                    ui.set_min_width(256.0);
+                    ui.heading("Status");
+                    ui.label(msg);
                 });
             }
 
