@@ -346,14 +346,15 @@ fn load_seed(plando: &mut Plando, path: &Path) -> Result<()> {
     let auto_update = plando.auto_update_spoiler;
     plando.auto_update_spoiler = false;
 
+    plando.clear_item_locations();
+    plando.clear_doors();
+
     plando.load_map(seed_data.map);
     let start_location = if seed_data.start_location == plando.game_data.start_locations.len() {
         Plando::get_ship_start()
     } else {
         plando.game_data.start_locations[seed_data.start_location].clone()
     };
-
-    plando.place_start_location(start_location)?;
 
     plando.item_locations = seed_data.item_placements;
     for item in &plando.item_locations {
@@ -380,8 +381,10 @@ fn load_seed(plando: &mut Plando, path: &Path) -> Result<()> {
         let room_idx = plando.room_id_to_idx(door_data.room_id);
         
         let door_idx = plando.get_door_idx(room_idx, tile_x, tile_y, door_data.direction).ok_or_else(|| anyhow!("Malformed Door Data"))?;
-        plando.place_door(room_idx, door_idx, Some(door_type), false)?;
+        plando.place_door(room_idx, door_idx, Some(door_type), false, true)?;
     }
+
+    plando.place_start_location(start_location)?;
 
     plando.update_spoiler_data();
     plando.auto_update_spoiler = auto_update;
@@ -1438,9 +1441,9 @@ fn main() {
                     if let Some(bt) = is_mouse_clicked {
                         let mut res = Ok(());
                         if bt == mouse::Button::Left {
-                            res = plando.place_door(room_idx, door_idx, door_type.to_door_type(), false);
+                            res = plando.place_door(room_idx, door_idx, door_type.to_door_type(), false, false);
                         } else if bt == mouse::Button::Right {
-                            res = plando.place_door(room_idx, door_idx, None, true);
+                            res = plando.place_door(room_idx, door_idx, None, true, false);
                         }
                         click_consumed = true;
                         if let Err(err) = res {

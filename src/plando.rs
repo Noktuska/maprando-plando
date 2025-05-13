@@ -294,7 +294,7 @@ impl Plando {
         for i in 0..self.item_locations.len() {
             self.item_locations[i] = Item::Nothing;
         }
-        for i in Placeable::ETank as usize..Placeable::ReserveTank as usize {
+        for i in Placeable::ETank as usize..=Placeable::WalljumpBoots as usize {
             self.placed_item_count[i] = 0;
         }
 
@@ -352,10 +352,12 @@ impl Plando {
 
     pub fn load_preset(&mut self, path: &Path) -> Result<()> {
         self.randomizer_settings = load_preset(path).unwrap();
-        self.clear_doors();
         self.objectives = maprando::randomize::get_objectives(&self.randomizer_settings, &mut self.rng);
         self.randomizable_door_connections = get_randomizable_door_connections(&self.game_data, &self.map, &self.objectives);
         self.get_difficulty_tiers();
+        if self.auto_update_spoiler {
+            self.update_spoiler_data();
+        }
         Ok(())
     }
 
@@ -398,22 +400,28 @@ impl Plando {
     }
 
     pub fn place_start_location(&mut self, start_loc: StartLocation) -> Result<()> {
+        let old_start_loc = self.start_location_data.start_location.clone();
+        self.start_location_data.start_location = start_loc;
+
+        if let Err(err) = self.update_hub_location() {
+            self.start_location_data.start_location = old_start_loc;
+            bail!(err)
+        }
+
+        Ok(())
+    }
+
+    pub fn update_hub_location(&mut self) -> Result<()> {
+        let start_loc = &self.start_location_data.start_location;
         // Ship location
         if start_loc.room_id == 8 && start_loc.node_id == 5 && start_loc.x == 72.0 && start_loc.y == 69.5 {
             let mut ship_hub = HubLocation::default();
             ship_hub.name = "Ship".to_string();
             ship_hub.room_id = 8;
             ship_hub.node_id = 5;
-            self.start_location_data = StartLocationData {
-                start_location: start_loc,
-                hub_location: ship_hub,
-                hub_obtain_route: Vec::new(),
-                hub_return_route: Vec::new()
-            };
-
-            if self.auto_update_spoiler {
-                self.update_spoiler_data();
-            }
+            self.start_location_data.hub_location = ship_hub;
+            self.start_location_data.hub_obtain_route = Vec::new();
+            self.start_location_data.hub_return_route = Vec::new();
 
             return Ok(());
         }
@@ -446,15 +454,15 @@ impl Plando {
 
         let num_vertices = self.game_data.vertex_isv.keys.len();
         let start_vertex_id = self.game_data.vertex_isv.index_by_key[&VertexKey {
-            room_id: start_loc.room_id,
-            node_id: start_loc.node_id,
+            room_id: self.start_location_data.start_location.room_id,
+            node_id: self.start_location_data.start_location.node_id,
             obstacle_mask: 0,
             actions: vec![],
         }];
 
         let global = self.get_initial_global_state();
         let local = apply_requirement(
-            &start_loc.requires_parsed.as_ref().unwrap(),
+            &self.start_location_data.start_location.requires_parsed.as_ref().unwrap(),
             &global,
             LocalState::new(),
             false,
@@ -542,12 +550,9 @@ impl Plando {
                     let hub_obtain_route = randomizer.get_spoiler_route(&global, LocalState::new(), &hub_obtain_link_idxs, &difficulty, false);
                     let hub_return_route = randomizer.get_spoiler_route(&global, LocalState::new(), &hub_return_link_idxs, &difficulty, true);
                 
-                    self.start_location_data = StartLocationData {
-                        start_location: start_loc,
-                        hub_location: hub.clone(),
-                        hub_obtain_route,
-                        hub_return_route
-                    };
+                    self.start_location_data.hub_location = hub.clone();
+                    self.start_location_data.hub_obtain_route = hub_obtain_route;
+                    self.start_location_data.hub_return_route = hub_return_route;
 
                     if self.auto_update_spoiler {
                         self.update_spoiler_data();
@@ -558,7 +563,7 @@ impl Plando {
             }
         }
 
-        bail!("Could not find suitable hub location to given start location")
+        bail!("Could not find suitable hub location")
     }
 
     pub fn place_item(&mut self, item_loc: usize, item: Item) {
@@ -576,7 +581,7 @@ impl Plando {
         }
     }
 
-    pub fn place_door(&mut self, room_idx: usize, door_idx: usize, door_type_opt: Option<DoorType>, replace: bool) -> Result<()> {
+    pub fn place_door(&mut self, room_idx: usize, door_idx: usize, door_type_opt: Option<DoorType>, replace: bool, ignore_hub: bool) -> Result<()> {
         let door = &self.game_data.room_geometry[room_idx].doors[door_idx];
         let ptr_pair = (door.exit_ptr, door.entrance_ptr);
 
@@ -622,6 +627,9 @@ impl Plando {
                 self.placed_item_count[placeable] -= 1;
                 self.total_door_count -= 1;
                 self.locked_doors.retain(|elem| elem.src_ptr_pair != door_connection.0 || elem.dst_ptr_pair != door_connection.1);
+                
+                // This should never error
+                let _ = self.update_hub_location();
                 if self.auto_update_spoiler {
                     self.update_spoiler_data();
                 }
@@ -683,6 +691,12 @@ impl Plando {
         self.placed_item_count[placeable] += 1;
         self.total_door_count += 1;
 
+        // Door blocks current and all hub locations
+        if !ignore_hub && self.update_hub_location().is_err() {
+            // Undo placement
+            let _ = self.place_door(room_idx, door_idx, None, true, true);
+            bail!("Placing door would block all logical hub locations");
+        }
         if self.auto_update_spoiler {
             self.update_spoiler_data();
         }
@@ -694,6 +708,7 @@ impl Plando {
         self.door_beam_loc.clear();
         self.door_lock_loc.clear();
         self.locked_doors.clear();
+        self.total_door_count = 0;
 
         for i in Placeable::DoorMissile as usize..Placeable::DoorPlasma as usize {
             self.placed_item_count[i] = 0;
