@@ -577,10 +577,6 @@ impl Plando {
     }
 
     pub fn place_door(&mut self, room_idx: usize, door_idx: usize, door_type_opt: Option<DoorType>, replace: bool) -> Result<()> {
-        if self.total_door_count == 55 {
-            bail!("Cannot place more than 55 doors");
-        }
-
         let door = &self.game_data.room_geometry[room_idx].doors[door_idx];
         let ptr_pair = (door.exit_ptr, door.entrance_ptr);
 
@@ -632,6 +628,10 @@ impl Plando {
             }
 
             return Ok(());
+        }
+
+        if self.total_door_count == 55 {
+            bail!("Cannot place more than 55 doors");
         }
 
         let door_type = door_type_opt.unwrap();
