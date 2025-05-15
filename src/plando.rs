@@ -124,6 +124,11 @@ impl Placeable {
         }.to_string()
     }
 
+    pub fn from_item(item: Item) -> Placeable {
+        let idx = Placeable::ETank as usize + item as usize;
+        Placeable::VALUES[idx]
+    }
+
     pub fn to_item(self) -> Option<Item> {
         if self == Placeable::Helm || self > Placeable::WalljumpBoots {
             return None;
