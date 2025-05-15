@@ -93,8 +93,8 @@ impl CustomControllerConfig {
             item_cancel: Y,
             angle_up: R,
             angle_down: L,
-            spin_lock_buttons: vec![L, R, Select, Start],
-            quick_reload_buttons: vec![X, L, R, Up],
+            spin_lock_buttons: vec![X, L, R, Up],
+            quick_reload_buttons: vec![L, R, Select, Start],
             moonwalk: false
         }
     }
@@ -150,7 +150,7 @@ impl Customization {
         Customization {
             samus_sprite: "samus_vanilla".to_string(),
             etank_color: [0xDE as f32 / 255.0, 0x38 as f32 / 255.0, 0x94 as f32 / 255.0],
-            reserve_hud_style: false,
+            reserve_hud_style: true,
             vanilla_screw_attack_animation: false,
             palette_theme: 0,
             tile_theme: 0,
@@ -230,7 +230,7 @@ impl Default for Settings {
             mouse_click_pos_tolerance: 5,
             mouse_click_delay_tolerance: 60,
             rom_path: String::new(),
-            spoiler_auto_update: false,
+            spoiler_auto_update: true,
             customization: Customization::default()
         }
     }
@@ -796,14 +796,15 @@ fn load_room_sprites(game_data: &GameData) -> Result<(FBox<graphics::Image>, Vec
     Ok((atlas, room_data))
 }
 
+// Generates 9 door sprites (Missile, Super, PB, Charge, Ice, Wave, Spazer, Plasma, Gray)
 fn generate_door_sprites() -> Result<FBox<graphics::Image>> {
-    let mut img_doors = graphics::Image::new_solid(3 * 8, 8, Color::TRANSPARENT).unwrap();
-    for x in 0..8 {
+    let mut img_doors = graphics::Image::new_solid(3 * 9, 8, Color::TRANSPARENT).unwrap();
+    for x in 0..9 {
         let door_color_index = match x {
             0 | 5 => 7,
             1 | 7 => 14,
             2 | 6 => 6,
-            3 => 15,
+            3 | 8 => 15,
             4 => 8,
             _ => 15
         };
@@ -816,7 +817,7 @@ fn generate_door_sprites() -> Result<FBox<graphics::Image>> {
         img_doors.set_pixel(3 * x, 4, get_explored_color(door_color_index, 0))?;
         img_doors.set_pixel(3 * x + 1, 4, get_explored_color(door_color_index, 0))?;
         
-        if x < 3 {
+        if x < 3 || x == 8 {
             img_doors.set_pixel(3 * x, 2, get_explored_color(12, 0))?;
             img_doors.set_pixel(3 * x + 1, 1, get_explored_color(12, 0))?;
             img_doors.set_pixel(3 * x + 2, 2, get_explored_color(12, 0))?;
@@ -888,7 +889,7 @@ fn draw_thick_line_strip(rt: &mut dyn RenderTarget, states: &RenderStates, strip
 }
 
 enum FlagType {
-    Bosses = Placeable::VALUES.len() as isize,
+    Bosses = Placeable::VALUES.len() as isize + 1,
     Minibosses,
     Misc
 }
@@ -996,11 +997,12 @@ fn main() {
         user_tex_source.add_texture(Placeable::ETank as u64 + i as u64, tex);
     }
     // Add Door textures to egui
-    for i in 0..8 {
+    for i in 0..9 {
         let source_rect = IntRect::new(i * img_door_width, 0, img_door_width, img_doors.size().y as i32);
         let tex = graphics::Texture::from_image(&img_doors, source_rect).unwrap();
         user_tex_source.add_texture(Placeable::DoorMissile as u64 + i as u64, tex);
     }
+    const TEX_DOOR_GRAY: u64 = 31;
     // Add Flag textures to egui
     const FLAG_TEX_START: u64 = FlagType::Misc as u64 + 1;
     let mut flag_has_tex = Vec::new();
@@ -1013,6 +1015,23 @@ fn main() {
         }
     }
 
+    // Add Samus Sprite Textures to egui
+    /*const TEX_SAMUS_START: u64 = 100;
+    {
+        let sprite_dir = Path::new("../MapRandoSprites/");
+        let mut i = 0;
+        for category in &plando.samus_sprite_categories {
+            for sprite in &category.sprites {
+                let sprite_path = sprite_dir.join(&sprite.name).join(".png");
+                let img = graphics::Image::from_file(sprite_path.as_os_str().to_str().unwrap()).unwrap();
+                let tex = graphics::Texture::from_image(&img, IntRect::new(439, 143, 32, 56)).unwrap();
+
+                user_tex_source.add_texture(TEX_SAMUS_START + i, tex);
+                i += 1;
+            }
+        }
+    }*/
+
     let mut sidebar_width = 0.0;
     let sidebar_height = 32.0;
 
@@ -1021,6 +1040,8 @@ fn main() {
     let mut error_modal_message: Option<String> = None;
     let mut settings_open = false;
     let mut customize_open = false;
+    //let mut character_select_open = false;
+    let mut customize_logic_open = false;
     let mut reset_after_patch = false;
 
     let mut sidebar_selection: Option<Placeable> = None;
@@ -1316,6 +1337,29 @@ fn main() {
 
                     window.draw_with_renderstates(&door_spr, &states);
                 }
+            }
+
+            // Draw Gray Doors
+            for door_ptr_pair in &plando.gray_doors {
+                let (room_idx, door_idx) = plando.game_data.room_and_door_idxs_by_door_ptr_pair[door_ptr_pair];
+                let (room_x, room_y) = plando.map.rooms[room_idx];
+                let room_geomtry = &plando.game_data.room_geometry[room_idx];
+                let door = &room_geomtry.doors[door_idx];
+                let x = (room_x + door.x) as f32 * 8.0;
+                let y = (room_y + door.y) as f32 * 8.0;
+
+                let tex = user_tex_source.get_texture(TEX_DOOR_GRAY).2;
+                let mut door_spr = graphics::Sprite::with_texture(tex);
+                door_spr.set_origin((4.0, 4.0));
+                door_spr.set_position((x + 4.0, y + 4.0));
+                door_spr.set_rotation(match door.direction.as_str() {
+                    "up" => 90.0,
+                    "right" => 180.0,
+                    "down" => 270.0,
+                    _ => 0.0
+                });
+
+                window.draw_with_renderstates(&door_spr, &states);
             }
 
             // Draw items
@@ -1703,10 +1747,17 @@ fn main() {
                             ui.close_menu();
                         }
                     });
-                    if ui.button("Settings").clicked() {
-                        settings_open = true;
-                        ui.close_menu();
-                    }
+                    ui.menu_button("Settings", |ui| {
+                        if ui.button("Plando Settings").clicked() {
+                            settings_open = true;
+                            ui.close_menu();
+                        }
+                        if ui.button("Logic Settings").clicked() {
+                            customize_logic_open = true;
+                            ui.close_menu();
+                        }
+                    })
+                    
                 });
             });
 
@@ -1980,7 +2031,7 @@ fn main() {
             } else if plando.randomization.is_some() {
                 // Draw Spoiler Summary
                 let resp_opt = egui::Window::new("Spoiler Summary")
-                .resizable(false).movable(false).title_bar(false).min_width(160.0)
+                .resizable(false).movable(false).title_bar(false).min_width(320.0)
                 .fixed_pos(Vec2::new(16.0, 32.0).to_pos2()).show(ctx, |ui| {
                     let (_r, spoiler_log) = plando.randomization.as_ref().unwrap();
                     let ui_builder = egui::UiBuilder::new().sense(Sense::click());
@@ -2162,22 +2213,21 @@ fn main() {
                         ui.end_row();
 
                         ui.label("Tile theme");
-                        egui::ComboBox::from_id_salt("combo_customize_tile").show_ui(ui, |ui| {
-                            ui.selectable_value(&mut settings.customization.tile_theme, 0, "Vanilla");
-                            ui.selectable_value(&mut settings.customization.tile_theme, 1, "Area-themed");
-                            ui.selectable_value(&mut settings.customization.tile_theme, 2, "Scrambled");
-                            for (i, theme) in plando.mosaic_themes.iter().enumerate() {
-                                ui.selectable_value(&mut settings.customization.tile_theme, 3 + i, &theme.display_name);
+                        let mut tile_theme_strs: Vec<String> = vec!["Vanilla", "Area-themed", "Scrambled"].iter().map(|x| x.to_string()).collect();
+                        plando.mosaic_themes.iter().for_each(|x| tile_theme_strs.push(x.display_name.clone()));
+                        tile_theme_strs.push("Practice Outlines".to_string());
+                        tile_theme_strs.push("Invisible".to_string());
+                        egui::ComboBox::from_id_salt("combo_customize_tile").selected_text(&tile_theme_strs[settings.customization.tile_theme]).show_ui(ui, |ui| {
+                            for (i, theme) in tile_theme_strs.iter().enumerate() {
+                                ui.selectable_value(&mut settings.customization.tile_theme, i, theme);
                             }
-                            ui.selectable_value(&mut settings.customization.tile_theme, 3 + plando.mosaic_themes.len(), "Practice Outlines");
-                            ui.selectable_value(&mut settings.customization.tile_theme, 4 + plando.mosaic_themes.len(), "Invisible");
                         });
                         ui.end_row();
 
                         ui.label("Reserve tank HUD style");
                         ui.horizontal(|ui| {
-                            ui.selectable_value(&mut settings.customization.reserve_hud_style, true, "Vanilla");
-                            ui.selectable_value(&mut settings.customization.reserve_hud_style, false, "Revamped");
+                            ui.selectable_value(&mut settings.customization.reserve_hud_style, false, "Vanilla");
+                            ui.selectable_value(&mut settings.customization.reserve_hud_style, true, "Revamped");
                         });
                         ui.end_row();
 
@@ -2190,7 +2240,7 @@ fn main() {
 
                         use CustomControllerButton::*;
                         const VALUES: [CustomControllerButton; 12] = [X, Y, A, B, L, R, Select, Start, Up, Down, Left, Right];
-                        const STRINGS: [&str; 12] = ["X", "Y", "A", "B", "L", "R", "Select", "Start", "↑", "↓", "←", "→"];
+                        const STRINGS: [&str; 12] = ["X", "Y", "A", "B", "L", "R", "Select", "Start", "Up", "Down", "Left", "Right"];
                         let config = &mut settings.customization.controller_config;
 
                         ui.label("Shot");
@@ -2334,6 +2384,10 @@ fn main() {
                         }
                     });
                 });
+            }
+
+            if customize_logic_open {
+
             }
 
             if let Some(msg) = status_message.clone() {

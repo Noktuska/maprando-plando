@@ -173,6 +173,7 @@ pub struct Plando {
     pub placed_item_count: [usize; Placeable::VALUES.len()],
     pub randomizable_door_connections: Vec<(DoorPtrPair, DoorPtrPair)>,
     pub locked_doors: Vec<LockedDoor>,
+    pub gray_doors: HashSet<DoorPtrPair>,
 
     door_lock_loc: Vec<(usize, usize, usize)>,
     door_beam_loc: Vec<(usize, usize, usize)>,
@@ -275,6 +276,7 @@ impl Plando {
             placed_item_count,
             randomizable_door_connections,
             locked_doors: Vec::new(),
+            gray_doors: get_gray_doors(),
 
             door_lock_loc: Vec::new(),
             door_beam_loc: Vec::new(),
@@ -343,10 +345,16 @@ impl Plando {
             MapRepositoryType::Standard => self.maps_standard.as_ref().unwrap(),
             MapRepositoryType::Wild => self.maps_wild.as_ref().unwrap()
         };
+        let auto_update = self.auto_update_spoiler;
+        self.auto_update_spoiler = false;
         self.map = roll_map(&map_repository, &self.game_data)?;
         self.clear_item_locations();
         self.clear_doors();
+        self.start_location_data.start_location = Plando::get_ship_start();
+        self.update_hub_location()?;
         self.randomizable_door_connections = get_randomizable_door_connections(&self.game_data, &self.map, &self.objectives);
+        self.auto_update_spoiler = auto_update;
+        self.update_spoiler_data();
         Ok(())
     }
 
@@ -587,7 +595,7 @@ impl Plando {
 
         let door_connection = self.randomizable_door_connections.iter().find(|pair| {
             pair.0 == ptr_pair || pair.1 == ptr_pair
-        }).ok_or(anyhow!("Door is not randomizable"))?;
+        }).ok_or(anyhow!("Door is not randomizable. Non-randomizable doors include Gray Doors (like bosses), Sandpits, doors on the same tile as an item and doors to Save/Map/Refill rooms"))?;
 
         let (room_src_idx, door_src_idx) = self.game_data.room_and_door_idxs_by_door_ptr_pair[&door_connection.0];
         let (room_dst_idx, door_dst_idx) = self.game_data.room_and_door_idxs_by_door_ptr_pair[&door_connection.1];
@@ -1138,6 +1146,37 @@ pub struct VertexInfo {
     pub room_coords: (usize, usize),
     pub node_name: String,
     pub node_id: usize,
+}
+
+fn get_gray_doors() -> HashSet<DoorPtrPair> {
+    let result: HashSet<DoorPtrPair> = vec![
+        // Gray doors - Pirate rooms:
+        (0x18B7A, 0x18B62), // Pit Room left
+        (0x18B86, 0x18B92), // Pit Room right
+        (0x19192, 0x1917A), // Baby Kraid left
+        (0x1919E, 0x191AA), // Baby Kraid right
+        (0x1A558, 0x1A54C), // Plasma Room
+        (0x19A32, 0x19966), // Metal Pirates left
+        (0x19A3E, 0x19A1A), // Metal Pirates right
+        // Gray doors - Bosses:
+        (0x191CE, 0x191B6), // Kraid left
+        (0x191DA, 0x19252), // Kraid right
+        (0x1A2C4, 0x1A2AC), // Phantoon
+        (0x1A978, 0x1A924), // Draygon left
+        (0x1A96C, 0x1A840), // Draygon right
+        (0x198B2, 0x19A62), // Ridley left
+        (0x198BE, 0x198CA), // Ridley right
+        (0x1AA8C, 0x1AAE0), // Mother Brain left
+        (0x1AA80, 0x1AAC8), // Mother Brain right
+        // Gray doors - Minibosses:
+        (0x18BAA, 0x18BC2), // Bomb Torizo
+        (0x18E56, 0x18E3E), // Spore Spawn bottom
+        (0x193EA, 0x193D2), // Crocomire top
+        (0x1A90C, 0x1A774), // Botwoon left
+        (0x19882, 0x19A86), // Golden Torizo right
+    ].into_iter().map(|(l, r)| (Some(l), Some(r))).collect();
+
+    result
 }
 
 fn get_randomizable_doors(game_data: &GameData, objectives: &[Objective]) -> HashSet<DoorPtrPair> {
