@@ -1,6 +1,6 @@
 use {
     anyhow::{anyhow, bail, Context, Result}, egui_sfml::{egui::{self, Color32, Id, Sense, TextureId, Vec2}, SfEgui, UserTexSource}, flate2::read::GzDecoder, hashbrown::HashMap, maprando::{
-        customize::{mosaic::MosaicTheme, ControllerButton, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, MusicSettings, PaletteTheme, ShakingSetting, TileTheme}, patch::Rom, randomize::SpoilerRouteEntry, settings::DoorsMode
+        customize::{mosaic::MosaicTheme, ControllerButton, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, MusicSettings, PaletteTheme, ShakingSetting, TileTheme}, patch::Rom, randomize::SpoilerRouteEntry, settings::{DoorLocksSize, DoorsMode, ItemDotChange, MapStationReveal, MapsRevealed, RandomizerSettings, SaveAnimals, WallJump}
     }, maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType}, plando::{DoubleItemPlacement, MapRepositoryType, Placeable, Plando, ITEM_VALUES}, rfd::FileDialog, serde::{Deserialize, Serialize}, sfml::{
         cpp::FBox, graphics::{
             self, Color, FloatRect, IntRect, PrimitiveType, RenderStates, RenderTarget, RenderWindow, Shape, Transformable, Vertex
@@ -277,7 +277,8 @@ struct SeedData {
     map: Map,
     start_location: usize,
     item_placements: Vec<Item>,
-    door_locks: Vec<LockedDoorSerializable>
+    door_locks: Vec<LockedDoorSerializable>,
+    settings: RandomizerSettings
 }
 
 fn save_settings(settings: &Settings, path: &Path) -> Result<()> {
@@ -331,7 +332,8 @@ fn get_seed_data(plando: &Plando) -> SeedData {
         map: plando.map.clone(),
         start_location: start_location_id,
         item_placements: plando.item_locations.clone(),
-        door_locks
+        door_locks,
+        settings: plando.randomizer_settings.clone()
     }
 }
 
@@ -345,6 +347,8 @@ fn load_seed(plando: &mut Plando, path: &Path) -> Result<()> {
 
     let auto_update = plando.auto_update_spoiler;
     plando.auto_update_spoiler = false;
+
+    plando.load_preset(seed_data.settings);
 
     plando.clear_item_locations();
     plando.clear_doors();
@@ -409,6 +413,16 @@ fn load_map(plando: &mut Plando, path: &Path) -> Result<()> {
     file.read_to_string(&mut data_str)?;
     let map: Map = serde_json::from_str(&data_str)?;
     plando.load_map(map);
+    Ok(())
+}
+
+fn save_preset(preset: &RandomizerSettings) -> Result<()> {
+    let str = serde_json::to_string(preset)?;
+    let dir = Path::new("./data/presets/full-settings/");
+    let path = dir.join(preset.name.as_ref().unwrap());
+    let mut file = File::create(path)?;
+    file.write_all(str.as_bytes())?;
+
     Ok(())
 }
 
@@ -1032,6 +1046,12 @@ fn main() {
         }
     }*/
 
+    let mut cur_setting_preset = plando.randomizer_settings.clone();
+    enum CustomizeLogicWindow {
+        None, SkillAssumption, ItemProgression, Qol, Objectives
+    }
+    let mut cur_customize_logic_window = CustomizeLogicWindow::None;
+
     let mut sidebar_width = 0.0;
     let sidebar_height = 32.0;
 
@@ -1080,7 +1100,7 @@ fn main() {
             }
         }
 
-        let ignore_click = spoiler_details_hovered || settings_open || customize_open || status_message.is_some() || error_modal_message.is_some();
+        let ignore_click = spoiler_details_hovered || settings_open || customize_open || status_message.is_some() || error_modal_message.is_some() || customize_logic_open;
 
         while let Some(ev) = window.poll_event() {
             sfegui.add_event(&ev);
@@ -1668,13 +1688,13 @@ fn main() {
                             }
                             ui.close_menu();
                         }
-                        if ui.button("Load Settings Preset").clicked() {
+                        if ui.button("Load Logic Preset from file").clicked() {
                             let file_opt = FileDialog::new()
                                 .set_directory("/")
                                 .add_filter("JSON File", &["json"])
                                 .pick_file();
                             if let Some(file) = file_opt {
-                                let res = plando.load_preset(&file);
+                                let res = plando.load_preset_from_file(&file);
                                 if res.is_err() {
                                     error_modal_message = Some(res.unwrap_err().to_string());
                                 }
@@ -2387,7 +2407,170 @@ fn main() {
             }
 
             if customize_logic_open {
+                egui::Window::new("Customize Logic").resizable(false).title_bar(false).show(ctx, |ui| {
+                    // Settings preset
+                    ui.horizontal(|ui| {
+                        ui.label("Settings preset");
+                        let combo_text = match &cur_setting_preset.name {
+                            None => "Select a preset to automatically fill all settings".to_string(),
+                            Some(name) => name.clone()
+                        };
+                        egui::ComboBox::from_id_salt("combo_logic_preset").selected_text(combo_text).show_ui(ui, |ui| {
+                            if ui.selectable_label(cur_setting_preset.name.is_none(), "Select a preset to automatically fill all settings").clicked() {
+                                cur_setting_preset.name = None;
+                            }
+                            ui.separator();
+                            for preset in &plando.preset_data.full_presets {
+                                if ui.selectable_label(cur_setting_preset.name.as_ref().is_some_and(|x| *x == *preset.name.as_ref().unwrap()), preset.name.as_ref().unwrap().clone()).clicked() {
+                                    cur_setting_preset = preset.clone();
+                                }
+                            }
+                        });
+                    });
+                    egui::Grid::new("grid_customize_logic").num_columns(9).striped(true).show(ui, |ui| {
+                        // Skill assumptions
+                        ui.label("Skill assumptions");
+                        for preset in &plando.preset_data.skill_presets {
+                            if ui.selectable_label(cur_setting_preset.skill_assumption_settings == *preset, preset.preset.as_ref().unwrap()).clicked() {
+                                cur_setting_preset.skill_assumption_settings = preset.clone();
+                            }
+                        }
+                        if ui.button("Custom").clicked() {
+                            cur_customize_logic_window = CustomizeLogicWindow::SkillAssumption;
+                        }
+                        ui.end_row();
 
+                        // Item progression
+                        ui.label("Item Progression").on_hover_text("These presets are mostly visual (except for Desolate), as they affect item progression");
+                        for preset in &plando.preset_data.item_progression_presets {
+                            if ui.selectable_label(cur_setting_preset.item_progression_settings == *preset, preset.preset.as_ref().unwrap()).clicked() {
+                                cur_setting_preset.item_progression_settings = preset.clone();
+                            }
+                        }
+                        if ui.button("Custom").clicked() {
+                            cur_customize_logic_window = CustomizeLogicWindow::ItemProgression;
+                        }
+                        ui.end_row();
+
+                        // Quality of Life
+                        ui.label("Quality-of-life options");
+                        for preset in &plando.preset_data.quality_of_life_presets {
+                            if ui.selectable_label(cur_setting_preset.quality_of_life_settings == *preset, preset.preset.as_ref().unwrap()).clicked() {
+                                cur_setting_preset.quality_of_life_settings = preset.clone();
+                            }
+                        }
+                        if ui.button("Custom").clicked() {
+                            cur_customize_logic_window = CustomizeLogicWindow::Qol;
+                        }
+                        ui.end_row();
+
+                        // Objectives
+                        ui.label("Objectives");
+                        for preset in &plando.preset_data.objective_presets {
+                            if ui.selectable_label(cur_setting_preset.objective_settings == *preset, preset.preset.as_ref().unwrap()).clicked() {
+                                cur_setting_preset.objective_settings = preset.clone();
+                            }
+                        }
+                        if ui.button("Custom").clicked() {
+                            cur_customize_logic_window = CustomizeLogicWindow::Objectives;
+                        }
+                        ui.end_row();
+
+                        // Doors
+                        ui.label("Doors");
+                        ui.selectable_value(&mut cur_setting_preset.doors_mode, DoorsMode::Blue, "Blue");
+                        ui.selectable_value(&mut cur_setting_preset.doors_mode, DoorsMode::Ammo, "Ammo");
+                        ui.selectable_value(&mut cur_setting_preset.doors_mode, DoorsMode::Beam, "Beam");
+                        ui.end_row();
+
+                        // Save the animals
+                        ui.label("Save the animals");
+                        ui.selectable_value(&mut cur_setting_preset.save_animals, SaveAnimals::No, "No");
+                        ui.selectable_value(&mut cur_setting_preset.save_animals, SaveAnimals::Yes, "Yes");
+                        ui.selectable_value(&mut cur_setting_preset.save_animals, SaveAnimals::Optional, "Optional");
+                        ui.end_row();
+
+                        // Collectible Walljump
+                        ui.label("Wall Jump");
+                        ui.selectable_value(&mut cur_setting_preset.other_settings.wall_jump, WallJump::Vanilla, "Vanilla");
+                        ui.selectable_value(&mut cur_setting_preset.other_settings.wall_jump, WallJump::Collectible, "Collectible");
+                        ui.end_row();
+
+                        // Item dots after collection
+                        ui.label("Item dots after collection");
+                        ui.selectable_value(&mut cur_setting_preset.other_settings.item_dot_change, ItemDotChange::Fade, "Fade");
+                        ui.selectable_value(&mut cur_setting_preset.other_settings.item_dot_change, ItemDotChange::Disappear, "Disappear");
+                        ui.end_row();
+
+                        // Area transition markers
+                        ui.label("Area transition markers on map");
+                        ui.selectable_value(&mut cur_setting_preset.other_settings.transition_letters, false, "Arrows");
+                        ui.selectable_value(&mut cur_setting_preset.other_settings.transition_letters, true, "Letters");
+                        ui.end_row();
+
+                        // Door locks size
+                        ui.label("Door locks size on map");
+                        ui.selectable_value(&mut cur_setting_preset.other_settings.door_locks_size, DoorLocksSize::Small, "Small");
+                        ui.selectable_value(&mut cur_setting_preset.other_settings.door_locks_size, DoorLocksSize::Large, "Large");
+                        ui.end_row();
+
+                        // Maps revealed from start
+                        ui.label("Maps revealed from start");
+                        ui.selectable_value(&mut cur_setting_preset.other_settings.maps_revealed, MapsRevealed::No, "No");
+                        ui.selectable_value(&mut cur_setting_preset.other_settings.maps_revealed, MapsRevealed::Partial, "Partial");
+                        ui.selectable_value(&mut cur_setting_preset.other_settings.maps_revealed, MapsRevealed::Full, "Full");
+                        ui.end_row();
+
+                        // Map station reveal
+                        ui.label("Map station activation reveal");
+                        ui.selectable_value(&mut cur_setting_preset.other_settings.map_station_reveal, MapStationReveal::Partial, "Partial");
+                        ui.selectable_value(&mut cur_setting_preset.other_settings.map_station_reveal, MapStationReveal::Full, "Full");
+                        ui.end_row();
+
+                        // Energy free shinesparks
+                        ui.label("Energy-free shinesparks");
+                        ui.selectable_value(&mut cur_setting_preset.other_settings.energy_free_shinesparks, false, "No");
+                        ui.selectable_value(&mut cur_setting_preset.other_settings.energy_free_shinesparks, true, "Yes");
+                        ui.end_row();
+
+                        // Ultra low qol
+                        ui.label("Ultra-low quality of life");
+                        ui.selectable_value(&mut cur_setting_preset.other_settings.ultra_low_qol, false, "No");
+                        if ui.selectable_label(cur_setting_preset.other_settings.ultra_low_qol, "Yes").clicked() {
+                            cur_setting_preset.other_settings.ultra_low_qol = true;
+                            cur_setting_preset.quality_of_life_settings = plando.preset_data.quality_of_life_presets.iter().find(
+                                |x| x.preset.as_ref().is_some_and(|x| *x == "Off".to_string())
+                            ).unwrap().clone();
+                        }
+                    });
+                    // Save preset
+                    if cur_setting_preset.name.is_none() {
+                        cur_setting_preset.name = Some(String::new());
+                    }
+                    ui.horizontal(|ui| {
+                        ui.label("Save preset as");
+                        ui.text_edit_singleline(cur_setting_preset.name.as_mut().unwrap());
+                    });
+                    ui.end_row();
+
+                    // Apply / Save / Cancel
+                    ui.horizontal(|ui| {
+                        if ui.button("Apply").clicked() {
+                            plando.load_preset(cur_setting_preset.clone());
+                            customize_logic_open = false;
+                        }
+                        if ui.button("Save to file").clicked() && cur_setting_preset.name.as_ref().is_some_and(|x| !x.is_empty()) {
+                            if let Err(err) = save_preset(&cur_setting_preset) {
+                                error_modal_message = Some(err.to_string());
+                            }
+                        }
+                        if ui.button("Cancel").clicked() {
+                            cur_setting_preset = plando.randomizer_settings.clone();
+                            customize_logic_open = false;
+                        }
+                    });
+                    
+                });
             }
 
             if let Some(msg) = status_message.clone() {

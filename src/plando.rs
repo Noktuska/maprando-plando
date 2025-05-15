@@ -224,9 +224,11 @@ impl Plando {
             println!("WARN: Wild Map Repository not found");
         }
 
+        let preset_data = load_preset_data(&game_data).unwrap();
+
         let map = roll_map(&maps_vanilla, &game_data).unwrap();
-        let preset_path = Path::new("./data/presets/full-settings/Community Race Season 3 (No animals).json");
-        let randomizer_settings = load_preset(preset_path).unwrap();
+
+        let randomizer_settings = preset_data.default_preset.clone();
 
         let mut rng = rand::rngs::StdRng::from_entropy();
         let objectives = maprando::randomize::get_objectives(&randomizer_settings, &mut rng);
@@ -255,7 +257,6 @@ impl Plando {
         let mut placed_item_count = [0usize; Placeable::VALUES.len()];
         placed_item_count[0] = 1;
 
-        let preset_data = load_preset_data(&game_data).unwrap();
 
         let item_location_len = game_data.item_locations.len();
 
@@ -358,8 +359,8 @@ impl Plando {
         Ok(())
     }
 
-    pub fn load_preset(&mut self, path: &Path) -> Result<()> {
-        self.randomizer_settings = load_preset(path).unwrap();
+    pub fn load_preset_from_file(&mut self, path: &Path) -> Result<()> {
+        self.randomizer_settings = load_preset(path)?;
         self.objectives = maprando::randomize::get_objectives(&self.randomizer_settings, &mut self.rng);
         self.randomizable_door_connections = get_randomizable_door_connections(&self.game_data, &self.map, &self.objectives);
         self.get_difficulty_tiers();
@@ -367,6 +368,16 @@ impl Plando {
             self.update_spoiler_data();
         }
         Ok(())
+    }
+
+    pub fn load_preset(&mut self, preset: RandomizerSettings) {
+        self.randomizer_settings = preset;
+        self.objectives = maprando::randomize::get_objectives(&self.randomizer_settings, &mut self.rng);
+        self.randomizable_door_connections = get_randomizable_door_connections(&self.game_data, &self.map, &self.objectives);
+        self.get_difficulty_tiers();
+        if self.auto_update_spoiler {
+            self.update_spoiler_data();
+        }
     }
 
     pub fn get_difficulty_tiers(&mut self) {
@@ -1115,7 +1126,7 @@ fn load_game_data() -> Result<GameData> {
     game_data
 }
 
-fn load_preset(path: &Path) -> Result<RandomizerSettings> {
+pub fn load_preset(path: &Path) -> Result<RandomizerSettings> {
     let json_data = std::fs::read_to_string(path)?;
     let result = maprando::settings::parse_randomizer_settings(&json_data);
     result
