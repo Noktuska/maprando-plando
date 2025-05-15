@@ -1569,7 +1569,7 @@ fn main() {
                             obtain_route = Some(&details.obtain_route);
                             return_route = Some(&details.return_route);
                         } else {
-                            error_modal_message = Some("Item not logically bireachable".to_string());
+                            error_modal_message = Some("Item is nothing or not logically bireachable".to_string());
                             spoiler_type = SpoilerType::None;
                         }
                     }

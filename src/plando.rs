@@ -125,7 +125,7 @@ impl Placeable {
     }
 
     pub fn to_item(self) -> Option<Item> {
-        if self == Placeable::Helm || self > Placeable::ReserveTank {
+        if self == Placeable::Helm || self > Placeable::WalljumpBoots {
             return None;
         }
         Some(ITEM_VALUES[self as usize - Placeable::ETank as usize])
