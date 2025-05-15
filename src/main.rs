@@ -1418,18 +1418,18 @@ fn main() {
                         info_overlay_opt = Some(item_name.clone());
 
                         if let Some(bt) = is_mouse_clicked {
-                            if sidebar_selection.is_some() && sidebar_selection.unwrap().to_item().is_some() {
-                                if bt == mouse::Button::Left {
+                            if bt == mouse::Button::Left {
+                                if sidebar_selection.is_some_and(|x| x.to_item().is_some()) {
                                     let item_to_place = sidebar_selection.unwrap().to_item().unwrap();
                                     let as_placeable = Placeable::VALUES[item_to_place as usize + Placeable::ETank as usize];
                                     if plando.placed_item_count[as_placeable as usize] < plando.get_max_placeable_count(as_placeable).unwrap() {
                                         plando.place_item(i, item_to_place);
                                     }
-                                } else if bt == mouse::Button::Right {
-                                    plando.place_item(i, Item::Nothing);
+                                } else {
+                                    spoiler_type = SpoilerType::Item(i);
                                 }
-                            } else if sidebar_selection.is_none() {
-                                spoiler_type = SpoilerType::Item(i);
+                            } else if bt == mouse::Button::Right {
+                                plando.place_item(i, Item::Nothing);
                             }
                             click_consumed = true;
                         }
