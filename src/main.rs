@@ -1,7 +1,7 @@
 use {
     anyhow::{anyhow, bail, Context, Result}, egui_sfml::{egui::{self, Color32, Id, Sense, TextureId, Vec2}, SfEgui, UserTexSource}, flate2::read::GzDecoder, hashbrown::HashMap, maprando::{
         customize::{mosaic::MosaicTheme, ControllerButton, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, MusicSettings, PaletteTheme, ShakingSetting, TileTheme}, patch::Rom, randomize::SpoilerRouteEntry, settings::{DoorLocksSize, DoorsMode, ItemDotChange, MapStationReveal, MapsRevealed, RandomizerSettings, SaveAnimals, WallJump}
-    }, maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType}, plando::{DoubleItemPlacement, MapRepositoryType, Placeable, Plando, ITEM_VALUES}, rand::RngCore, rfd::FileDialog, serde::{Deserialize, Serialize}, sfml::{
+    }, maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType}, plando::{DoubleItemPlacement, MapRepositoryType, Placeable, Plando, ITEM_VALUES}, rand::RngCore, rfd::FileDialog, self_update::cargo_crate_version, serde::{Deserialize, Serialize}, sfml::{
         cpp::FBox, graphics::{
             self, Color, FloatRect, IntRect, PrimitiveType, RenderStates, RenderTarget, RenderWindow, Shape, Transformable, Vertex
         }, system::{Vector2f, Vector2i}, window::{
@@ -447,6 +447,70 @@ fn download_map_repos() -> Result<()> {
         archive.unpack("../maps/")?;
     }
     println!("Done");
+    Ok(())
+}
+
+fn check_update() -> Result<()> {
+    let cur_ver = "0.0.9";
+
+    println!("Checking for updates...");
+    let releases = self_update::backends::github::ReleaseList::configure()
+        .repo_owner("Noktuska")
+        .repo_name("maprando-plando")
+        .build()?
+        .fetch()?;
+
+    if releases.is_empty() {
+        bail!("No releases found");
+    }
+    let release = releases[0].clone();
+    println!("Found release {} ({} total releases)", release.version, releases.len());
+
+    if !self_update::version::bump_is_greater(&cur_ver, &release.version)? {
+        bail!("Current release is up to date");
+    }
+    println!("Found update {} --> {}", &cur_ver, &release.version);
+    loop {
+        println!("Do you want to update? (Y/N) ");
+        std::io::stdout().flush()?;
+        let mut s = String::new();
+        match std::io::stdin().read_line(&mut s) {
+            Err(err) => bail!(err.to_string()),
+            Ok(_) => match s.to_lowercase().trim() {
+                "y" => break,
+                "n" => bail!("Update declined"),
+                _ => {}
+            }
+        }
+    }
+
+    let asset = release.assets.first().ok_or(anyhow!("Could not find downloadable asset"))?;
+
+    let tmp_dir_path = Path::new("./tmp/");
+    let tmp_archive_path = tmp_dir_path.join(&asset.name);
+    let file_ext = tmp_archive_path.extension().ok_or(anyhow!("Found asset has no file extension"))?.to_str().unwrap();
+
+    match file_ext {
+        "exe" => {}
+        "zip" => bail!("Extracting ZIP files is not yet supported, please manually download and install update"),
+        _ => bail!("Unexpected file type")
+    }
+
+    std::fs::create_dir_all(tmp_dir_path)?;
+    let tmp_file = File::create(&tmp_archive_path)?;
+
+    println!("Downloading...");
+    self_update::Download::from_url(&asset.download_url)
+        .set_header(reqwest::header::ACCEPT, "application/octet-stream".parse()?)
+        .download_to(tmp_file)?;
+
+    println!("Replacing executable...");
+    self_update::self_replace::self_replace(&tmp_archive_path)?;
+
+    println!("Removing tmp directory...");
+    std::fs::remove_dir_all(tmp_dir_path)?;
+
+    println!("Done!");
     Ok(())
 }
 
@@ -951,6 +1015,11 @@ enum SpoilerType {
 }
 
 fn main() {
+    match check_update() {
+        Ok(_) => println!("Successful!"),
+        Err(err) => println!("ERR: {}", err.to_string())
+    };
+
     let work_dir = Path::new("./data/maprando-data/");
     std::env::set_current_dir(work_dir).unwrap();
 
