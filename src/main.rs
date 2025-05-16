@@ -1,7 +1,7 @@
 use {
     anyhow::{anyhow, bail, Context, Result}, egui_sfml::{egui::{self, Color32, Id, Sense, TextureId, Vec2}, SfEgui, UserTexSource}, flate2::read::GzDecoder, hashbrown::HashMap, maprando::{
         customize::{mosaic::MosaicTheme, ControllerButton, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, MusicSettings, PaletteTheme, ShakingSetting, TileTheme}, patch::Rom, randomize::SpoilerRouteEntry, settings::{DoorLocksSize, DoorsMode, ItemDotChange, MapStationReveal, MapsRevealed, RandomizerSettings, SaveAnimals, WallJump}
-    }, maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType}, plando::{DoubleItemPlacement, MapRepositoryType, Placeable, Plando, ITEM_VALUES}, rfd::FileDialog, serde::{Deserialize, Serialize}, sfml::{
+    }, maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType}, plando::{DoubleItemPlacement, MapRepositoryType, Placeable, Plando, ITEM_VALUES}, rand::RngCore, rfd::FileDialog, serde::{Deserialize, Serialize}, sfml::{
         cpp::FBox, graphics::{
             self, Color, FloatRect, IntRect, PrimitiveType, RenderStates, RenderTarget, RenderWindow, Shape, Transformable, Vertex
         }, system::{Vector2f, Vector2i}, window::{
@@ -33,6 +33,7 @@ struct Settings {
     spoiler_auto_update: bool,
     customization: Customization,
     last_logic_preset: Option<RandomizerSettings>,
+    disable_logic: bool
 }
 
 impl Default for Settings {
@@ -43,7 +44,8 @@ impl Default for Settings {
             rom_path: String::new(),
             spoiler_auto_update: true,
             customization: Customization::default(),
-            last_logic_preset: None
+            last_logic_preset: None,
+            disable_logic: false
         }
     }
 }
@@ -1200,12 +1202,14 @@ fn main() {
                         }
 
                         let mut color_div = 1;
-                        if let Some((_r, spoiler_log)) = &plando.randomization {
-                            if spoiler_log.all_rooms[data.room_idx].map_bireachable_step[local_y][local_x] > spoiler_step as u8 {
-                                color_div *= 2;
-                            }
-                            if spoiler_log.all_rooms[data.room_idx].map_reachable_step[local_y][local_x] > spoiler_step as u8 {
-                                color_div *= 3;
+                        if !settings.disable_logic {
+                            if let Some((_r, spoiler_log)) = &plando.randomization {
+                                if spoiler_log.all_rooms[data.room_idx].map_bireachable_step[local_y][local_x] > spoiler_step as u8 {
+                                    color_div *= 2;
+                                }
+                                if spoiler_log.all_rooms[data.room_idx].map_reachable_step[local_y][local_x] > spoiler_step as u8 {
+                                    color_div *= 3;
+                                }
                             }
                         }
 
@@ -1745,6 +1749,13 @@ fn main() {
                         }
                     });
                     ui.menu_button("Items", |ui| {
+                        if ui.button("Clear all Items").clicked() {
+                            plando.clear_item_locations();
+                        }
+                        if ui.button("Clear all Doors").clicked() {
+                            plando.clear_doors();
+                        }
+                        ui.separator();
                         if ui.button("Replace Nothings with Missiles").clicked() {
                             let auto_update = plando.auto_update_spoiler;
                             plando.auto_update_spoiler = false;
@@ -1756,6 +1767,28 @@ fn main() {
                             plando.auto_update_spoiler = auto_update;
                             plando.update_spoiler_data();
                             ui.close_menu();
+                        }
+                        if ui.button("Randomize Doors").clicked() {
+                            let update = plando.auto_update_spoiler;
+                            plando.auto_update_spoiler = false;
+                            plando.clear_doors();
+
+                            let seed = (plando.rng.next_u64() & 0xFFFFFFFF) as usize;
+                            let locked_door_data = maprando::randomize::randomize_doors(&plando.game_data, &plando.map, &plando.randomizer_settings, &plando.objectives, seed);
+                            for door in locked_door_data.locked_doors {
+                                let (room_idx, door_idx) = plando.game_data.room_and_door_idxs_by_door_ptr_pair[&door.src_ptr_pair];
+                                let _ = plando.place_door(room_idx, door_idx, Some(door.door_type), false, true);
+                            }
+
+                            if let Err(_) = plando.update_hub_location() {
+                                let _ = plando.place_start_location(Plando::get_ship_start());
+                                error_modal_message = Some("The logical hub was blocked. Start location is defaulted to ship".to_string());
+                            }
+
+                            plando.auto_update_spoiler = update;
+                            if update {
+                                plando.update_spoiler_data();
+                            }
                         }
                     });
                     ui.menu_button("Settings", |ui| {
@@ -2122,7 +2155,12 @@ fn main() {
                         ui.end_row();
 
                         ui.label("ROM Path").on_hover_text("Path to your vanilla Super Metroid ROM");
-                        let rom_path_text = if settings.rom_path.is_empty() { "Empty".to_string() } else { settings.rom_path.clone() };
+                        let mut rom_path_text = if settings.rom_path.is_empty() { "Empty".to_string() } else { settings.rom_path.clone() };
+                        let old_str_len = rom_path_text.len();
+                        rom_path_text.truncate(32);
+                        if old_str_len > 32 {
+                            rom_path_text += "...";
+                        }
                         if ui.button(rom_path_text).clicked() {
                             let file_opt = FileDialog::new().add_filter("Snes ROM", &["smc", "sfc"]).set_directory("/").pick_file();
                             if let Some(file) = file_opt {
@@ -2141,6 +2179,13 @@ fn main() {
                             settings.spoiler_auto_update = default.spoiler_auto_update;
                         }
                         plando.auto_update_spoiler = settings.spoiler_auto_update;
+                        ui.end_row();
+
+                        ui.label("Disable logic").on_hover_text("Does not gray out unreachable locations. Useful for modelling out-of-logic");
+                        ui.checkbox(&mut settings.disable_logic, "Disable logic");
+                        if ui.add_enabled(settings.disable_logic != default.disable_logic, egui::Button::new("Reset")).clicked() {
+                            settings.disable_logic = default.disable_logic;
+                        }
                         ui.end_row();
                     });
                     ui.horizontal(|ui| {
