@@ -1,6 +1,6 @@
 use {
     anyhow::{anyhow, bail, Context, Result}, egui_sfml::{egui::{self, Color32, Id, Sense, TextureId, Vec2}, SfEgui, UserTexSource}, flate2::read::GzDecoder, hashbrown::HashMap, maprando::{
-        customize::{mosaic::MosaicTheme, ControllerButton, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, MusicSettings, PaletteTheme, ShakingSetting, TileTheme}, patch::Rom, randomize::SpoilerRouteEntry, settings::{DoorLocksSize, DoorsMode, ItemDotChange, MapStationReveal, MapsRevealed, RandomizerSettings, SaveAnimals, StartingItemsPreset, WallJump}
+        customize::{mosaic::MosaicTheme, ControllerButton, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, MusicSettings, PaletteTheme, ShakingSetting, TileTheme}, patch::Rom, randomize::SpoilerRouteEntry, settings::{DoorLocksSize, DoorsMode, ItemDotChange, MapStationReveal, MapsRevealed, RandomizerSettings, SaveAnimals, WallJump}
     }, maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType}, plando::{DoubleItemPlacement, MapRepositoryType, Placeable, Plando, ITEM_VALUES}, rfd::FileDialog, serde::{Deserialize, Serialize}, sfml::{
         cpp::FBox, graphics::{
             self, Color, FloatRect, IntRect, PrimitiveType, RenderStates, RenderTarget, RenderWindow, Shape, Transformable, Vertex
@@ -11,6 +11,7 @@ use {
 };
 
 mod plando;
+mod layout;
 
 #[derive(Clone)]
 struct RoomData {
@@ -24,12 +25,27 @@ struct RoomData {
 }
 
 #[derive(Serialize, Deserialize)]
+#[serde(default)]
 struct Settings {
     mouse_click_pos_tolerance: i32,
     mouse_click_delay_tolerance: i32,
     rom_path: String,
     spoiler_auto_update: bool,
-    customization: Customization
+    customization: Customization,
+    last_logic_preset: Option<RandomizerSettings>,
+}
+
+impl Default for Settings {
+    fn default() -> Settings {
+        Settings {
+            mouse_click_pos_tolerance: 5,
+            mouse_click_delay_tolerance: 60,
+            rom_path: String::new(),
+            spoiler_auto_update: true,
+            customization: Customization::default(),
+            last_logic_preset: None
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Copy)]
@@ -224,18 +240,6 @@ impl Customization {
     }
 }
 
-impl Default for Settings {
-    fn default() -> Settings {
-        Settings {
-            mouse_click_pos_tolerance: 5,
-            mouse_click_delay_tolerance: 60,
-            rom_path: String::new(),
-            spoiler_auto_update: true,
-            customization: Customization::default()
-        }
-    }
-}
-
 fn load_vanilla_rom(rom_path: &Path) -> Result<Rom> {
     let rom_data = std::fs::read(rom_path)?;
     let rom = Rom::new(rom_data);
@@ -283,7 +287,7 @@ struct SeedData {
 
 fn save_settings(settings: &Settings, path: &Path) -> Result<()> {
     let mut file = File::create(path)?;
-    let data = serde_json::to_string(&settings)?;
+    let data = serde_json::to_string_pretty(&settings)?;
     file.write_all(data.as_bytes())?;
     Ok(())
 }
@@ -417,7 +421,7 @@ fn load_map(plando: &mut Plando, path: &Path) -> Result<()> {
 }
 
 fn save_preset(preset: &RandomizerSettings) -> Result<()> {
-    let str = serde_json::to_string(preset)?;
+    let str = serde_json::to_string_pretty(preset)?;
     let dir = Path::new("./data/presets/full-settings/");
     let path = dir.join(preset.name.as_ref().unwrap());
     let mut file = File::create(path)?;
@@ -953,6 +957,9 @@ fn main() {
     let settings_path = Path::new("../plando_settings.json");
     let mut settings = load_settings(settings_path).unwrap_or_default();
     plando.auto_update_spoiler = settings.spoiler_auto_update;
+    if let Some(preset) = &settings.last_logic_preset {
+        plando.load_preset(preset.clone());
+    }
 
     let mut rom_vanilla = load_vanilla_rom(&Path::new(&settings.rom_path)).ok();
 
@@ -1029,24 +1036,7 @@ fn main() {
         }
     }
 
-    // Add Samus Sprite Textures to egui
-    /*const TEX_SAMUS_START: u64 = 100;
-    {
-        let sprite_dir = Path::new("../MapRandoSprites/");
-        let mut i = 0;
-        for category in &plando.samus_sprite_categories {
-            for sprite in &category.sprites {
-                let sprite_path = sprite_dir.join(&sprite.name).join(".png");
-                let img = graphics::Image::from_file(sprite_path.as_os_str().to_str().unwrap()).unwrap();
-                let tex = graphics::Texture::from_image(&img, IntRect::new(439, 143, 32, 56)).unwrap();
-
-                user_tex_source.add_texture(TEX_SAMUS_START + i, tex);
-                i += 1;
-            }
-        }
-    }*/
-
-    let mut cur_setting_preset = plando.randomizer_settings.clone();
+    let mut cur_settings = plando.randomizer_settings.clone();
     enum CustomizeLogicWindow {
         None, SkillAssumption, ItemProgression, Qol, Objectives
     }
@@ -1659,7 +1649,7 @@ fn main() {
         }
 
         // Draw Menu Bar
-        let gui = sfegui.run(&mut window, |_rt, ctx| {
+        let gui = sfegui.run(&mut window, |rt, ctx| {
             egui::TopBottomPanel::top("menu_file_main").show(ctx, |ui| {
                 egui::menu::bar(ui, |ui| {
                     ui.menu_button("File", |ui| {
@@ -2412,18 +2402,18 @@ fn main() {
                     // Settings preset
                     ui.horizontal(|ui| {
                         ui.label("Settings preset");
-                        let combo_text = match &cur_setting_preset.name {
+                        let combo_text = match &cur_settings.name {
                             None => "Select a preset to automatically fill all settings".to_string(),
                             Some(name) => name.clone()
                         };
                         egui::ComboBox::from_id_salt("combo_logic_preset").selected_text(combo_text).show_ui(ui, |ui| {
-                            if ui.selectable_label(cur_setting_preset.name.is_none(), "Select a preset to automatically fill all settings").clicked() {
-                                cur_setting_preset.name = None;
+                            if ui.selectable_label(cur_settings.name.is_none(), "Select a preset to automatically fill all settings").clicked() {
+                                cur_settings.name = None;
                             }
                             ui.separator();
                             for preset in &plando.preset_data.full_presets {
-                                if ui.selectable_label(cur_setting_preset.name.as_ref().is_some_and(|x| *x == *preset.name.as_ref().unwrap()), preset.name.as_ref().unwrap().clone()).clicked() {
-                                    cur_setting_preset = preset.clone();
+                                if ui.selectable_label(cur_settings.name.as_ref().is_some_and(|x| *x == *preset.name.as_ref().unwrap()), preset.name.as_ref().unwrap().clone()).clicked() {
+                                    cur_settings = preset.clone();
                                 }
                             }
                         });
@@ -2432,8 +2422,8 @@ fn main() {
                         // Skill assumptions
                         ui.label("Skill assumptions");
                         for preset in &plando.preset_data.skill_presets {
-                            if ui.selectable_label(cur_setting_preset.skill_assumption_settings == *preset, preset.preset.as_ref().unwrap()).clicked() {
-                                cur_setting_preset.skill_assumption_settings = preset.clone();
+                            if ui.selectable_label(cur_settings.skill_assumption_settings == *preset, preset.preset.as_ref().unwrap()).clicked() {
+                                cur_settings.skill_assumption_settings = preset.clone();
                             }
                         }
                         if ui.button("Custom").clicked() {
@@ -2444,8 +2434,8 @@ fn main() {
                         // Item progression
                         ui.label("Item Progression").on_hover_text("These presets are mostly visual (except for Desolate), as they affect item progression");
                         for preset in &plando.preset_data.item_progression_presets {
-                            if ui.selectable_label(cur_setting_preset.item_progression_settings == *preset, preset.preset.as_ref().unwrap()).clicked() {
-                                cur_setting_preset.item_progression_settings = preset.clone();
+                            if ui.selectable_label(cur_settings.item_progression_settings == *preset, preset.preset.as_ref().unwrap()).clicked() {
+                                cur_settings.item_progression_settings = preset.clone();
                             }
                         }
                         if ui.button("Custom").clicked() {
@@ -2456,8 +2446,8 @@ fn main() {
                         // Quality of Life
                         ui.label("Quality-of-life options");
                         for preset in &plando.preset_data.quality_of_life_presets {
-                            if ui.selectable_label(cur_setting_preset.quality_of_life_settings == *preset, preset.preset.as_ref().unwrap()).clicked() {
-                                cur_setting_preset.quality_of_life_settings = preset.clone();
+                            if ui.selectable_label(cur_settings.quality_of_life_settings == *preset, preset.preset.as_ref().unwrap()).clicked() {
+                                cur_settings.quality_of_life_settings = preset.clone();
                             }
                         }
                         if ui.button("Custom").clicked() {
@@ -2468,8 +2458,8 @@ fn main() {
                         // Objectives
                         ui.label("Objectives");
                         for preset in &plando.preset_data.objective_presets {
-                            if ui.selectable_label(cur_setting_preset.objective_settings == *preset, preset.preset.as_ref().unwrap()).clicked() {
-                                cur_setting_preset.objective_settings = preset.clone();
+                            if ui.selectable_label(cur_settings.objective_settings == *preset, preset.preset.as_ref().unwrap()).clicked() {
+                                cur_settings.objective_settings = preset.clone();
                             }
                         }
                         if ui.button("Custom").clicked() {
@@ -2479,342 +2469,114 @@ fn main() {
 
                         // Doors
                         ui.label("Doors");
-                        ui.selectable_value(&mut cur_setting_preset.doors_mode, DoorsMode::Blue, "Blue");
-                        ui.selectable_value(&mut cur_setting_preset.doors_mode, DoorsMode::Ammo, "Ammo");
-                        ui.selectable_value(&mut cur_setting_preset.doors_mode, DoorsMode::Beam, "Beam");
+                        ui.selectable_value(&mut cur_settings.doors_mode, DoorsMode::Blue, "Blue");
+                        ui.selectable_value(&mut cur_settings.doors_mode, DoorsMode::Ammo, "Ammo");
+                        ui.selectable_value(&mut cur_settings.doors_mode, DoorsMode::Beam, "Beam");
                         ui.end_row();
 
                         // Save the animals
                         ui.label("Save the animals");
-                        ui.selectable_value(&mut cur_setting_preset.save_animals, SaveAnimals::No, "No");
-                        ui.selectable_value(&mut cur_setting_preset.save_animals, SaveAnimals::Yes, "Yes");
-                        ui.selectable_value(&mut cur_setting_preset.save_animals, SaveAnimals::Optional, "Optional");
+                        ui.selectable_value(&mut cur_settings.save_animals, SaveAnimals::No, "No");
+                        ui.selectable_value(&mut cur_settings.save_animals, SaveAnimals::Yes, "Yes");
+                        ui.selectable_value(&mut cur_settings.save_animals, SaveAnimals::Optional, "Optional");
                         ui.end_row();
 
                         // Collectible Walljump
                         ui.label("Wall Jump");
-                        ui.selectable_value(&mut cur_setting_preset.other_settings.wall_jump, WallJump::Vanilla, "Vanilla");
-                        ui.selectable_value(&mut cur_setting_preset.other_settings.wall_jump, WallJump::Collectible, "Collectible");
+                        ui.selectable_value(&mut cur_settings.other_settings.wall_jump, WallJump::Vanilla, "Vanilla");
+                        ui.selectable_value(&mut cur_settings.other_settings.wall_jump, WallJump::Collectible, "Collectible");
                         ui.end_row();
 
                         // Item dots after collection
                         ui.label("Item dots after collection");
-                        ui.selectable_value(&mut cur_setting_preset.other_settings.item_dot_change, ItemDotChange::Fade, "Fade");
-                        ui.selectable_value(&mut cur_setting_preset.other_settings.item_dot_change, ItemDotChange::Disappear, "Disappear");
+                        ui.selectable_value(&mut cur_settings.other_settings.item_dot_change, ItemDotChange::Fade, "Fade");
+                        ui.selectable_value(&mut cur_settings.other_settings.item_dot_change, ItemDotChange::Disappear, "Disappear");
                         ui.end_row();
 
                         // Area transition markers
                         ui.label("Area transition markers on map");
-                        ui.selectable_value(&mut cur_setting_preset.other_settings.transition_letters, false, "Arrows");
-                        ui.selectable_value(&mut cur_setting_preset.other_settings.transition_letters, true, "Letters");
+                        ui.selectable_value(&mut cur_settings.other_settings.transition_letters, false, "Arrows");
+                        ui.selectable_value(&mut cur_settings.other_settings.transition_letters, true, "Letters");
                         ui.end_row();
 
                         // Door locks size
                         ui.label("Door locks size on map");
-                        ui.selectable_value(&mut cur_setting_preset.other_settings.door_locks_size, DoorLocksSize::Small, "Small");
-                        ui.selectable_value(&mut cur_setting_preset.other_settings.door_locks_size, DoorLocksSize::Large, "Large");
+                        ui.selectable_value(&mut cur_settings.other_settings.door_locks_size, DoorLocksSize::Small, "Small");
+                        ui.selectable_value(&mut cur_settings.other_settings.door_locks_size, DoorLocksSize::Large, "Large");
                         ui.end_row();
 
                         // Maps revealed from start
                         ui.label("Maps revealed from start");
-                        ui.selectable_value(&mut cur_setting_preset.other_settings.maps_revealed, MapsRevealed::No, "No");
-                        ui.selectable_value(&mut cur_setting_preset.other_settings.maps_revealed, MapsRevealed::Partial, "Partial");
-                        ui.selectable_value(&mut cur_setting_preset.other_settings.maps_revealed, MapsRevealed::Full, "Full");
+                        ui.selectable_value(&mut cur_settings.other_settings.maps_revealed, MapsRevealed::No, "No");
+                        ui.selectable_value(&mut cur_settings.other_settings.maps_revealed, MapsRevealed::Partial, "Partial");
+                        ui.selectable_value(&mut cur_settings.other_settings.maps_revealed, MapsRevealed::Full, "Full");
                         ui.end_row();
 
                         // Map station reveal
                         ui.label("Map station activation reveal");
-                        ui.selectable_value(&mut cur_setting_preset.other_settings.map_station_reveal, MapStationReveal::Partial, "Partial");
-                        ui.selectable_value(&mut cur_setting_preset.other_settings.map_station_reveal, MapStationReveal::Full, "Full");
+                        ui.selectable_value(&mut cur_settings.other_settings.map_station_reveal, MapStationReveal::Partial, "Partial");
+                        ui.selectable_value(&mut cur_settings.other_settings.map_station_reveal, MapStationReveal::Full, "Full");
                         ui.end_row();
 
                         // Energy free shinesparks
                         ui.label("Energy-free shinesparks");
-                        ui.selectable_value(&mut cur_setting_preset.other_settings.energy_free_shinesparks, false, "No");
-                        ui.selectable_value(&mut cur_setting_preset.other_settings.energy_free_shinesparks, true, "Yes");
+                        ui.selectable_value(&mut cur_settings.other_settings.energy_free_shinesparks, false, "No");
+                        ui.selectable_value(&mut cur_settings.other_settings.energy_free_shinesparks, true, "Yes");
                         ui.end_row();
 
                         // Ultra low qol
                         ui.label("Ultra-low quality of life");
-                        ui.selectable_value(&mut cur_setting_preset.other_settings.ultra_low_qol, false, "No");
-                        if ui.selectable_label(cur_setting_preset.other_settings.ultra_low_qol, "Yes").clicked() {
-                            cur_setting_preset.other_settings.ultra_low_qol = true;
-                            cur_setting_preset.quality_of_life_settings = plando.preset_data.quality_of_life_presets.iter().find(
+                        ui.selectable_value(&mut cur_settings.other_settings.ultra_low_qol, false, "No");
+                        if ui.selectable_label(cur_settings.other_settings.ultra_low_qol, "Yes").clicked() {
+                            cur_settings.other_settings.ultra_low_qol = true;
+                            cur_settings.quality_of_life_settings = plando.preset_data.quality_of_life_presets.iter().find(
                                 |x| x.preset.as_ref().is_some_and(|x| *x == "Off".to_string())
                             ).unwrap().clone();
                         }
                     });
                     // Save preset
-                    if cur_setting_preset.name.is_none() {
-                        cur_setting_preset.name = Some(String::new());
+                    if cur_settings.name.is_none() {
+                        cur_settings.name = Some(String::new());
                     }
                     ui.horizontal(|ui| {
                         ui.label("Save preset as");
-                        ui.text_edit_singleline(cur_setting_preset.name.as_mut().unwrap());
+                        ui.text_edit_singleline(cur_settings.name.as_mut().unwrap());
                     });
                     ui.end_row();
 
                     // Apply / Save / Cancel
                     ui.horizontal(|ui| {
                         if ui.button("Apply").clicked() {
-                            plando.load_preset(cur_setting_preset.clone());
+                            plando.load_preset(cur_settings.clone());
+                            settings.last_logic_preset = Some(cur_settings.clone());
                             customize_logic_open = false;
                         }
-                        if ui.button("Save to file").clicked() && cur_setting_preset.name.as_ref().is_some_and(|x| !x.is_empty()) {
-                            if let Err(err) = save_preset(&cur_setting_preset) {
+                        if ui.button("Save to file").clicked() && cur_settings.name.as_ref().is_some_and(|x| !x.is_empty()) {
+                            if let Err(err) = save_preset(&cur_settings) {
                                 error_modal_message = Some(err.to_string());
                             }
                         }
                         if ui.button("Cancel").clicked() {
-                            cur_setting_preset = plando.randomizer_settings.clone();
+                            cur_settings = plando.randomizer_settings.clone();
                             customize_logic_open = false;
                         }
                     });
                 });
 
+                let height = rt.size().y as f32 * 0.9;
                 match cur_customize_logic_window {
                     CustomizeLogicWindow::None => {}
                     CustomizeLogicWindow::SkillAssumption => {
-                        egui::Window::new("Customize Skill Assumptions").collapsible(false).vscroll(true).default_height(_rt.size().y as f32 * 0.9).resizable(false).open(&mut is_customize_window_open).show(ctx, |ui| {
-                            ui.label("Tech and notable strats");
-                            for diff in &plando.preset_data.difficulty_levels.keys {
-                                if *diff == "Implicit" {
-                                    continue;
-                                }
-                                let tech = &plando.preset_data.tech_by_difficulty[diff];
-                                let notables = &plando.preset_data.notables_by_difficulty[diff];
-                                let total = tech.len() + notables.len();
-                                let sel_tech_count = cur_setting_preset.skill_assumption_settings.tech_settings.iter().filter(
-                                    |x| x.enabled && plando.preset_data.tech_data_map[&x.id].difficulty == *diff
-                                ).count();
-                                let sel_notable_count = cur_setting_preset.skill_assumption_settings.notable_settings.iter().filter(
-                                    |x| x.enabled && plando.preset_data.notable_data_map[&(x.room_id, x.notable_id)].difficulty == *diff
-                                ).count();
-                                let sel_total = sel_tech_count + sel_notable_count;
-                                let percentage = (100.0 * sel_total as f32 / total as f32).round() as i32;
-
-                                let label = format!("{}, ({}%)", diff, percentage);
-                                ui.collapsing(label, |ui| {
-                                    egui::Grid::new(format!("grid_tech_{diff}")).num_columns(3).show(ui, |ui| {
-                                        for &id in &plando.preset_data.tech_by_difficulty[diff] {
-                                            let entry = cur_setting_preset.skill_assumption_settings.tech_settings.iter_mut().find(
-                                                |x| x.id == id
-                                            );
-                                            if entry.is_none() {
-                                                continue;
-                                            }
-                                            let entry = entry.unwrap();
-                                            ui.label(&entry.name);
-                                            ui.selectable_value(&mut entry.enabled, false, "No");
-                                            ui.selectable_value(&mut entry.enabled, true, "Yes");
-                                            ui.end_row();
-                                        }
-                                    });
-                                    ui.separator();
-                                    ui.label("Notable strats");
-                                    egui::Grid::new(format!("grid_notable_{diff}")).num_columns(3).show(ui, |ui| {
-                                        for &id in &plando.preset_data.notables_by_difficulty[diff] {
-                                            let entry = cur_setting_preset.skill_assumption_settings.notable_settings.iter_mut().find(
-                                                |x| x.room_id == id.0 && x.notable_id == id.1
-                                            );
-                                            if entry.is_none() {
-                                                continue;
-                                            }
-                                            let entry = entry.unwrap();
-                                            ui.label(format!("{}: {}", entry.room_name, entry.notable_name));
-                                            ui.selectable_value(&mut entry.enabled, false, "No");
-                                            ui.selectable_value(&mut entry.enabled, true, "Yes");
-                                            ui.end_row();
-                                        }
-                                    });
-                                });
-                            }
-
-                            ui.separator();
-                            ui.label("Leniencies");
-                            egui::Grid::new("skill_general_leniency").num_columns(2).show(ui, |ui| {
-                                ui.label("Heat damage multiplier");
-                                ui.add(egui::DragValue::new(&mut cur_setting_preset.skill_assumption_settings.resource_multiplier).speed(0.05).max_decimals(2).range(1.0..=10.0));
-                                ui.end_row();
-
-                                ui.label("Escape time multiplier");
-                                ui.add(egui::DragValue::new(&mut cur_setting_preset.skill_assumption_settings.escape_timer_multiplier).speed(0.05).max_decimals(2).range(0.0..=1000.0));
-                                ui.end_row();
-
-                                ui.label("Gate glitch leniency");
-                                ui.add(egui::DragValue::new(&mut cur_setting_preset.skill_assumption_settings.gate_glitch_leniency).speed(0.05).range(0..=1000));
-                                ui.end_row();
-
-                                ui.label("Shinecharge tiles");
-                                ui.add(egui::DragValue::new(&mut cur_setting_preset.skill_assumption_settings.shinespark_tiles).speed(0.1).range(0.0..=1000.0));
-                                ui.end_row();
-
-                                ui.label("Heated Shinecharge tiles");
-                                ui.add(egui::DragValue::new(&mut cur_setting_preset.skill_assumption_settings.heated_shinespark_tiles).speed(0.1).range(0.0..=1000.0));
-                                ui.end_row();
-
-                                ui.label("Speedball tiles");
-                                ui.add(egui::DragValue::new(&mut cur_setting_preset.skill_assumption_settings.speed_ball_tiles).speed(0.1).range(0.0..=1000.0));
-                                ui.end_row();
-
-                                ui.label("Shinecharge leniency frames");
-                                ui.add(egui::DragValue::new(&mut cur_setting_preset.skill_assumption_settings.shinecharge_leniency_frames).speed(0.1).range(0..=1000));
-                                ui.end_row();
-
-                                ui.label("Door stuck leniency");
-                                ui.add(egui::DragValue::new(&mut cur_setting_preset.skill_assumption_settings.door_stuck_leniency).speed(0.1).range(0..=1000));
-                                ui.end_row();
-
-                                ui.label("Bomb into Crystal Flash leniency");
-                                ui.add(egui::DragValue::new(&mut cur_setting_preset.skill_assumption_settings.bomb_into_cf_leniency).speed(0.1).range(0..=1000));
-                                ui.end_row();
-
-                                ui.label("Jump into Crystal Flash leniency");
-                                ui.add(egui::DragValue::new(&mut cur_setting_preset.skill_assumption_settings.jump_into_cf_leniency).speed(0.1).range(0..=1000));
-                                ui.end_row();
-
-                                ui.label("Spike X-Mode setup leniency");
-                                ui.add(egui::DragValue::new(&mut cur_setting_preset.skill_assumption_settings.spike_xmode_leniency).speed(0.1).range(0..=1000));
-                                ui.end_row();
-                            });
-
-                            ui.separator();
-                            ui.label("Boss proficiency");
-                            egui::Grid::new("skill_boss_proficiency").num_columns(2).show(ui, |ui| {
-                                ui.label("Phantoon Proficiency");
-                                ui.add(egui::DragValue::new(&mut cur_setting_preset.skill_assumption_settings.phantoon_proficiency).speed(0.05).max_decimals(2).range(0.0..=1.0));
-                                ui.end_row();
-
-                                ui.label("Draygon Proficiency");
-                                ui.add(egui::DragValue::new(&mut cur_setting_preset.skill_assumption_settings.draygon_proficiency).speed(0.05).max_decimals(2).range(0.0..=1.0));
-                                ui.end_row();
-
-                                ui.label("Ridley Proficiency");
-                                ui.add(egui::DragValue::new(&mut cur_setting_preset.skill_assumption_settings.ridley_proficiency).speed(0.05).max_decimals(2).range(0.0..=1.0));
-                                ui.end_row();
-
-                                ui.label("Botwoon Proficiency");
-                                ui.add(egui::DragValue::new(&mut cur_setting_preset.skill_assumption_settings.botwoon_proficiency).speed(0.05).max_decimals(2).range(0.0..=1.0));
-                                ui.end_row();
-
-                                ui.label("Mother Brain Proficiency");
-                                ui.add(egui::DragValue::new(&mut cur_setting_preset.skill_assumption_settings.mother_brain_proficiency).speed(0.05).max_decimals(2).range(0.0..=1.0));
-                                ui.end_row();
-                            });
-                        });
+                        layout::window_skill_assumptions(height, &mut is_customize_window_open, &mut cur_settings, &plando.preset_data, ctx);
                     }
                     CustomizeLogicWindow::ItemProgression => {
-                        egui::Window::new("Customize Item Progression").collapsible(false).vscroll(true).default_height(_rt.size().y as f32 * 0.9).resizable(false).open(&mut is_customize_window_open).show(ctx, |ui| {
-                            ui.horizontal(|ui| {
-                                ui.label("Ammo collection fraction");
-                                ui.add(egui::DragValue::new(&mut cur_setting_preset.item_progression_settings.ammo_collect_fraction).speed(0.05).range(0.0..=1.0));
-                            });
-                            let pool_full = cur_setting_preset.item_progression_settings.item_pool.iter().all(
-                                |x| match x.item {
-                                    Item::Missile => x.count == 46,
-                                    Item::ETank => x.count == 14,
-                                    Item::ReserveTank => x.count == 4,
-                                    Item::Super => x.count == 10,
-                                    Item::PowerBomb => x.count == 10,
-                                    _ => true
-                                }
-                            );
-                            ui.separator();
-                            // Item pool
-                            ui.horizontal(|ui| {
-                                ui.label("Item pool");
-                                if ui.selectable_label(pool_full, "Full").clicked() {
-                                    cur_setting_preset.item_progression_settings.item_pool.iter_mut().for_each(
-                                        |x| match x.item {
-                                            Item::Missile => x.count = 46,
-                                            Item::ETank => x.count = 14,
-                                            Item::ReserveTank => x.count = 4,
-                                            Item::Super => x.count = 10,
-                                            Item::PowerBomb => x.count = 10,
-                                            _ => {}
-                                        }
-                                    );
-                                }
-                                if ui.selectable_label(!pool_full, "Reduced").clicked() {
-                                    cur_setting_preset.item_progression_settings.item_pool.iter_mut().for_each(
-                                        |x| match x.item {
-                                            Item::Missile => x.count = 12,
-                                            Item::ETank => x.count = 3,
-                                            Item::ReserveTank => x.count = 3,
-                                            Item::Super => x.count = 6,
-                                            Item::PowerBomb => x.count = 5,
-                                            _ => {}
-                                        }
-                                    );
-                                }
-                            });
-                            egui::Grid::new("grid_item_pool").num_columns(2).show(ui, |ui| {
-                                for item in &mut cur_setting_preset.item_progression_settings.item_pool {
-                                    ui.label(Placeable::from_item(item.item).to_string());
-                                    ui.add(egui::DragValue::new(&mut item.count).speed(0.1).range(0..=match item.item {
-                                        Item::ETank => 14,
-                                        Item::ReserveTank => 4,
-                                        _ => 100
-                                    }));
-                                    ui.end_row();
-                                }
-                            });
-                            ui.separator();
-
-                            // Starting items
-                            ui.horizontal(|ui| {
-                                let item_start_count: usize = cur_setting_preset.item_progression_settings.starting_items.iter().map(
-                                    |x| x.count
-                                ).sum();
-
-                                ui.label("Starting items");
-                                if ui.selectable_label(item_start_count == 0, "None").clicked() {
-                                    cur_setting_preset.item_progression_settings.starting_items_preset = Some(StartingItemsPreset::None);
-                                    cur_setting_preset.item_progression_settings.starting_items.iter_mut().for_each(
-                                        |x| x.count = 0
-                                    );
-                                }
-                                if ui.selectable_label(item_start_count == 100, "All").clicked() {
-                                    cur_setting_preset.item_progression_settings.starting_items_preset = Some(StartingItemsPreset::All);
-                                    cur_setting_preset.item_progression_settings.starting_items.iter_mut().for_each(
-                                        |x| x.count = match x.item {
-                                            Item::Missile => 46,
-                                            Item::ETank => 14,
-                                            Item::ReserveTank => 4,
-                                            Item::Super => 10,
-                                            Item::PowerBomb => 10,
-                                            _ => 1
-                                        }
-                                    );
-                                }
-                            });
-
-                            egui::Grid::new("grid_start_items").num_columns(3).show(ui, |ui| {
-                                for item in &mut cur_setting_preset.item_progression_settings.starting_items {
-                                    ui.label(Placeable::from_item(item.item).to_string());
-                                    if item.item.is_unique() {
-                                        ui.selectable_value(&mut item.count, 0, "No");
-                                        ui.selectable_value(&mut item.count, 1, "Yes");
-                                    } else {
-                                        ui.add(egui::DragValue::new(&mut item.count).speed(0.1).range(0..=match item.item {
-                                            Item::ETank => 14,
-                                            Item::ReserveTank => 4,
-                                            _ => 100
-                                        }));
-                                    }
-                                }
-                            });
-                        });
+                        layout::window_item_progression(height, &mut is_customize_window_open, &mut cur_settings, ctx);
                     }
                     CustomizeLogicWindow::Qol => {
-                        egui::Window::new("Customize Quality of life").collapsible(false).show(ctx, |ui| {
-
-                        });
+                        layout::window_qol(height, &mut is_customize_window_open, &mut cur_settings, ctx);
                     }
                     CustomizeLogicWindow::Objectives => {
-                        egui::Window::new("Customize Objectives").collapsible(false).show(ctx, |ui| {
-
-                        });
+                        layout::window_objectives(height, &mut is_customize_window_open, &mut cur_settings, ctx);
                     }
                 };
 
