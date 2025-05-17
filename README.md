@@ -1,16 +1,3 @@
-Checklist:
+maprando-plando is a WiP Super Metroid Plandomizer dependent on https://github.com/blkerby/MapRandomizer
 
--Render Door ghosts [Check for randomizable tiles only]
--Auto-place remaining fillers [Only missiles for now]
--Make spoiler updates asynchronous
--Exit confirmation
--Add UI Customization [Added framework, just needs options]
--Eat UI Inputs by reverse order
--Adjustable UI Size
-
-Minor Bugs:
--Map Draw is 85% of render calculation
--Render toilet correctly
--Fix Terminator Room rendering
--Fix Statues Elevator having water inside the elevator
--Pit Room Objectives not rendering
+Credits go out to the MapRandomizer dev-team, the team behind the sm-json-data project (https://github.com/vg-json-data/sm-json-data), the Mosaic Tilesets team (https://github.com/blkerby/Mosaic/) and the custom Samus sprite artists.
