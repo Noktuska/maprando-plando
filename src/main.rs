@@ -1307,7 +1307,7 @@ fn main() {
                 let (x, y) = plando.map.rooms[data.room_idx];
                 let room_geometry = &plando.game_data.room_geometry[data.room_idx];
 
-                let is_objective = obj_room_map.get(&data.room_id).is_some_and(
+                let is_objective = data.room_id == 238 || obj_room_map.get(&data.room_id).is_some_and(
                     |obj| plando.objectives.contains(obj)
                 );
 
