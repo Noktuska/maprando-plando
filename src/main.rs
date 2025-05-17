@@ -451,7 +451,7 @@ fn download_map_repos() -> Result<()> {
 }
 
 fn check_update() -> Result<()> {
-    let cur_ver = "0.0.9";
+    let cur_ver = cargo_crate_version!();
 
     println!("Checking for updates...");
     let releases = self_update::backends::github::ReleaseList::configure()
