@@ -34,7 +34,8 @@ struct Settings {
     customization: Customization,
     last_logic_preset: Option<RandomizerSettings>,
     disable_logic: bool,
-    auto_update: bool
+    auto_update: bool,
+    disable_bg_grid: bool
 }
 
 impl Default for Settings {
@@ -47,7 +48,8 @@ impl Default for Settings {
             customization: Customization::default(),
             last_logic_preset: None,
             disable_logic: false,
-            auto_update: true
+            auto_update: true,
+            disable_bg_grid: false,
         }
     }
 }
@@ -1049,6 +1051,9 @@ fn main() {
     let (atlas_img, room_data) = load_room_sprites(&plando.game_data).unwrap();
     let atlas_tex = graphics::Texture::from_image(&atlas_img, IntRect::default()).unwrap();
 
+    let mut tex_grid = graphics::Texture::from_file("../visualizer/grid.png").unwrap();
+    tex_grid.set_repeated(true);
+
     let mut img_obj = graphics::Image::new_solid(8, 8, Color::TRANSPARENT).unwrap();
     let img_obj_mask = get_special_room_mask(SpecialRoom::Objective);
     for y in 0..8 {
@@ -1290,6 +1295,12 @@ fn main() {
         let mut info_overlay_opt: Option<String> = None;
         // Don't render map if we're patching from a seed file to not spoiler the user
         if !reset_after_patch {
+            // Draw background grid
+            if !settings.disable_bg_grid {
+                let spr_bg_grid = graphics::Sprite::with_texture_and_rect(&tex_grid, IntRect::new(0, 0, 8 * 75, 8 * 75));
+                window.draw_with_renderstates(&spr_bg_grid, &states);
+            }
+
             // Draw the entire map
             for i in 0..room_data.len() {
                 let data = &room_data[i];
@@ -2293,6 +2304,13 @@ fn main() {
                         ui.checkbox(&mut settings.disable_logic, "Disable logic");
                         if ui.add_enabled(settings.disable_logic != default.disable_logic, egui::Button::new("Reset")).clicked() {
                             settings.disable_logic = default.disable_logic;
+                        }
+                        ui.end_row();
+
+                        ui.label("Disable background grid").on_hover_text("Disables the grid of dotted lines making up the background");
+                        ui.checkbox(&mut settings.disable_bg_grid, "Disable background grid");
+                        if ui.add_enabled(settings.disable_bg_grid != default.disable_bg_grid, egui::Button::new("Reset")).clicked() {
+                            settings.disable_bg_grid = default.disable_bg_grid;
                         }
                         ui.end_row();
 
