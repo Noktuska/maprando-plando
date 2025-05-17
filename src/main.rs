@@ -1,6 +1,6 @@
 use {
     anyhow::{anyhow, bail, Context, Result}, egui_sfml::{egui::{self, Color32, Id, Sense, TextureId, Vec2}, SfEgui, UserTexSource}, flate2::read::GzDecoder, hashbrown::HashMap, maprando::{
-        customize::{mosaic::MosaicTheme, ControllerButton, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, MusicSettings, PaletteTheme, ShakingSetting, TileTheme}, patch::Rom, randomize::SpoilerRouteEntry, settings::{DoorLocksSize, DoorsMode, ItemDotChange, MapStationReveal, MapsRevealed, RandomizerSettings, SaveAnimals, WallJump}
+        customize::{mosaic::MosaicTheme, ControllerButton, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, MusicSettings, PaletteTheme, ShakingSetting, TileTheme}, patch::Rom, randomize::SpoilerRouteEntry, settings::{DoorLocksSize, DoorsMode, ItemDotChange, MapStationReveal, MapsRevealed, Objective, ObjectiveSetting, RandomizerSettings, SaveAnimals, WallJump}
     }, maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType}, plando::{DoubleItemPlacement, MapRepositoryType, Placeable, Plando, ITEM_VALUES}, rand::RngCore, rfd::FileDialog, self_update::cargo_crate_version, serde::{Deserialize, Serialize}, sfml::{
         cpp::FBox, graphics::{
             self, Color, FloatRect, IntRect, PrimitiveType, RenderStates, RenderTarget, RenderWindow, Shape, Transformable, Vertex
@@ -33,7 +33,8 @@ struct Settings {
     spoiler_auto_update: bool,
     customization: Customization,
     last_logic_preset: Option<RandomizerSettings>,
-    disable_logic: bool
+    disable_logic: bool,
+    auto_update: bool
 }
 
 impl Default for Settings {
@@ -45,7 +46,8 @@ impl Default for Settings {
             spoiler_auto_update: true,
             customization: Customization::default(),
             last_logic_preset: None,
-            disable_logic: false
+            disable_logic: false,
+            auto_update: true
         }
     }
 }
@@ -646,12 +648,15 @@ fn load_room_sprites(game_data: &GameData) -> Result<(FBox<graphics::Image>, Vec
             let x_offset = tile.coords.0 as u32 * 8;
             let y_offset = tile.coords.1 as u32 * 8;
             
-            if let Some(liquid_level) = tile.liquid_level {
-                let start_index = (liquid_level * 8.0).round() as u32;
-                for y in start_index..8 {
-                    for x in 0..8 {
-                        if (x + y) % 2 == 0 {
-                            image.set_pixel(x_offset + x, y_offset + y, graphics::Color::BLACK)?;
+            // Don't render liquid levels in elevators
+            if !tile.special_type.is_some_and(|x| x == MapTileSpecialType::Elevator) {
+                if let Some(liquid_level) = tile.liquid_level {
+                    let start_index = (liquid_level * 8.0).round() as u32;
+                    for y in start_index..8 {
+                        for x in 0..8 {
+                            if (x + y) % 2 == 0 {
+                                image.set_pixel(x_offset + x, y_offset + y, graphics::Color::BLACK)?;
+                            }
                         }
                     }
                 }
@@ -696,9 +701,9 @@ fn load_room_sprites(game_data: &GameData) -> Result<(FBox<graphics::Image>, Vec
                             special_type == MapTileSpecialType::SlopeUpFloorLow ||
                             special_type == MapTileSpecialType::SlopeDownCeilingLow ||
                             special_type == MapTileSpecialType::SlopeDownFloorLow {
-                            |x: i32| (7.0 - (x as f32) * 0.5).floor() as i32
+                            |x: i32| 7 - ((x as f32) * 0.5).floor() as i32
                         } else {
-                            |x: i32| (3.0 - (x as f32) * 0.5).floor() as i32
+                            |x: i32| 3 - ((x as f32) * 0.5).floor() as i32
                         }
                     } else {
                         if special_type == MapTileSpecialType::SlopeUpCeilingLow ||
@@ -875,7 +880,11 @@ fn load_room_sprites(game_data: &GameData) -> Result<(FBox<graphics::Image>, Vec
             true);
     }
 
-    let (room_data, _): (Vec<_>, Vec<_>) = image_mappings.into_iter().unzip();
+    let (mut room_data, _): (Vec<_>, Vec<_>) = image_mappings.into_iter().unzip();
+
+    // Move toilet to the front so we always draw it below
+    let toilet_idx = room_data.iter().position(|x| x.room_id == 321).unwrap();
+    room_data.swap(0, toilet_idx);
 
     Ok((atlas, room_data))
 }
@@ -1015,11 +1024,6 @@ enum SpoilerType {
 }
 
 fn main() {
-    match check_update() {
-        Ok(_) => println!("Successful!"),
-        Err(err) => println!("ERR: {}", err.to_string())
-    };
-
     let work_dir = Path::new("./data/maprando-data/");
     std::env::set_current_dir(work_dir).unwrap();
 
@@ -1027,6 +1031,14 @@ fn main() {
 
     let settings_path = Path::new("../plando_settings.json");
     let mut settings = load_settings(settings_path).unwrap_or_default();
+
+    if settings.auto_update {
+        match check_update() {
+            Ok(_) => println!("Successful!"),
+            Err(err) => println!("ERR: {}", err.to_string())
+        };
+    }
+
     plando.auto_update_spoiler = settings.spoiler_auto_update;
     if let Some(preset) = &settings.last_logic_preset {
         plando.load_preset(preset.clone());
@@ -1106,6 +1118,36 @@ fn main() {
             flag_has_tex.push(flag_id);
         }
     }
+
+    let obj_room_map: HashMap<usize, Objective> = vec![
+        Objective::Kraid,
+        Objective::Phantoon,
+        Objective::Draygon,
+        Objective::Ridley,
+        Objective::SporeSpawn,
+        Objective::Crocomire,
+        Objective::Botwoon,
+        Objective::GoldenTorizo,
+        Objective::MetroidRoom1,
+        Objective::MetroidRoom2,
+        Objective::MetroidRoom3,
+        Objective::MetroidRoom4,
+        Objective::BombTorizo,
+        Objective::BowlingStatue,
+        Objective::AcidChozoStatue,
+        Objective::PitRoom,
+        Objective::BabyKraidRoom,
+        Objective::PlasmaRoom,
+        Objective::MetalPiratesRoom,
+    ].into_iter().map(
+        |obj| {
+            let flag_id = plando.game_data.flag_isv.index_by_key[obj.get_flag_name()];
+            let flag_idx = plando.game_data.flag_ids.iter().position(|x| *x == flag_id).unwrap();
+            let vertex = plando.game_data.flag_vertex_ids[flag_idx][0];
+            let vertex_info = plando.get_vertex_info(vertex);
+            (vertex_info.room_id, obj)
+        }
+    ).collect();
 
     let mut cur_settings = plando.randomizer_settings.clone();
     enum CustomizeLogicWindow {
@@ -1253,20 +1295,16 @@ fn main() {
                 let data = &room_data[i];
                 let (x, y) = plando.map.rooms[data.room_idx];
                 let room_geometry = &plando.game_data.room_geometry[data.room_idx];
-                let room_flag_idx = plando.game_data.flag_vertex_ids.iter().position(
-                    |vert_vec| plando.get_vertex_info(vert_vec[0]).room_id == data.room_id
+
+                let is_objective = obj_room_map.get(&data.room_id).is_some_and(
+                    |obj| plando.objectives.contains(obj)
                 );
-                let room_flag_id = if let Some(idx) = room_flag_idx { Some(plando.game_data.flag_ids[idx]) } else { None };
-                let is_objective = if let Some(id) = room_flag_id {
-                    data.room_id == 238 || plando.objectives.iter().any(
-                        |obj| obj.get_flag_name() == plando.game_data.flag_isv.keys[id]
-                    )
-                } else { false };
 
                 // Draw the background color
                 for (local_y, row) in room_geometry.map.iter().enumerate() {
                     for (local_x, &cell) in row.iter().enumerate() {
-                        if cell == 0 {
+                        // Ignore map tiles on toilet
+                        if cell == 0 && data.room_id != 321 {
                             continue;
                         }
 
@@ -1306,14 +1344,15 @@ fn main() {
 
                         // Draw Tile Outline
                         let sprite_tile_rect = IntRect::new(8 * (data.atlas_x_offset as i32 + local_x as i32), 8 * (data.atlas_y_offset as i32 + local_y as i32), 8, 8);
-                        let mut sprite_tile = if is_objective && get_objective_mask(data.room_id, local_x, local_y) {
-                            graphics::Sprite::with_texture(&tex_obj)
-                        } else {
-                            graphics::Sprite::with_texture_and_rect(&atlas_tex, sprite_tile_rect)
-                        };
+                        let mut sprite_tile = graphics::Sprite::with_texture_and_rect(&atlas_tex, sprite_tile_rect);
                         sprite_tile.set_position(Vector2f::new(cell_x as f32, cell_y as f32));
                         sprite_tile.set_color(Color::rgb(255 / color_div, 255 / color_div, 255 / color_div));
                         window.draw_with_renderstates(&sprite_tile, &states);
+
+                        if is_objective && get_objective_mask(data.room_id, local_x, local_y) {
+                            sprite_tile.set_texture(&tex_obj, true);
+                            window.draw_with_renderstates(&sprite_tile, &states);
+                        }
 
                         let (tex_helm_w, _, tex_helm) = user_tex_source.get_texture(Placeable::Helm as u64);
                         let mut sprite_helm = graphics::Sprite::with_texture(tex_helm);
@@ -2256,6 +2295,13 @@ fn main() {
                             settings.disable_logic = default.disable_logic;
                         }
                         ui.end_row();
+
+                        ui.label("Auto Updates").on_hover_text("Checks github for latest releases and updates to newer versions if possible");
+                        ui.checkbox(&mut settings.auto_update, "Check for update on Startup");
+                        if ui.add_enabled(settings.auto_update != default.auto_update, egui::Button::new("Reset")).clicked() {
+                            settings.auto_update = default.auto_update;
+                        }
+                        ui.end_row();
                     });
                     ui.horizontal(|ui| {
                         if ui.button("Save").clicked() {
@@ -2580,6 +2626,13 @@ fn main() {
                             cur_customize_logic_window = CustomizeLogicWindow::Objectives;
                         }
                         ui.end_row();
+
+                        // Update objective count
+                        let num_obj = cur_settings.objective_settings.objective_options.iter().filter(
+                            |x| x.setting == ObjectiveSetting::Yes
+                        ).count() as i32;
+                        cur_settings.objective_settings.min_objectives = num_obj;
+                        cur_settings.objective_settings.max_objectives = num_obj;
 
                         // Doors
                         ui.label("Doors");
