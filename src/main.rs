@@ -2034,10 +2034,10 @@ fn main() {
                             // Render Flags
                             ui.horizontal(|ui| {
                                 for i in 0..collectible_flags.len() {
-                                    if !collectible_flags[i] || !flag_has_tex.contains(&i) {
+                                    let flag_id = plando.game_data.flag_ids[i];
+                                    if !collectible_flags[i] || !flag_has_tex.contains(&flag_id) {
                                         continue;
                                     }
-                                    let flag_id = plando.game_data.flag_ids[i];
                                     let flag_tex_idx = FLAG_TEX_START + flag_id as u64;
                                     let img = egui::Image::new(user_tex_source.get_image_source(flag_tex_idx)).fit_to_exact_size(Vec2::new(24.0, 24.0)).sense(Sense::click());
                                     let resp = ui.add(img);
