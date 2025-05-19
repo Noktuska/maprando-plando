@@ -1803,7 +1803,7 @@ dependencies = [
 
 [[package]]
 name = "maprando-plando"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "crypto-hash",
