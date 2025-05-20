@@ -1,9 +1,9 @@
 use {
-    anyhow::{anyhow, bail, Result}, egui_sfml::{egui::{self, Color32, Context, Id, Sense, TextureId, Ui, Vec2}, SfEgui, UserTexSource}, flate2::read::GzDecoder, hashbrown::HashMap, maprando::{
+    anyhow::{anyhow, bail, Result}, egui_sfml::{egui::{self, Color32, Context, Id, Sense, TextureId, Ui, Vec2}, SfEgui, UserTexSource}, flate2::read::GzDecoder, hashbrown::{HashMap, HashSet}, map_editor::MapEditor, maprando::{
         customize::{mosaic::MosaicTheme, ControllerButton, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, MusicSettings, PaletteTheme, ShakingSetting, TileTheme}, patch::Rom, randomize::SpoilerRouteEntry, settings::{DoorLocksSize, DoorsMode, ItemDotChange, MapStationReveal, MapsRevealed, Objective, ObjectiveSetting, RandomizerSettings, SaveAnimals, WallJump}
     }, maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType}, mouse_state::MouseState, plando::{DoubleItemPlacement, MapRepositoryType, Placeable, Plando, ITEM_VALUES}, rand::RngCore, rfd::FileDialog, self_update::cargo_crate_version, serde::{Deserialize, Serialize}, sfml::{
         cpp::FBox, graphics::{
-            self, Color, FloatRect, IntRect, PrimitiveType, RenderStates, RenderTarget, RenderWindow, Shape, Transformable, Vertex
+            self, CircleShape, Color, FloatRect, IntRect, PrimitiveType, RenderStates, RenderTarget, RenderWindow, Shape, Transformable, Vertex
         }, system::Vector2f, window::{
             mouse, Event, Key, Style
         }
@@ -13,6 +13,7 @@ use {
 mod plando;
 mod layout;
 mod mouse_state;
+mod map_editor;
 
 #[derive(Clone)]
 struct RoomData {
@@ -1093,20 +1094,6 @@ enum ModalType {
     Info(String),
 }
 
-struct MapEditor {
-    map: Map,
-    dragged_room_idx: Option<usize>
-}
-
-impl MapEditor {
-    fn new(map: Map) -> MapEditor {
-        MapEditor {
-            map,
-            dragged_room_idx: None
-        }
-    }
-}
-
 struct PlandoApp {
     plando: Plando,
     settings: Settings,
@@ -1130,10 +1117,14 @@ struct PlandoApp {
     cur_customize_logic_window: CustomizeLogicWindow,
     is_customize_window_open: bool,
 
-    map_editor: MapEditor
+    map_editor: MapEditor,
+
+    global_timer: u64
 }
 
 impl PlandoApp {
+    const GRID_SIZE: usize = 72;
+
     fn new() -> Result<PlandoApp> {
         let mut plando = Plando::new();
 
@@ -1218,7 +1209,9 @@ impl PlandoApp {
             cur_customize_logic_window: CustomizeLogicWindow::None,
             is_customize_window_open: false,
 
-            map_editor
+            map_editor,
+
+            global_timer: 0
         })
     }
 
@@ -1226,11 +1219,10 @@ impl PlandoApp {
         let settings_path_str = self.settings_path.clone();
         let settings_path = Path::new(&settings_path_str);
 
-        let tex_items = graphics::Texture::from_file("../visualizer/items.png").unwrap();
-
         let mut window = RenderWindow::new((1080, 720), "Maprando Plando", Style::DEFAULT, &Default::default()).expect("Could not create Window");
         window.set_vertical_sync_enabled(true);
 
+        let tex_items = graphics::Texture::from_file("../visualizer/items.png").unwrap();
         let font_default = graphics::Font::from_file("../segoeui.ttf").expect("Could not load default font");
 
         let mut tex_grid = graphics::Texture::from_file("../visualizer/grid.png").unwrap();
@@ -1274,6 +1266,7 @@ impl PlandoApp {
 
         while window.is_open() {
             self.mouse_state.next_frame();
+            self.global_timer += 1;
             self.local_mouse_x = (self.mouse_state.mouse_x - x_offset) / zoom;
             self.local_mouse_y = (self.mouse_state.mouse_y - y_offset) / zoom;
             self.click_consumed = false;
@@ -1292,7 +1285,8 @@ impl PlandoApp {
 
             // mouse_is_public is true if the mouse is on the map view and not on some GUI
             self.is_mouse_public = !(spoiler_details_hovered || settings_open || customize_open || customize_logic_open || self.modal_type != ModalType::None
-                || spoiler_window_bounds.contains(self.mouse_state.get_mouse_pos()) || self.mouse_state.mouse_x >= window.size().x as f32 - sidebar_width);
+                || spoiler_window_bounds.contains(self.mouse_state.get_mouse_pos()) || self.mouse_state.mouse_x >= window.size().x as f32 - sidebar_width
+                || self.map_editor.dragged_room_idx.is_some());
 
             while let Some(ev) = window.poll_event() {
                 sfegui.add_event(&ev);
@@ -1356,7 +1350,7 @@ impl PlandoApp {
             if !reset_after_patch {
                 // Draw background grid
                 if !self.settings.disable_bg_grid {
-                    let spr_bg_grid = graphics::Sprite::with_texture_and_rect(&tex_grid, IntRect::new(0, 0, 8 * 75, 8 * 75));
+                    let spr_bg_grid = graphics::Sprite::with_texture_and_rect(&tex_grid, IntRect::new(0, 0, 8 * PlandoApp::GRID_SIZE as i32, 8 * PlandoApp::GRID_SIZE as i32));
                     window.draw_with_renderstates(&spr_bg_grid, &states);
                 }
 
@@ -1508,6 +1502,13 @@ impl PlandoApp {
                             }
                             ui.separator();
                             if ui.button("Toggle Map Editor").clicked() {
+                                if map_editor_mode {
+                                    if self.map_editor.invalid_doors.is_empty() {
+                                        self.plando.load_map(self.map_editor.map.clone());
+                                    } else {
+                                        self.map_editor.map = self.plando.map.clone();
+                                    }
+                                }
                                 map_editor_mode = !map_editor_mode;
                             }
                             ui.separator();
@@ -1725,6 +1726,22 @@ impl PlandoApp {
     }
 
     fn draw_map_editor(&mut self, rt: &mut dyn RenderTarget, states: &RenderStates) -> Option<String> {
+        let mut info_overlay = None;
+
+        // Tile position the mouse is hovering
+        let mouse_tile_x = (self.local_mouse_x / 8.0).floor() as i32;
+        let mouse_tile_y = (self.local_mouse_y / 8.0).floor() as i32;
+        // Move the currently dragged room to mouse pos
+        if let Some(drag_idx) = self.map_editor.dragged_room_idx {
+            let new_room_x = mouse_tile_x - self.map_editor.dragged_room_xoffset as i32;
+            let new_room_y = mouse_tile_y - self.map_editor.dragged_room_yoffset as i32;
+            let room_width = self.plando.game_data.room_geometry[drag_idx].map[0].len();
+            let room_height = self.plando.game_data.room_geometry[drag_idx].map.len();
+            self.map_editor.map.rooms[drag_idx].0 = (new_room_x.max(0) as usize).min(PlandoApp::GRID_SIZE - room_width);
+            self.map_editor.map.rooms[drag_idx].1 = (new_room_y.max(0) as usize).min(PlandoApp::GRID_SIZE - room_height);
+        }
+
+        let mut last_hovered_room_idx = None;
         for data in &self.room_data {
             let atlas_rect = IntRect::new(data.atlas_x_offset as i32 * 8, data.atlas_y_offset as i32 * 8, data.tile_width as i32 * 8, data.tile_height as i32 * 8);
             let mut spr_room = graphics::Sprite::with_texture_and_rect(&self.atlas_tex, atlas_rect);
@@ -1753,15 +1770,97 @@ impl PlandoApp {
             rt.draw_with_renderstates(&spr_room, states);
 
             if spr_room.global_bounds().contains2(self.local_mouse_x, self.local_mouse_y) {
-                self.draw_room_outline(rt, states, data.room_idx);
-                
+                info_overlay = Some(data.room_name.clone());
+                last_hovered_room_idx = Some(data.room_idx);
+                if self.mouse_state.is_button_pressed(mouse::Button::Left) {
+                    self.map_editor.dragged_room_idx = Some(data.room_idx);
+                    self.map_editor.dragged_room_xoffset = mouse_tile_x as usize - room_x;
+                    self.map_editor.dragged_room_yoffset = mouse_tile_y as usize - room_y;
+                }
             }
         }
-        None
+        if let Some(idx) = last_hovered_room_idx {
+            self.draw_room_outline(rt, states, idx);
+        }
+
+        // Highlight invalid doors
+        for &(room_idx, door_idx) in &self.map_editor.invalid_doors {
+            let (room_x, room_y) = self.map_editor.map.rooms[room_idx];
+            let door = &self.plando.game_data.room_geometry[room_idx].doors[door_idx];
+            let door_x = room_x + door.x;
+            let door_y = room_y + door.y;
+            let (x_offset, y_offset) = match door.direction.as_str() {
+                "up" => (0.0, -4.0),
+                "down" => (0.0, 4.0),
+                "left" => (-4.0, 0.0),
+                _ => (4.0, 0.0)
+            };
+            let x = door_x as f32 * 8.0 + x_offset;
+            let y = door_y as f32 * 8.0 + y_offset;
+
+            let mut spr = CircleShape::new(4.0, 20);
+            spr.set_fill_color(Color::rgba(255, 0, 0, 127));
+            spr.set_position((x, y));
+            rt.draw_with_renderstates(&spr, states);
+        }
+
+        if self.mouse_state.is_button_released(mouse::Button::Left) {
+            // Snap the room into place, this means connecting doors
+            if let Some(drag_idx) = self.map_editor.dragged_room_idx {
+                self.map_editor.snap_room(drag_idx, &self.plando.game_data);
+            }
+            self.map_editor.dragged_room_idx = None;
+        }
+
+        info_overlay
     }
 
     fn draw_room_outline(&self, rt: &mut dyn RenderTarget, states: &RenderStates, room_idx: usize) {
+        let mut vbuffs = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+        let room_geometry = &self.plando.game_data.room_geometry[room_idx];
+        let (room_x, room_y) = self.map_editor.map.rooms[room_idx];
 
+        let width = room_geometry.map[0].len() as f32 * 8.0;
+        let height = room_geometry.map.len() as f32 * 8.0;
+
+        let tl = Vector2f::new(room_x as f32 * 8.0, room_y as f32 * 8.0);
+        let tr = tl + Vector2f::new(width, 0.0);
+        let bl = tl + Vector2f::new(0.0, height);
+        let br = tl + Vector2f::new(width, height);
+        let mut step = -1.0;
+        let step_size = 4.0;
+        vbuffs[0].push(Vertex::with_pos_color(tl, Color::CYAN));
+        vbuffs[1].push(Vertex::with_pos_color(tr, Color::CYAN));
+        vbuffs[2].push(Vertex::with_pos_color(br, Color::CYAN));
+        vbuffs[3].push(Vertex::with_pos_color(bl, Color::CYAN));
+        while step < width {
+            let step_mod = (step + (self.global_timer as f32 / 20.0) % step_size).max(0.0).min(width);
+            let lerp_idx = step_mod / width;
+            let pos1 = tl * (1.0 - lerp_idx) + tr * lerp_idx;
+            let pos2 = br * (1.0 - lerp_idx) + bl * lerp_idx;
+            vbuffs[0].push(Vertex::with_pos_color(pos1, Color::CYAN));
+            vbuffs[2].push(Vertex::with_pos_color(pos2, Color::CYAN));
+            step += 2.0;
+        }
+        step = -1.0;
+        while step < height {
+            let step_mod = (step + (self.global_timer as f32 / 20.0) % step_size).max(0.0).min(height);
+            let lerp_idx = step_mod / height;
+            let pos1 = tr * (1.0 - lerp_idx) + br * lerp_idx;
+            let pos2 = bl * (1.0 - lerp_idx) + tl * lerp_idx;
+            vbuffs[1].push(Vertex::with_pos_color(pos1, Color::CYAN));
+            vbuffs[3].push(Vertex::with_pos_color(pos2, Color::CYAN));
+            step += 2.0;
+        }
+        vbuffs[0].push(Vertex::with_pos_color(tr, Color::CYAN));
+        vbuffs[1].push(Vertex::with_pos_color(br, Color::CYAN));
+        vbuffs[2].push(Vertex::with_pos_color(bl, Color::CYAN));
+        vbuffs[3].push(Vertex::with_pos_color(tl, Color::CYAN));
+
+        rt.draw_primitives(&vbuffs[0], PrimitiveType::LINES, states);
+        rt.draw_primitives(&vbuffs[1], PrimitiveType::LINES, states);
+        rt.draw_primitives(&vbuffs[2], PrimitiveType::LINES, states);
+        rt.draw_primitives(&vbuffs[3], PrimitiveType::LINES, states);
     }
 
     fn draw_start_locations(&mut self, rt: &mut dyn RenderTarget, states: &RenderStates, sidebar_selection: Option<Placeable>) {
@@ -2200,6 +2299,9 @@ impl PlandoApp {
     }
 
     fn draw_sidebar_room_select(&mut self, ui: &mut Ui, sidebar_height: f32) -> Option<usize> {
+        egui::ComboBox::new("combo_map_editor", "Mode").show_ui(ui, |ui| {
+
+        });
         None
     }
 
