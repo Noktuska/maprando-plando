@@ -1,10 +1,10 @@
 use {
     anyhow::{anyhow, bail, Result}, egui_sfml::{egui::{self, Color32, Context, Id, Sense, TextureId, Ui, Vec2}, SfEgui, UserTexSource}, flate2::read::GzDecoder, hashbrown::HashMap, maprando::{
         customize::{mosaic::MosaicTheme, ControllerButton, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, MusicSettings, PaletteTheme, ShakingSetting, TileTheme}, patch::Rom, randomize::SpoilerRouteEntry, settings::{DoorLocksSize, DoorsMode, ItemDotChange, MapStationReveal, MapsRevealed, Objective, ObjectiveSetting, RandomizerSettings, SaveAnimals, WallJump}
-    }, maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType}, plando::{DoubleItemPlacement, MapRepositoryType, Placeable, Plando, ITEM_VALUES}, rand::RngCore, rfd::FileDialog, self_update::cargo_crate_version, serde::{Deserialize, Serialize}, sfml::{
+    }, maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType}, mouse_state::MouseState, plando::{DoubleItemPlacement, MapRepositoryType, Placeable, Plando, ITEM_VALUES}, rand::RngCore, rfd::FileDialog, self_update::cargo_crate_version, serde::{Deserialize, Serialize}, sfml::{
         cpp::FBox, graphics::{
             self, Color, FloatRect, IntRect, PrimitiveType, RenderStates, RenderTarget, RenderWindow, Shape, Transformable, Vertex
-        }, system::{Vector2f, Vector2i}, window::{
+        }, system::Vector2f, window::{
             mouse, Event, Key, Style
         }
     }, std::{cmp::{max, min}, fs::File, io::{Read, Write}, path::Path, thread::{self, JoinHandle}, u32}
@@ -12,6 +12,7 @@ use {
 
 mod plando;
 mod layout;
+mod mouse_state;
 
 #[derive(Clone)]
 struct RoomData {
@@ -1092,6 +1093,20 @@ enum ModalType {
     Info(String),
 }
 
+struct MapEditor {
+    map: Map,
+    dragged_room_idx: Option<usize>
+}
+
+impl MapEditor {
+    fn new(map: Map) -> MapEditor {
+        MapEditor {
+            map,
+            dragged_room_idx: None
+        }
+    }
+}
+
 struct PlandoApp {
     plando: Plando,
     settings: Settings,
@@ -1100,17 +1115,22 @@ struct PlandoApp {
     user_tex_source: ImplUserTexSource,
     flag_has_tex: Vec<usize>,
     obj_room_map: HashMap<usize, Objective>,
+    room_data: Vec<RoomData>,
+    atlas_tex: FBox<graphics::Texture>,
 
+    mouse_state: MouseState,
     local_mouse_x: f32,
     local_mouse_y: f32,
-    is_mouse_clicked: Option<mouse::Button>,
+    is_mouse_public: bool,
     click_consumed: bool,
 
     spoiler_step: usize,
     spoiler_type: SpoilerType,
     modal_type: ModalType,
     cur_customize_logic_window: CustomizeLogicWindow,
-    is_customize_window_open: bool
+    is_customize_window_open: bool,
+
+    map_editor: MapEditor
 }
 
 impl PlandoApp {
@@ -1166,6 +1186,15 @@ impl PlandoApp {
             }
         ).collect();
 
+        let (atlas_img, room_data) = load_room_sprites(&plando.game_data)?;
+        let atlas_tex = graphics::Texture::from_image(&atlas_img, IntRect::default())?;
+
+        let map_editor = MapEditor::new(plando.map.clone());
+
+        let mut mouse_state = MouseState::default();
+        mouse_state.click_pos_leniency = settings.mouse_click_pos_tolerance as f32;
+        mouse_state.click_time_leniency = settings.mouse_click_delay_tolerance as u32;
+
         Ok(PlandoApp {
             plando,
             settings,
@@ -1174,17 +1203,22 @@ impl PlandoApp {
             user_tex_source,
             flag_has_tex,
             obj_room_map,
+            room_data,
+            atlas_tex,
 
+            mouse_state,
             local_mouse_x: 0.0,
             local_mouse_y: 0.0,
-            is_mouse_clicked: None,
+            is_mouse_public: true,
             click_consumed: false,
 
             spoiler_step: 0,
             spoiler_type: SpoilerType::None,
             modal_type: ModalType::None,
             cur_customize_logic_window: CustomizeLogicWindow::None,
-            is_customize_window_open: false
+            is_customize_window_open: false,
+
+            map_editor
         })
     }
 
@@ -1198,9 +1232,6 @@ impl PlandoApp {
         window.set_vertical_sync_enabled(true);
 
         let font_default = graphics::Font::from_file("../segoeui.ttf").expect("Could not load default font");
-
-        let (atlas_img, room_data) = load_room_sprites(&self.plando.game_data).unwrap();
-        let atlas_tex = graphics::Texture::from_image(&atlas_img, IntRect::default()).unwrap();
 
         let mut tex_grid = graphics::Texture::from_file("../visualizer/grid.png").unwrap();
         tex_grid.set_repeated(true);
@@ -1219,12 +1250,6 @@ impl PlandoApp {
         let mut x_offset = 0.0;
         let mut y_offset = 0.0;
         let mut zoom = 1.0;
-
-        let mut is_mouse_down = false;
-        let mut mouse_click_pos = Vector2i::new(0, 0);
-        let mut mouse_click_timer = 0;
-        let mut mouse_x = 0;
-        let mut mouse_y = 0;
 
         let mut cur_settings = self.plando.randomizer_settings.clone();
 
@@ -1248,13 +1273,9 @@ impl PlandoApp {
         let mut map_editor_mode = false;
 
         while window.is_open() {
-            self.local_mouse_x = (mouse_x as f32 - x_offset) / zoom;
-            self.local_mouse_y = (mouse_y as f32 - y_offset) / zoom;
-
-            self.is_mouse_clicked = None;
-            if mouse_click_timer > 0 {
-                mouse_click_timer -= 1;
-            }
+            self.mouse_state.next_frame();
+            self.local_mouse_x = (self.mouse_state.mouse_x - x_offset) / zoom;
+            self.local_mouse_y = (self.mouse_state.mouse_y - y_offset) / zoom;
             self.click_consumed = false;
 
             if download_thread_active {
@@ -1269,64 +1290,32 @@ impl PlandoApp {
                 }
             }
 
-            let ignore_click = spoiler_details_hovered || settings_open || customize_open || self.modal_type != ModalType::None || customize_logic_open;
+            // mouse_is_public is true if the mouse is on the map view and not on some GUI
+            self.is_mouse_public = !(spoiler_details_hovered || settings_open || customize_open || customize_logic_open || self.modal_type != ModalType::None
+                || spoiler_window_bounds.contains(self.mouse_state.get_mouse_pos()) || self.mouse_state.mouse_x >= window.size().x as f32 - sidebar_width);
 
             while let Some(ev) = window.poll_event() {
                 sfegui.add_event(&ev);
+                self.mouse_state.add_event(ev);
 
                 match ev {
                     Event::Closed => {
                         let _ = save_settings(&self.settings, settings_path);
                         window.close();
-                    }
-                    Event::MouseButtonPressed { button, x, y } => {
-                        if x < window.size().x as i32 - sidebar_width as i32 && !ignore_click && !spoiler_window_bounds.contains2(x as f32, y as f32) {
-                            if button == mouse::Button::Left {
-                                is_mouse_down = true;
-                            } else if button == mouse::Button::Middle {
-                                x_offset = 0.0;
-                                y_offset = 0.0;
-                                zoom = 1.0;
-                            }
-                        }
-
-                        mouse_click_pos.x = x;
-                        mouse_click_pos.y = y;
-                        mouse_click_timer = self.settings.mouse_click_delay_tolerance;
-                    },
-                    Event::MouseButtonReleased { button, x, y } => {
-                        if button == mouse::Button::Left {
-                            is_mouse_down = false;
-                        }
-
-                        let new_mouse_pos = Vector2i::new(x, y);
-                        if (mouse_click_pos - new_mouse_pos).length_sq() < self.settings.mouse_click_pos_tolerance && mouse_click_timer > 0 && !ignore_click && !spoiler_window_bounds.contains2(x as f32, y as f32) {
-                            self.is_mouse_clicked = Some(button);
-                        }
                     },
                     Event::MouseWheelScrolled { wheel: _, delta, x, y } => {
-                        if x < window.size().x as i32 - sidebar_width as i32 && !ignore_click && !spoiler_window_bounds.contains2(x as f32, y as f32) {
+                        if self.is_mouse_public {
                             let factor = 1.1;
                             if delta > 0.0 && zoom < 20.0 {
                                 zoom *= factor;
-                                x_offset -= (factor - 1.0) * (mouse_x as f32 - x_offset);
-                                y_offset -= (factor - 1.0) * (mouse_y as f32 - y_offset);
+                                x_offset -= (factor - 1.0) * (x as f32 - x_offset);
+                                y_offset -= (factor - 1.0) * (y as f32 - y_offset);
                             } else if delta < 0.0 && zoom > 0.1 {
                                 zoom /= factor;
-                                x_offset += (1.0 - 1.0 / factor) * (mouse_x as f32 - x_offset);
-                                y_offset += (1.0 - 1.0 / factor) * (mouse_y as f32 - y_offset);
+                                x_offset += (1.0 - 1.0 / factor) * (x as f32 - x_offset);
+                                y_offset += (1.0 - 1.0 / factor) * (y as f32 - y_offset);
                             }
                         }
-                    },
-                    Event::MouseMoved { x, y } => {
-                        let dx = x - mouse_x;
-                        let dy = y - mouse_y;
-                        if is_mouse_down {
-                            x_offset += dx as f32;
-                            y_offset += dy as f32;
-                        }
-                        mouse_x = x;
-                        mouse_y = y;
                     },
                     Event::Resized { width, height } => {
                         window.set_view(&graphics::View::from_rect(graphics::Rect::new(0.0, 0.0, width as f32, height as f32)).unwrap());
@@ -1342,6 +1331,17 @@ impl PlandoApp {
                     }
                     _ => {}
                 }
+            }
+
+            // Handle Misc Mouse Buttons
+            if self.mouse_state.is_button_pressed(mouse::Button::Middle) && self.is_mouse_public {
+                x_offset = 0.0;
+                y_offset = 0.0;
+                zoom = 1.0;
+            }
+            if self.mouse_state.is_button_down(mouse::Button::Left) && self.is_mouse_public {
+                x_offset += self.mouse_state.mouse_dx;
+                y_offset += self.mouse_state.mouse_dy;
             }
 
             spoiler_details_hovered = false;
@@ -1362,7 +1362,7 @@ impl PlandoApp {
 
                 // Draw the entire map
                 let mut info_overlay_opt = match map_editor_mode {
-                    false => self.draw_map(&mut *window, &states, &room_data, &atlas_tex, &tex_obj),
+                    false => self.draw_map(&mut *window, &states, &tex_obj),
                     true => self.draw_map_editor(&mut *window, &states)
                 };
 
@@ -1394,9 +1394,9 @@ impl PlandoApp {
                 if let Some(info_overlay) = info_overlay_opt {
                     let mut text = graphics::Text::new(&info_overlay, &font_default, 16);
                     text.set_fill_color(graphics::Color::WHITE);
-                    text.set_position(Vector2f::new(mouse_x as f32 + 16.0, mouse_y as f32));
+                    text.set_position(Vector2f::new(self.mouse_state.mouse_x as f32 + 16.0, self.mouse_state.mouse_y as f32));
                     let mut bg_rect = graphics::RectangleShape::new();
-                    bg_rect.set_position(Vector2f::new(mouse_x as f32 + 12.0, mouse_y as f32));
+                    bg_rect.set_position(Vector2f::new(self.mouse_state.mouse_x as f32 + 12.0, self.mouse_state.mouse_y as f32));
                     bg_rect.set_size(Vector2f::new(text.global_bounds().size().x + 8.0, 24.0));
                     bg_rect.set_fill_color(graphics::Color::rgba(0x1F, 0x1F, 0x1F, 0xBF));
 
@@ -1409,7 +1409,7 @@ impl PlandoApp {
             }
 
             // Reset spoiler step and type if click resulted in nothing
-            if !self.click_consumed && self.is_mouse_clicked.is_some() {
+            if !self.click_consumed && self.mouse_state.button_clicked.is_some() && self.is_mouse_public {
                 sidebar_selection = None;
                 self.spoiler_type = SpoilerType::None;
             }
@@ -1587,7 +1587,7 @@ impl PlandoApp {
                 if self.spoiler_type != SpoilerType::None && self.plando.randomization.is_some() {
                     spoiler_details_hovered = self.draw_spoiler_details(ctx);
                 } else if self.plando.randomization.is_some() {
-                    spoiler_window_bounds = self.draw_spoiler_summary(ctx, mouse_y as f32, spoiler_window_bounds);
+                    spoiler_window_bounds = self.draw_spoiler_summary(ctx, self.mouse_state.mouse_y as f32, spoiler_window_bounds);
                 }
 
                 if settings_open {
@@ -1648,11 +1648,11 @@ impl PlandoApp {
         }
     }
 
-    fn draw_map(&mut self, rt: &mut dyn RenderTarget, states: &RenderStates, room_data: &Vec<RoomData>, atlas_tex: &FBox<graphics::Texture>, tex_obj: &FBox<graphics::Texture>) -> Option<String> {
+    fn draw_map(&mut self, rt: &mut dyn RenderTarget, states: &RenderStates, tex_obj: &FBox<graphics::Texture>) -> Option<String> {
         let mut info_overlay = None;
 
-        for i in 0..room_data.len() {
-            let data = &room_data[i];
+        for i in 0..self.room_data.len() {
+            let data = &self.room_data[i];
             let (x, y) = self.plando.map.rooms[data.room_idx];
             let room_geometry = &self.plando.game_data.room_geometry[data.room_idx];
 
@@ -1704,7 +1704,7 @@ impl PlandoApp {
 
                     // Draw Tile Outline
                     let sprite_tile_rect = IntRect::new(8 * (data.atlas_x_offset as i32 + local_x as i32), 8 * (data.atlas_y_offset as i32 + local_y as i32), 8, 8);
-                    let mut sprite_tile = graphics::Sprite::with_texture_and_rect(&atlas_tex, sprite_tile_rect);
+                    let mut sprite_tile = graphics::Sprite::with_texture_and_rect(&self.atlas_tex, sprite_tile_rect);
                     sprite_tile.set_position(Vector2f::new(cell_x as f32, cell_y as f32));
                     sprite_tile.set_color(Color::rgb(255 / color_div, 255 / color_div, 255 / color_div));
                     rt.draw_with_renderstates(&sprite_tile, &states);
@@ -1725,7 +1725,43 @@ impl PlandoApp {
     }
 
     fn draw_map_editor(&mut self, rt: &mut dyn RenderTarget, states: &RenderStates) -> Option<String> {
+        for data in &self.room_data {
+            let atlas_rect = IntRect::new(data.atlas_x_offset as i32 * 8, data.atlas_y_offset as i32 * 8, data.tile_width as i32 * 8, data.tile_height as i32 * 8);
+            let mut spr_room = graphics::Sprite::with_texture_and_rect(&self.atlas_tex, atlas_rect);
+            let (room_x, room_y) = self.map_editor.map.rooms[data.room_idx];
+            let room_geometry = &self.plando.game_data.room_geometry[data.room_idx];
+
+            for (tile_y, row) in room_geometry.map.iter().enumerate() {
+                for (tile_x, &cell) in row.iter().enumerate() {
+                    if cell == 0 && data.room_idx != self.plando.game_data.toilet_room_idx {
+                        continue;
+                    }
+
+                    let cell_x = (tile_x + room_x) * 8;
+                    let cell_y = (tile_y + room_y) * 8;
+                    let color_value = if room_geometry.heated { 2 } else { 1 };
+                    let cell_color = get_explored_color(color_value, self.map_editor.map.area[data.room_idx]);
+                    
+                    let mut bg_rect = graphics::RectangleShape::with_size((8.0, 8.0).into());
+                    bg_rect.set_position((cell_x as f32, cell_y as f32));
+                    bg_rect.set_fill_color(cell_color);
+                    rt.draw_with_renderstates(&bg_rect, states);
+                }
+            }
+
+            spr_room.set_position((room_x as f32 * 8.0, room_y as f32 * 8.0));
+            rt.draw_with_renderstates(&spr_room, states);
+
+            if spr_room.global_bounds().contains2(self.local_mouse_x, self.local_mouse_y) {
+                self.draw_room_outline(rt, states, data.room_idx);
+                
+            }
+        }
         None
+    }
+
+    fn draw_room_outline(&self, rt: &mut dyn RenderTarget, states: &RenderStates, room_idx: usize) {
+
     }
 
     fn draw_start_locations(&mut self, rt: &mut dyn RenderTarget, states: &RenderStates, sidebar_selection: Option<Placeable>) {
@@ -1745,7 +1781,7 @@ impl PlandoApp {
 
                 if sprite_helm.global_bounds().contains2(self.local_mouse_x, self.local_mouse_y) {
                     sprite_helm.scale(1.2);
-                    if let Some(bt) = self.is_mouse_clicked {
+                    if let Some(bt) = self.mouse_state.button_clicked {
                         let mut res = Ok(());
                         if bt == mouse::Button::Left {
                             res = self.plando.place_start_location(self.plando.game_data.start_locations[i].clone());
@@ -1775,7 +1811,7 @@ impl PlandoApp {
 
         if sidebar_selection.is_none() && sprite_helm.global_bounds().contains2(self.local_mouse_x, self.local_mouse_y) {
             sprite_helm.scale(1.2);
-            if self.is_mouse_clicked.is_some_and(|x| x == mouse::Button::Left) {
+            if self.mouse_state.button_clicked.is_some_and(|x| x == mouse::Button::Left) {
                 self.spoiler_type = SpoilerType::Hub;
                 self.click_consumed = true;
             }
@@ -1881,7 +1917,7 @@ impl PlandoApp {
                 };
                 spr_item.set_position(Vector2f::new((8 * (tile_x + room_x) + item_x_offset) as f32, (8 * (tile_y + room_y) + 4) as f32));
                 spr_item.set_scale(6.0 / tex_item_width as f32);
-                if spr_item.global_bounds().contains2(self.local_mouse_x, self.local_mouse_y) {
+                if spr_item.global_bounds().contains2(self.local_mouse_x, self.local_mouse_y) && self.is_mouse_public {
                     spr_item.scale(1.2);
                     let item_name = if item_index == 23 {
                         &"Nothing".to_string()
@@ -1890,7 +1926,7 @@ impl PlandoApp {
                     };
                     info_overlay = Some(item_name.clone());
 
-                    if let Some(bt) = self.is_mouse_clicked {
+                    if let Some(bt) = self.mouse_state.button_clicked {
                         if bt == mouse::Button::Left {
                             if sidebar_selection.is_some_and(|x| x.to_item().is_some()) {
                                 let item_to_place = sidebar_selection.unwrap().to_item().unwrap();
@@ -1935,12 +1971,12 @@ impl PlandoApp {
             spr_flag.set_position(flag_position * 8.0);
             spr_flag.set_scale(8.0 / tex_w);
 
-            if spr_flag.global_bounds().contains2(self.local_mouse_x, self.local_mouse_y) {
+            if spr_flag.global_bounds().contains2(self.local_mouse_x, self.local_mouse_y) && self.is_mouse_public {
                 spr_flag.scale(1.3);
 
                 info_overlay = Some(flag_str.to_string());
 
-                if sidebar_selection.is_none() && self.is_mouse_clicked.is_some_and(|bt| bt == mouse::Button::Left) {
+                if sidebar_selection.is_none() && self.mouse_state.button_clicked.is_some_and(|bt| bt == mouse::Button::Left) {
                     self.spoiler_type = SpoilerType::Flag(i);
                     self.click_consumed = true;
                 }
@@ -1957,7 +1993,7 @@ impl PlandoApp {
         let tile_y = (self.local_mouse_y / 8.0).floor().max(0.0) as usize;
         let tile_hovered_opt = self.plando.get_tile_at(tile_x, tile_y);
 
-        if sidebar_selection.is_some_and(|x| x.to_door_type().is_some()) && tile_hovered_opt.is_some() {
+        if sidebar_selection.is_some_and(|x| x.to_door_type().is_some()) && tile_hovered_opt.is_some() && self.is_mouse_public {
             let tile = tile_hovered_opt.unwrap();
             let door_type = sidebar_selection.unwrap();
             let tr = (self.local_mouse_x / 8.0).fract() > (self.local_mouse_y / 8.0).fract();
@@ -1986,7 +2022,7 @@ impl PlandoApp {
                 });
                 spr_ghost.set_color(Color::rgba(0xFF, 0xFF, 0xFF, 0x7F));
 
-                if let Some(bt) = self.is_mouse_clicked {
+                if let Some(bt) = self.mouse_state.button_clicked {
                     let mut res = Ok(());
                     if bt == mouse::Button::Left {
                         res = self.plando.place_door(room_idx, door_idx, door_type.to_door_type(), false, false);
