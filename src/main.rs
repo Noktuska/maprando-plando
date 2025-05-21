@@ -1,9 +1,9 @@
 use {
-    anyhow::{anyhow, bail, Result}, egui_sfml::{egui::{self, Color32, Context, Id, Sense, TextureId, Ui, Vec2}, SfEgui, UserTexSource}, flate2::read::GzDecoder, hashbrown::{HashMap, HashSet}, map_editor::MapEditor, maprando::{
+    anyhow::{anyhow, bail, Result}, egui_sfml::{egui::{self, Color32, Context, Id, Modifiers, Pos2, Sense, TextureId, Ui, Vec2}, SfEgui, UserTexSource}, flate2::read::GzDecoder, hashbrown::{HashMap, HashSet}, map_editor::{MapEditor, SidebarMode}, maprando::{
         customize::{mosaic::MosaicTheme, ControllerButton, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, MusicSettings, PaletteTheme, ShakingSetting, TileTheme}, patch::Rom, randomize::SpoilerRouteEntry, settings::{DoorLocksSize, DoorsMode, ItemDotChange, MapStationReveal, MapsRevealed, Objective, ObjectiveSetting, RandomizerSettings, SaveAnimals, WallJump}
     }, maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType}, mouse_state::MouseState, plando::{DoubleItemPlacement, MapRepositoryType, Placeable, Plando, ITEM_VALUES}, rand::RngCore, rfd::FileDialog, self_update::cargo_crate_version, serde::{Deserialize, Serialize}, sfml::{
         cpp::FBox, graphics::{
-            self, CircleShape, Color, FloatRect, IntRect, PrimitiveType, RenderStates, RenderTarget, RenderWindow, Shape, Transformable, Vertex
+            self, CircleShape, Color, FloatRect, IntRect, PrimitiveType, Rect, RenderStates, RenderTarget, RenderWindow, Shape, Transformable, Vertex
         }, system::Vector2f, window::{
             mouse, Event, Key, Style
         }
@@ -1094,6 +1094,35 @@ enum ModalType {
     Info(String),
 }
 
+struct View {
+    x_offset: f32,
+    y_offset: f32,
+    zoom: f32
+}
+
+impl View {
+    fn new() -> View {
+        View {
+            x_offset: 0.0,
+            y_offset: 0.0,
+            zoom: 1.0
+        }
+    }
+
+    fn to_local_coords(&self, x: f32, y: f32) -> (f32, f32) {
+        let new_x = (x - self.x_offset) / self.zoom;
+        let new_y = (y - self.y_offset) / self.zoom;
+        (new_x, new_y)
+    }
+
+    fn focus_rect(&mut self, rect: FloatRect, window_size: Vector2f) {
+        let center_rect = rect.position() + rect.size() / 2.0;
+        let center_screen = window_size / 2.0;
+        self.x_offset = center_screen.x - center_rect.x * self.zoom;
+        self.y_offset = center_screen.y - center_rect.y * self.zoom;
+    }
+}
+
 struct PlandoApp {
     plando: Plando,
     settings: Settings,
@@ -1104,6 +1133,8 @@ struct PlandoApp {
     obj_room_map: HashMap<usize, Objective>,
     room_data: Vec<RoomData>,
     atlas_tex: FBox<graphics::Texture>,
+
+    view: View,
 
     mouse_state: MouseState,
     local_mouse_x: f32,
@@ -1197,6 +1228,8 @@ impl PlandoApp {
             room_data,
             atlas_tex,
 
+            view: View::new(),
+
             mouse_state,
             local_mouse_x: 0.0,
             local_mouse_y: 0.0,
@@ -1239,10 +1272,6 @@ impl PlandoApp {
         }
         let tex_obj = graphics::Texture::from_image(&img_obj, IntRect::default()).unwrap();
 
-        let mut x_offset = 0.0;
-        let mut y_offset = 0.0;
-        let mut zoom = 1.0;
-
         let mut cur_settings = self.plando.randomizer_settings.clone();
 
         let mut sidebar_width = 0.0;
@@ -1267,9 +1296,9 @@ impl PlandoApp {
         while window.is_open() {
             self.mouse_state.next_frame();
             self.global_timer += 1;
-            self.local_mouse_x = (self.mouse_state.mouse_x - x_offset) / zoom;
-            self.local_mouse_y = (self.mouse_state.mouse_y - y_offset) / zoom;
+            (self.local_mouse_x, self.local_mouse_y) = self.view.to_local_coords(self.mouse_state.mouse_x, self.mouse_state.mouse_y);
             self.click_consumed = false;
+            let screen_size = Vector2f::new(window.size().x as f32, window.size().y as f32);
 
             if download_thread_active {
                 if download_thread_handle.is_finished() {
@@ -1300,14 +1329,14 @@ impl PlandoApp {
                     Event::MouseWheelScrolled { wheel: _, delta, x, y } => {
                         if self.is_mouse_public {
                             let factor = 1.1;
-                            if delta > 0.0 && zoom < 20.0 {
-                                zoom *= factor;
-                                x_offset -= (factor - 1.0) * (x as f32 - x_offset);
-                                y_offset -= (factor - 1.0) * (y as f32 - y_offset);
-                            } else if delta < 0.0 && zoom > 0.1 {
-                                zoom /= factor;
-                                x_offset += (1.0 - 1.0 / factor) * (x as f32 - x_offset);
-                                y_offset += (1.0 - 1.0 / factor) * (y as f32 - y_offset);
+                            if delta > 0.0 && self.view.zoom < 20.0 {
+                                self.view.zoom *= factor;
+                                self.view.x_offset -= (factor - 1.0) * (x as f32 - self.view.x_offset);
+                                self.view.y_offset -= (factor - 1.0) * (y as f32 - self.view.y_offset);
+                            } else if delta < 0.0 && self.view.zoom > 0.1 {
+                                self.view.zoom /= factor;
+                                self.view.x_offset += (1.0 - 1.0 / factor) * (x as f32 - self.view.x_offset);
+                                self.view.y_offset += (1.0 - 1.0 / factor) * (y as f32 - self.view.y_offset);
                             }
                         }
                     },
@@ -1329,13 +1358,13 @@ impl PlandoApp {
 
             // Handle Misc Mouse Buttons
             if self.mouse_state.is_button_pressed(mouse::Button::Middle) && self.is_mouse_public {
-                x_offset = 0.0;
-                y_offset = 0.0;
-                zoom = 1.0;
+                self.view.x_offset = 0.0;
+                self.view.y_offset = 0.0;
+                self.view.zoom = 1.0;
             }
             if self.mouse_state.is_button_down(mouse::Button::Left) && self.is_mouse_public {
-                x_offset += self.mouse_state.mouse_dx;
-                y_offset += self.mouse_state.mouse_dy;
+                self.view.x_offset += self.mouse_state.mouse_dx;
+                self.view.y_offset += self.mouse_state.mouse_dy;
             }
 
             spoiler_details_hovered = false;
@@ -1343,8 +1372,8 @@ impl PlandoApp {
             window.clear(Color::rgb(0x1F, 0x1F, 0x1F));
 
             let mut states = graphics::RenderStates::default();
-            states.transform.translate(x_offset, y_offset);
-            states.transform.scale(zoom, zoom);
+            states.transform.translate(self.view.x_offset, self.view.y_offset);
+            states.transform.scale(self.view.zoom, self.view.zoom);
 
             // Don't render map if we're patching from a seed file to not spoiler the user
             if !reset_after_patch {
@@ -1418,6 +1447,7 @@ impl PlandoApp {
                         ui.menu_button("File", |ui| {
                             if ui.button("Save Seed").clicked() {
                                 let file_opt = FileDialog::new()
+                                    .set_title("Save Seed as JSON file")
                                     .set_directory("/")
                                     .add_filter("JSON File", &["json"])
                                     .save_file();
@@ -1431,6 +1461,7 @@ impl PlandoApp {
                             }
                             if ui.button("Load Seed").clicked() {
                                 let file_opt = FileDialog::new()
+                                    .set_title("Load seed from JSON file")
                                     .set_directory("/")
                                     .add_filter("JSON File", &["json"])
                                     .pick_file();
@@ -1444,6 +1475,7 @@ impl PlandoApp {
                             }
                             if ui.button("Load Logic Preset from file").clicked() {
                                 let file_opt = FileDialog::new()
+                                    .set_title("Load logic preset from JSON file")
                                     .set_directory("/")
                                     .add_filter("JSON File", &["json"])
                                     .pick_file();
@@ -1462,6 +1494,7 @@ impl PlandoApp {
                             }
                             if ui.button("Create ROM from seed file").clicked() {
                                 if let Some(file) = FileDialog::new()
+                                .set_title("Select seed JSON file to load and patch")
                                 .set_directory("/").add_filter("JSON File", &["json"]).pick_file() {
                                     match load_seed(&mut self.plando, &file) {
                                         Ok(_) => {
@@ -1489,6 +1522,7 @@ impl PlandoApp {
                             }
                             if ui.button("Load Map from JSON").clicked() {
                                 let file_opt = FileDialog::new()
+                                    .set_title("Select Map JSON to load")
                                     .set_directory("/")
                                     .add_filter("JSON File", &["json"])
                                     .pick_file();
@@ -1499,17 +1533,6 @@ impl PlandoApp {
                                     }
                                 }
                                 ui.close_menu();
-                            }
-                            ui.separator();
-                            if ui.button("Toggle Map Editor").clicked() {
-                                if map_editor_mode {
-                                    if self.map_editor.invalid_doors.is_empty() {
-                                        self.plando.load_map(self.map_editor.map.clone());
-                                    } else {
-                                        self.map_editor.map = self.plando.map.clone();
-                                    }
-                                }
-                                map_editor_mode = !map_editor_mode;
                             }
                             ui.separator();
                             if ui.add_enabled(self.modal_type == ModalType::None, egui::Button::new("Download Map Repositories")).clicked() {
@@ -1570,15 +1593,49 @@ impl PlandoApp {
                                 customize_logic_open = true;
                                 ui.close_menu();
                             }
-                        })
-                        
+                        });
+                        ui.menu_button("Map Editor", |ui| {
+                            let map_editor_str = match map_editor_mode {
+                                true => "Close Map Editor",
+                                false => "Open Map Editor"
+                            };
+                            if ui.button(map_editor_str).clicked() {
+                                if map_editor_mode {
+                                    if self.map_editor.is_valid() {
+                                        self.plando.load_map(self.map_editor.map.clone());
+                                    } else {
+                                        self.map_editor.reset(self.plando.map.clone());
+                                    }
+                                }
+                                map_editor_mode = !map_editor_mode;
+                            }
+                            if !map_editor_mode {
+                                return;
+                            }
+                            ui.separator();
+                            
+                            if ui.button("Save Map").clicked() {
+                                let file_opt = FileDialog::new()
+                                    .set_title("Save Map to JSON file")
+                                    .set_directory("/")
+                                    .add_filter("JSON File", &["json"])
+                                    .save_file();
+                                if let Some(file) = file_opt {
+                                    let res = self.map_editor.save_map(file.as_path());
+                                    if res.is_err() {
+                                        self.modal_type = ModalType::Error(res.unwrap_err().to_string());
+                                    }
+                                }
+                                ui.close_menu();
+                            }
+                        });
                     });
                 });
 
                 // Draw item selection sidebar
                 sidebar_width = egui::SidePanel::right("panel_item_select").resizable(false).show(ctx, |ui| {
                     if map_editor_mode {
-                        self.draw_sidebar_room_select(ui, sidebar_height);
+                        self.draw_sidebar_room_select(ui, screen_size);
                     } else {
                         sidebar_selection = self.draw_sidebar_item_select(ui, sidebar_height, sidebar_selection);
                     }
@@ -1743,6 +1800,10 @@ impl PlandoApp {
 
         let mut last_hovered_room_idx = None;
         for data in &self.room_data {
+            if self.map_editor.missing_rooms.contains(&data.room_idx) {
+                continue;
+            }
+
             let atlas_rect = IntRect::new(data.atlas_x_offset as i32 * 8, data.atlas_y_offset as i32 * 8, data.tile_width as i32 * 8, data.tile_height as i32 * 8);
             let mut spr_room = graphics::Sprite::with_texture_and_rect(&self.atlas_tex, atlas_rect);
             let (room_x, room_y) = self.map_editor.map.rooms[data.room_idx];
@@ -1769,13 +1830,15 @@ impl PlandoApp {
             spr_room.set_position((room_x as f32 * 8.0, room_y as f32 * 8.0));
             rt.draw_with_renderstates(&spr_room, states);
 
-            if spr_room.global_bounds().contains2(self.local_mouse_x, self.local_mouse_y) {
+            if self.is_mouse_public && spr_room.global_bounds().contains2(self.local_mouse_x, self.local_mouse_y) {
                 info_overlay = Some(data.room_name.clone());
                 last_hovered_room_idx = Some(data.room_idx);
                 if self.mouse_state.is_button_pressed(mouse::Button::Left) {
                     self.map_editor.dragged_room_idx = Some(data.room_idx);
                     self.map_editor.dragged_room_xoffset = mouse_tile_x as usize - room_x;
                     self.map_editor.dragged_room_yoffset = mouse_tile_y as usize - room_y;
+                } else if self.mouse_state.is_button_pressed(mouse::Button::Right) {
+                    self.map_editor.erase_room(data.room_idx, &self.plando.game_data);
                 }
             }
         }
@@ -2298,10 +2361,64 @@ impl PlandoApp {
         sidebar_selection
     }
 
-    fn draw_sidebar_room_select(&mut self, ui: &mut Ui, sidebar_height: f32) -> Option<usize> {
-        egui::ComboBox::new("combo_map_editor", "Mode").show_ui(ui, |ui| {
-
+    fn draw_sidebar_room_select(&mut self, ui: &mut Ui, screen_size: Vector2f) -> Option<usize> {
+        let mode_text = match self.map_editor.sidebar_mode {
+            SidebarMode::Rooms => "Rooms",
+            SidebarMode::Areas => "Areas",
+            SidebarMode::SubAreas => "Sub Areas",
+        };
+        egui::ComboBox::new("combo_map_editor", "Mode").selected_text(mode_text).show_ui(ui, |ui| {
+            ui.selectable_value(&mut self.map_editor.sidebar_mode, SidebarMode::Rooms, "Rooms");
+            ui.selectable_value(&mut self.map_editor.sidebar_mode, SidebarMode::Areas, "Areas");
+            ui.selectable_value(&mut self.map_editor.sidebar_mode, SidebarMode::SubAreas, "Sub Areas");
         });
+        ui.separator();
+        
+        match self.map_editor.sidebar_mode {
+            SidebarMode::Rooms => {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    let search_bar = ui.text_edit_singleline(&mut self.map_editor.search_str);
+                    if ui.input_mut(|i| i.consume_shortcut(&egui::KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::F))) {
+                        search_bar.request_focus();
+                        ui.scroll_to_rect(search_bar.rect, Some(egui::Align::TOP));
+                    }
+                    let room_idxs: Vec<usize> = self.plando.game_data.room_geometry.iter().enumerate().filter_map(
+                        |(idx, room_geometry)| {
+                            if room_geometry.name.to_lowercase().contains(&self.map_editor.search_str.to_lowercase()) {
+                                return Some(idx);
+                            }
+                            None
+                        }
+                    ).collect();
+
+                    for room_idx in room_idxs {
+                        let is_missing = self.map_editor.missing_rooms.contains(&room_idx);
+                        let room_name = &self.plando.game_data.room_geometry[room_idx].name;
+                        let mut btn = egui::Button::new(room_name).min_size(Vec2 { x: 256.0, y: 1.0 });
+                        if is_missing {
+                            btn = btn.fill(Color32::RED);
+                        }
+                        if ui.add(btn).clicked() {
+                            if is_missing {
+                                self.map_editor.spawn_room(room_idx, &self.plando.game_data);
+                            }
+                            let (room_x, room_y) = self.map_editor.map.rooms[room_idx];
+                            let room_geometry = &self.plando.game_data.room_geometry[room_idx];
+                            let room_width = room_geometry.map[0].len() as f32 * 8.0;
+                            let room_height = room_geometry.map.len() as f32 * 8.0;
+                            let room_rect = FloatRect::new(room_x as f32 * 8.0, room_y as f32 * 8.0, room_width, room_height);
+                            self.view.focus_rect(room_rect, screen_size);
+                        }
+                    }
+                });
+            }
+            SidebarMode::Areas => {
+
+            }
+            SidebarMode::SubAreas => {
+
+            }
+        }
         None
     }
 

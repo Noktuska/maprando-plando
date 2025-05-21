@@ -1,7 +1,17 @@
+use std::{fs::File, io::Write, path::Path};
+
+use anyhow::Result;
 use hashbrown::HashSet;
 use maprando_game::{GameData, Map};
 
 use crate::PlandoApp;
+
+#[derive(PartialEq, Eq)]
+pub enum SidebarMode {
+    Rooms,
+    Areas,
+    SubAreas,
+}
 
 pub struct MapEditor {
     pub map: Map,
@@ -10,6 +20,10 @@ pub struct MapEditor {
     pub dragged_room_yoffset: usize,
 
     pub invalid_doors: HashSet<(usize, usize)>, // (room_idx, door_idx)
+    pub missing_rooms: HashSet<usize>, // room_idx
+
+    pub sidebar_mode: SidebarMode,
+    pub search_str: String,
 }
 
 impl MapEditor {
@@ -20,7 +34,41 @@ impl MapEditor {
             dragged_room_xoffset: 0,
             dragged_room_yoffset: 0,
             invalid_doors: HashSet::new(),
+            missing_rooms: HashSet::new(),
+            sidebar_mode: SidebarMode::Rooms,
+            search_str: String::new(),
         }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.invalid_doors.is_empty() && self.missing_rooms.is_empty()
+    }
+
+    pub fn reset(&mut self, map: Map) {
+        self.map = map;
+        self.dragged_room_idx = None;
+        self.invalid_doors.clear();
+        self.missing_rooms.clear();
+    }
+
+    pub fn erase_room(&mut self, room_idx: usize, game_data: &GameData) {
+        self.missing_rooms.insert(room_idx);
+        let room_geometry = &game_data.room_geometry[room_idx];
+        for (door_idx, door) in room_geometry.doors.iter().enumerate() {
+            self.invalid_doors.remove(&(room_idx, door_idx));
+            if let Some(other_door_conn_idx) = self.get_door_conn_idx(room_idx, door_idx, game_data) {
+                let door_ptr_pair = (door.exit_ptr, door.entrance_ptr);
+                let prev_door_conn = self.map.doors.remove(other_door_conn_idx);
+                let other_door_ptr_pair = if prev_door_conn.0 == door_ptr_pair { prev_door_conn.1 } else { prev_door_conn.0 };
+                let invalid_door = game_data.room_and_door_idxs_by_door_ptr_pair[&other_door_ptr_pair];
+                self.invalid_doors.insert(invalid_door);
+            }
+        }
+    }
+
+    pub fn spawn_room(&mut self, room_idx: usize, game_data: &GameData) {
+        self.missing_rooms.remove(&room_idx);
+        self.snap_room(room_idx, game_data);
     }
 
     pub fn snap_room(&mut self, room_idx: usize, game_data: &GameData) {
@@ -30,11 +78,7 @@ impl MapEditor {
         // Invalidate all doors of moved room and all orphaned doors that were created by moving the room
         for (door_idx, door) in room_geometry.doors.iter().enumerate() {
             let cur_door_ptr_pair = (door.exit_ptr, door.entrance_ptr);
-            if let Some(prev_door_conn_idx) = self.map.doors.iter().position(
-                |(src, dst, _)| {
-                    *src == cur_door_ptr_pair || *dst == cur_door_ptr_pair
-                }
-            ) {
+            if let Some(prev_door_conn_idx) = self.get_door_conn_idx(room_idx, door_idx, game_data) {
                 let prev_door_conn = self.map.doors[prev_door_conn_idx];
                 self.map.doors.remove(prev_door_conn_idx);
                 let other_door_ptr_pair = if prev_door_conn.0 == cur_door_ptr_pair { prev_door_conn.1 } else { prev_door_conn.0 };
@@ -104,5 +148,20 @@ impl MapEditor {
 
         self.invalid_doors.insert((room_idx, door_idx));
         None
+    }
+
+    fn get_door_conn_idx(&self, room_idx: usize, door_idx: usize, game_data: &GameData) -> Option<usize> {
+        let door = &game_data.room_geometry[room_idx].doors[door_idx];
+        let door_ptr_pair = (door.exit_ptr, door.entrance_ptr);
+        self.map.doors.iter().position(
+            |&(src, dst, _)| src == door_ptr_pair || dst == door_ptr_pair
+        )
+    }
+
+    pub fn save_map(&self, path: &Path) -> Result<()> {
+        let str = serde_json::to_string_pretty(&self.map)?;
+        let mut file = File::create(path)?;
+        file.write_all(str.as_bytes())?;
+        Ok(())
     }
 }
