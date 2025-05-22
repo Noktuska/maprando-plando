@@ -327,10 +327,16 @@ impl Plando {
     }
 
     pub fn load_map(&mut self, map: Map) {
+        let auto_update = self.auto_update_spoiler;
+        self.auto_update_spoiler = false;
         self.map = map;
         self.clear_item_locations();
         self.clear_doors();
+        self.start_location_data.start_location = Plando::get_ship_start();
+        let _ = self.update_hub_location();
         self.randomizable_door_connections = get_randomizable_door_connections(&self.game_data, &self.map, &self.objectives);
+        self.auto_update_spoiler = auto_update;
+        self.update_spoiler_data();
     }
 
     pub fn load_map_repository(map_repo_type: MapRepositoryType) -> Option<MapRepository> {

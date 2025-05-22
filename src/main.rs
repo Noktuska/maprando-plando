@@ -1592,27 +1592,58 @@ impl PlandoApp {
                         });
                         ui.menu_button("Map Editor", |ui| {
                             let map_editor_str = match map_editor_mode {
-                                true => "Close Map Editor",
+                                true => "Discard Changes",
                                 false => "Open Map Editor"
                             };
                             if ui.button(map_editor_str).clicked() {
                                 if map_editor_mode {
-                                    match self.map_editor.is_valid(&self.plando.game_data) {
-                                        Ok(_) => self.plando.load_map(self.map_editor.map.clone()),
-                                        Err(err) => {
-                                            self.map_editor.reset(self.plando.map.clone());
-                                            self.modal_type = ModalType::Error(format!("Invalid map: {}", err.to_string()));
-                                        }
-                                    }
+                                    self.map_editor.reset(self.plando.map.clone());
                                 }
                                 map_editor_mode = !map_editor_mode;
+                                ui.close_menu();
                             }
                             if !map_editor_mode {
                                 return;
                             }
+                            if ui.button("Apply Changes").clicked() {
+                                match self.map_editor.is_valid(&self.plando.game_data) {
+                                    Ok(_) => {
+                                        let auto_update = self.plando.auto_update_spoiler;
+                                        self.plando.auto_update_spoiler = false;
+                                        let item_locs = self.plando.item_locations.clone();
+                                        let door_locks = self.plando.locked_doors.clone();
+                                        let start_pos = self.plando.start_location_data.start_location.clone();
+                                        self.plando.load_map(self.map_editor.map.clone());
+                                        for (idx, &item) in item_locs.iter().enumerate() {
+                                            self.plando.place_item(idx, item);
+                                        }
+                                        let mut door_err = false;
+                                        for door in door_locks {
+                                            let (room_idx, door_idx) = self.plando.game_data.room_and_door_idxs_by_door_ptr_pair[&door.src_ptr_pair];
+                                            if self.plando.place_door(room_idx, door_idx, Some(door.door_type), false, true).is_err() {
+                                                door_err = true;
+                                            }
+                                        }
+                                        if self.plando.place_start_location(start_pos).is_err() {
+                                            self.modal_type = ModalType::Error(match door_err {
+                                                true => "Some doors have been removed as they became invalid. Start location was reset as the hub became unreachable",
+                                                false => "Start location was reset as the hub became unreachable"
+                                            }.to_string());
+                                        } else if door_err {
+                                            self.modal_type = ModalType::Error("Some doors have been removed as they became invalid".to_string());
+                                        }
+                                        self.plando.auto_update_spoiler = auto_update;
+                                        self.plando.update_spoiler_data();
+                                    }
+                                    Err(err) => {
+                                        self.modal_type = ModalType::Error(format!("Invalid map: {}", err.to_string()));
+                                    }
+                                }
+                                ui.close_menu();
+                            }
                             ui.separator();
                             
-                            if ui.button("Save Map").clicked() {
+                            if ui.button("Save Map to file").clicked() {
                                 let file_opt = FileDialog::new()
                                     .set_title("Save Map to JSON file")
                                     .set_directory("/")
