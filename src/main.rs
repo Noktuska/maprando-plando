@@ -1,10 +1,10 @@
 use {
-    anyhow::{anyhow, bail, Result}, egui_sfml::{egui::{self, Color32, Context, Id, Modifiers, Pos2, Sense, TextureId, Ui, Vec2}, SfEgui, UserTexSource}, flate2::read::GzDecoder, hashbrown::{HashMap, HashSet}, map_editor::{MapEditor, SidebarMode}, maprando::{
+    anyhow::{anyhow, bail, Result}, egui_sfml::{egui::{self, Color32, Context, Id, Modifiers, Sense, TextureId, Ui, Vec2}, SfEgui, UserTexSource}, flate2::read::GzDecoder, hashbrown::HashMap, map_editor::{MapEditor, SidebarMode}, maprando::{
         customize::{mosaic::MosaicTheme, ControllerButton, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, MusicSettings, PaletteTheme, ShakingSetting, TileTheme}, patch::Rom, randomize::SpoilerRouteEntry, settings::{DoorLocksSize, DoorsMode, ItemDotChange, MapStationReveal, MapsRevealed, Objective, ObjectiveSetting, RandomizerSettings, SaveAnimals, WallJump}
     }, maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType}, mouse_state::MouseState, plando::{DoubleItemPlacement, MapRepositoryType, Placeable, Plando, ITEM_VALUES}, rand::RngCore, rfd::FileDialog, self_update::cargo_crate_version, serde::{Deserialize, Serialize}, sfml::{
         cpp::FBox, graphics::{
-            self, CircleShape, Color, FloatRect, IntRect, PrimitiveType, Rect, RenderStates, RenderTarget, RenderWindow, Shape, Transformable, Vertex
-        }, system::Vector2f, window::{
+            self, CircleShape, Color, FloatRect, IntRect, PrimitiveType, RenderStates, RenderTarget, RenderWindow, Shape, Transformable, Vertex
+        }, system::{Vector2f, Vector2i}, window::{
             mouse, Event, Key, Style
         }
     }, std::{cmp::{max, min}, fs::File, io::{Read, Write}, path::Path, thread::{self, JoinHandle}, u32}
@@ -14,6 +14,7 @@ mod plando;
 mod layout;
 mod mouse_state;
 mod map_editor;
+mod utils;
 
 #[derive(Clone)]
 struct RoomData {
@@ -1315,7 +1316,7 @@ impl PlandoApp {
             // mouse_is_public is true if the mouse is on the map view and not on some GUI
             self.is_mouse_public = !(spoiler_details_hovered || settings_open || customize_open || customize_logic_open || self.modal_type != ModalType::None
                 || spoiler_window_bounds.contains(self.mouse_state.get_mouse_pos()) || self.mouse_state.mouse_x >= window.size().x as f32 - sidebar_width
-                || self.map_editor.dragged_room_idx.is_some());
+                || !self.map_editor.dragged_room_idx.is_empty());
 
             while let Some(ev) = window.poll_event() {
                 sfegui.add_event(&ev);
@@ -1357,12 +1358,7 @@ impl PlandoApp {
             }
 
             // Handle Misc Mouse Buttons
-            if self.mouse_state.is_button_pressed(mouse::Button::Middle) && self.is_mouse_public {
-                self.view.x_offset = 0.0;
-                self.view.y_offset = 0.0;
-                self.view.zoom = 1.0;
-            }
-            if self.mouse_state.is_button_down(mouse::Button::Left) && self.is_mouse_public {
+            if self.mouse_state.is_button_down(mouse::Button::Middle) && self.is_mouse_public {
                 self.view.x_offset += self.mouse_state.mouse_dx;
                 self.view.y_offset += self.mouse_state.mouse_dy;
             }
@@ -1786,19 +1782,30 @@ impl PlandoApp {
         let mut info_overlay = None;
 
         // Tile position the mouse is hovering
-        let mouse_tile_x = (self.local_mouse_x / 8.0).floor() as i32;
-        let mouse_tile_y = (self.local_mouse_y / 8.0).floor() as i32;
-        // Move the currently dragged room to mouse pos
-        if let Some(drag_idx) = self.map_editor.dragged_room_idx {
-            let new_room_x = mouse_tile_x - self.map_editor.dragged_room_xoffset as i32;
-            let new_room_y = mouse_tile_y - self.map_editor.dragged_room_yoffset as i32;
-            let room_width = self.plando.game_data.room_geometry[drag_idx].map[0].len();
-            let room_height = self.plando.game_data.room_geometry[drag_idx].map.len();
-            self.map_editor.map.rooms[drag_idx].0 = (new_room_x.max(0) as usize).min(PlandoApp::GRID_SIZE - room_width);
-            self.map_editor.map.rooms[drag_idx].1 = (new_room_y.max(0) as usize).min(PlandoApp::GRID_SIZE - room_height);
+        let mouse_tile_x = ((self.local_mouse_x / 8.0).floor().max(0.0) as usize).min(PlandoApp::GRID_SIZE);
+        let mouse_tile_y = ((self.local_mouse_y / 8.0).floor().max(0.0) as usize).min(PlandoApp::GRID_SIZE);
+
+        if let Some(mut selected_bbox) = self.map_editor.get_dragged_bbox(&self.plando.game_data) {
+            let (x_offsets, y_offset): (Vec<_>, Vec<_>) = self.map_editor.dragged_room_idx.iter().map(|&idx| {
+                let (room_x, room_y) = self.map_editor.map.rooms[idx];
+                (room_x as i32 - selected_bbox.left, room_y as i32 - selected_bbox.top)
+            }).collect();
+
+            // Move bbox to mouse pos bounded by the grid size
+            selected_bbox.left = mouse_tile_x as i32 - self.map_editor.dragged_room_xoffset as i32;
+            selected_bbox.top = mouse_tile_y as i32 - self.map_editor.dragged_room_yoffset as i32;
+            selected_bbox.left = selected_bbox.left.max(0).min(PlandoApp::GRID_SIZE as i32 - selected_bbox.width);
+            selected_bbox.top = selected_bbox.top.max(0).min(PlandoApp::GRID_SIZE as i32 - selected_bbox.height);
+
+            // Move the currently dragged rooms to mouse pos, bounded by the grid size
+            for (i, &drag_idx) in self.map_editor.dragged_room_idx.iter().enumerate() {
+                self.map_editor.map.rooms[drag_idx].0 = selected_bbox.left as usize + x_offsets[i] as usize;
+                self.map_editor.map.rooms[drag_idx].1 = selected_bbox.top as usize + y_offset[i] as usize;
+            }
         }
 
         let mut last_hovered_room_idx = None;
+        let mut has_dragged_room = false;
         for data in &self.room_data {
             if self.map_editor.missing_rooms.contains(&data.room_idx) {
                 continue;
@@ -1831,19 +1838,42 @@ impl PlandoApp {
             rt.draw_with_renderstates(&spr_room, states);
 
             if self.is_mouse_public && spr_room.global_bounds().contains2(self.local_mouse_x, self.local_mouse_y) {
-                info_overlay = Some(data.room_name.clone());
-                last_hovered_room_idx = Some(data.room_idx);
-                if self.mouse_state.is_button_pressed(mouse::Button::Left) {
-                    self.map_editor.dragged_room_idx = Some(data.room_idx);
-                    self.map_editor.dragged_room_xoffset = mouse_tile_x as usize - room_x;
-                    self.map_editor.dragged_room_yoffset = mouse_tile_y as usize - room_y;
-                } else if self.mouse_state.is_button_pressed(mouse::Button::Right) {
-                    self.map_editor.erase_room(data.room_idx, &self.plando.game_data);
+                let local_cell_x = mouse_tile_x - room_x;
+                let local_cell_y = mouse_tile_y - room_y;
+                if room_geometry.map[local_cell_y][local_cell_x] == 1 {
+                    info_overlay = Some(data.room_name.clone());
+                    last_hovered_room_idx = Some(data.room_idx);
+                    if self.mouse_state.is_button_pressed(mouse::Button::Left) {
+                        has_dragged_room = true;
+                        self.map_editor.start_drag(Some(data.room_idx), mouse_tile_x as usize, mouse_tile_y as usize, &self.plando.game_data);
+                    } else if self.mouse_state.is_button_pressed(mouse::Button::Right) {
+                        self.map_editor.erase_room(data.room_idx, &self.plando.game_data);
+                    }
                 }
             }
         }
-        if let Some(idx) = last_hovered_room_idx {
-            self.draw_room_outline(rt, states, idx);
+        
+        if !has_dragged_room && self.mouse_state.is_button_pressed(mouse::Button::Left) {
+            self.map_editor.start_drag(None, mouse_tile_x, mouse_tile_y, &self.plando.game_data);
+        }
+
+        if let Some(rect) = self.map_editor.get_selected_bbox(&self.plando.game_data) {
+            self.draw_room_outline(rt, states, rect);
+        } else if let Some(rect) = self.map_editor.get_dragged_bbox(&self.plando.game_data) {
+            self.draw_room_outline(rt, states, rect);
+        } else if self.mouse_state.is_button_down(mouse::Button::Left) {
+            let sel_start = self.map_editor.selection_start;
+            let mouse_pos = Vector2i::new(mouse_tile_x as i32, mouse_tile_y as i32);
+            let size = mouse_pos - sel_start;
+            let rect = IntRect::from_vecs(sel_start, size);
+            self.draw_room_outline(rt, states, rect);
+        } else if let Some(idx) = last_hovered_room_idx {
+            let (room_x, room_y) = self.map_editor.map.rooms[idx];
+            let room_geometry = &self.plando.game_data.room_geometry[idx];
+            let room_width = room_geometry.map[0].len();
+            let room_height = room_geometry.map.len();
+            let rect = IntRect::new(room_x as i32, room_y as i32, room_width as i32, room_height as i32);
+            self.draw_room_outline(rt, states, rect);
         }
 
         // Highlight invalid doors
@@ -1868,23 +1898,21 @@ impl PlandoApp {
         }
 
         if self.mouse_state.is_button_released(mouse::Button::Left) {
-            // Snap the room into place, this means connecting doors
-            if let Some(drag_idx) = self.map_editor.dragged_room_idx {
-                self.map_editor.snap_room(drag_idx, &self.plando.game_data);
-            }
-            self.map_editor.dragged_room_idx = None;
+            self.map_editor.stop_drag(mouse_tile_x, mouse_tile_y, &self.plando.game_data);
         }
 
         info_overlay
     }
 
-    fn draw_room_outline(&self, rt: &mut dyn RenderTarget, states: &RenderStates, room_idx: usize) {
+    fn draw_room_outline(&self, rt: &mut dyn RenderTarget, states: &RenderStates, rect: IntRect) {
         let mut vbuffs = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
-        let room_geometry = &self.plando.game_data.room_geometry[room_idx];
-        let (room_x, room_y) = self.map_editor.map.rooms[room_idx];
 
-        let width = room_geometry.map[0].len() as f32 * 8.0;
-        let height = room_geometry.map.len() as f32 * 8.0;
+        let rect = utils::normalize_rect(rect);
+
+        let room_x = rect.left;
+        let room_y = rect.top;
+        let width = rect.width as f32 * 8.0;
+        let height = rect.height as f32 * 8.0;
 
         let tl = Vector2f::new(room_x as f32 * 8.0, room_y as f32 * 8.0);
         let tr = tl + Vector2f::new(width, 0.0);

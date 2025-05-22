@@ -3,8 +3,9 @@ use std::{fs::File, io::Write, path::Path};
 use anyhow::Result;
 use hashbrown::HashSet;
 use maprando_game::{GameData, Map};
+use sfml::{graphics::IntRect, system::Vector2i};
 
-use crate::PlandoApp;
+use crate::{utils, PlandoApp};
 
 #[derive(PartialEq, Eq)]
 pub enum SidebarMode {
@@ -15,7 +16,9 @@ pub enum SidebarMode {
 
 pub struct MapEditor {
     pub map: Map,
-    pub dragged_room_idx: Option<usize>,
+    pub selected_room_idx: Vec<usize>,
+    pub selection_start: Vector2i,
+    pub dragged_room_idx: Vec<usize>,
     pub dragged_room_xoffset: usize,
     pub dragged_room_yoffset: usize,
 
@@ -30,7 +33,9 @@ impl MapEditor {
     pub fn new(map: Map) -> MapEditor {
         MapEditor {
             map,
-            dragged_room_idx: None,
+            selected_room_idx: Vec::new(),
+            selection_start: Vector2i::default(),
+            dragged_room_idx: Vec::new(),
             dragged_room_xoffset: 0,
             dragged_room_yoffset: 0,
             invalid_doors: HashSet::new(),
@@ -46,9 +51,94 @@ impl MapEditor {
 
     pub fn reset(&mut self, map: Map) {
         self.map = map;
-        self.dragged_room_idx = None;
+        self.selected_room_idx.clear();
+        self.dragged_room_idx.clear();
         self.invalid_doors.clear();
         self.missing_rooms.clear();
+    }
+
+    pub fn start_drag(&mut self, room_idx_opt: Option<usize>, mouse_tile_x: usize, mouse_tile_y: usize, game_data: &GameData) {
+        if let Some(room_idx) = room_idx_opt {
+            if self.selected_room_idx.contains(&room_idx) {
+                // User starts dragging on one of the selected rooms, start dragging all of them
+                let bbox = self.get_selected_bbox(game_data).unwrap();
+                self.dragged_room_idx.append(&mut self.selected_room_idx);
+                self.dragged_room_xoffset = mouse_tile_x - bbox.left as usize;
+                self.dragged_room_yoffset = mouse_tile_y - bbox.top as usize;
+            } else {
+                // User starts dragging a non-selected room, deselect and only drag this one
+                let (room_x, room_y) = self.map.rooms[room_idx];
+                self.dragged_room_idx.push(room_idx);
+                self.dragged_room_xoffset = mouse_tile_x - room_x;
+                self.dragged_room_yoffset = mouse_tile_y - room_y;
+                self.selected_room_idx.clear();
+            }
+        } else {
+            // No room is being dragged, start a selection
+            self.selected_room_idx.clear();
+            self.selection_start = Vector2i::new(mouse_tile_x as i32, mouse_tile_y as i32);
+        }
+    }
+
+    pub fn stop_drag(&mut self, mouse_tile_x: usize, mouse_tile_y: usize, game_data: &GameData) {
+        if !self.dragged_room_idx.is_empty() {
+            // If we are dragging rooms, snap them into place
+            for i in 0..self.dragged_room_idx.len() {
+                self.snap_room(self.dragged_room_idx[i], game_data);
+            }
+            self.selected_room_idx.append(&mut self.dragged_room_idx);
+        } else {
+            // Otherwise we finish a selection
+            let w = mouse_tile_x as i32 - self.selection_start.x;
+            let h = mouse_tile_y as i32 - self.selection_start.y;
+            let rect = IntRect::new(self.selection_start.x, self.selection_start.y,w, h);
+            let rect = utils::normalize_rect(rect);
+
+            for (room_idx, &(room_x, room_y)) in self.map.rooms.iter().enumerate() {
+                let room_geometry = &game_data.room_geometry[room_idx];
+                let room_width = room_geometry.map[0].len();
+                let room_height = room_geometry.map.len();
+                let room_rect = IntRect::new(room_x as i32, room_y as i32, room_width as i32, room_height as i32);
+
+                if let Some(intersect) = rect.intersection(&room_rect) {
+                    if intersect == room_rect {
+                        self.selected_room_idx.push(room_idx);
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn get_selected_bbox(&self, game_data: &GameData) -> Option<IntRect> {
+        self.selected_room_idx.iter().map(|&idx| {
+            let room_geometry = &game_data.room_geometry[idx];
+            let (room_x, room_y) = self.map.rooms[idx];
+            let room_width = room_geometry.map[0].len();
+            let room_height = room_geometry.map.len();
+            IntRect::new(room_x as i32, room_y as i32, room_width as i32, room_height as i32)
+        }).reduce(|accum, elem| {
+            let left = accum.left.min(elem.left);
+            let top = accum.top.min(elem.top);
+            let right = (accum.left + accum.width).max(elem.left + elem.width);
+            let bottom = (accum.top + accum.height).max(elem.top + elem.height);
+            IntRect::new(left, top, right - left, bottom - top)
+        })
+    }
+
+    pub fn get_dragged_bbox(&self, game_data: &GameData) -> Option<IntRect> {
+        self.dragged_room_idx.iter().map(|&idx| {
+            let room_geometry = &game_data.room_geometry[idx];
+            let (room_x, room_y) = self.map.rooms[idx];
+            let room_width = room_geometry.map[0].len();
+            let room_height = room_geometry.map.len();
+            IntRect::new(room_x as i32, room_y as i32, room_width as i32, room_height as i32)
+        }).reduce(|accum, elem| {
+            let left = accum.left.min(elem.left);
+            let top = accum.top.min(elem.top);
+            let right = (accum.left + accum.width).max(elem.left + elem.width);
+            let bottom = (accum.top + accum.height).max(elem.top + elem.height);
+            IntRect::new(left, top, right - left, bottom - top)
+        })
     }
 
     pub fn erase_room(&mut self, room_idx: usize, game_data: &GameData) {
