@@ -1510,11 +1510,9 @@ impl PlandoApp {
                             }
                             if ui.add_enabled(self.plando.maps_standard.is_some(), egui::Button::new("Reroll Map (Standard)")).clicked() {
                                 self.plando.reroll_map(MapRepositoryType::Standard).unwrap();
-                                ui.close_menu();
                             }
                             if ui.add_enabled(self.plando.maps_wild.is_some(), egui::Button::new("Reroll Map (Wild)")).clicked() {
                                 self.plando.reroll_map(MapRepositoryType::Wild).unwrap();
-                                ui.close_menu();
                             }
                             if ui.button("Load Map from JSON").clicked() {
                                 let file_opt = FileDialog::new()
