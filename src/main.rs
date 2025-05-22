@@ -1665,6 +1665,11 @@ impl PlandoApp {
                                 ui.close_menu();
                             }
                         });
+                        if ui.button("Help").clicked() {
+                            if let Err(err) = open::that("https://github.com/Noktuska/maprando-plando/blob/main/README.md") {
+                                self.modal_type = ModalType::Error(err.to_string());
+                            }
+                        }
                     });
                 });
 
