@@ -1597,10 +1597,12 @@ impl PlandoApp {
                             };
                             if ui.button(map_editor_str).clicked() {
                                 if map_editor_mode {
-                                    if self.map_editor.is_valid() {
-                                        self.plando.load_map(self.map_editor.map.clone());
-                                    } else {
-                                        self.map_editor.reset(self.plando.map.clone());
+                                    match self.map_editor.is_valid(&self.plando.game_data) {
+                                        Ok(_) => self.plando.load_map(self.map_editor.map.clone()),
+                                        Err(err) => {
+                                            self.map_editor.reset(self.plando.map.clone());
+                                            self.modal_type = ModalType::Error(format!("Invalid map: {}", err.to_string()));
+                                        }
                                     }
                                 }
                                 map_editor_mode = !map_editor_mode;
@@ -1825,7 +1827,12 @@ impl PlandoApp {
                     let cell_x = (tile_x + room_x) * 8;
                     let cell_y = (tile_y + room_y) * 8;
                     let color_value = if room_geometry.heated { 2 } else { 1 };
-                    let cell_color = get_explored_color(color_value, self.map_editor.map.area[data.room_idx]);
+                    let mut cell_color = get_explored_color(color_value, self.map_editor.map.area[data.room_idx]);
+
+                    if self.map_editor.sidebar_mode == SidebarMode::Areas {
+                        let area_value = self.map_editor.get_area_value(data.room_idx);
+                        cell_color = area_value.to_color();
+                    }
                     
                     let mut bg_rect = graphics::RectangleShape::with_size((8.0, 8.0).into());
                     bg_rect.set_position((cell_x as f32, cell_y as f32));
@@ -1853,7 +1860,7 @@ impl PlandoApp {
             }
         }
         
-        if !has_dragged_room && self.mouse_state.is_button_pressed(mouse::Button::Left) {
+        if !has_dragged_room && self.is_mouse_public && self.mouse_state.is_button_pressed(mouse::Button::Left) {
             self.map_editor.start_drag(None, mouse_tile_x, mouse_tile_y, &self.plando.game_data);
         }
 
@@ -2393,12 +2400,10 @@ impl PlandoApp {
         let mode_text = match self.map_editor.sidebar_mode {
             SidebarMode::Rooms => "Rooms",
             SidebarMode::Areas => "Areas",
-            SidebarMode::SubAreas => "Sub Areas",
         };
         egui::ComboBox::new("combo_map_editor", "Mode").selected_text(mode_text).show_ui(ui, |ui| {
             ui.selectable_value(&mut self.map_editor.sidebar_mode, SidebarMode::Rooms, "Rooms");
             ui.selectable_value(&mut self.map_editor.sidebar_mode, SidebarMode::Areas, "Areas");
-            ui.selectable_value(&mut self.map_editor.sidebar_mode, SidebarMode::SubAreas, "Sub Areas");
         });
         ui.separator();
         
@@ -2441,10 +2446,34 @@ impl PlandoApp {
                 });
             }
             SidebarMode::Areas => {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    let areas = ["Crateria", "Brinstar", "Norfair", "Wrecked Ship", "Maridia", "Tourian"];
+                    for (idx, &area_str) in areas.iter().enumerate() {
+                        let col = map_editor::Area::from_tuple((idx, 0, 0)).to_color();
+                        let col32 = Color32::from_rgb(col.r, col.g, col.b);
+                        let btn = egui::Button::new(area_str).fill(col32).min_size(Vec2 { x: 256.0, y: 1.0 });
+                        if ui.add(btn).clicked() && !self.map_editor.selected_room_idx.is_empty() {
+                            for i in 0..self.map_editor.selected_room_idx.len() {
+                                let room_idx = self.map_editor.selected_room_idx[i];
+                                let sub_area = self.map_editor.map.subarea[room_idx];
+                                let sub_sub_area = self.map_editor.map.subsubarea[room_idx];
+                                self.map_editor.apply_area(room_idx, map_editor::Area::from_tuple((idx, sub_area, sub_sub_area)));
+                            }
+                        }
+                    }
+                    ui.separator();
 
-            }
-            SidebarMode::SubAreas => {
-
+                    for area_value in map_editor::Area::VALUES {
+                        let col = area_value.to_color();
+                        let col32 = Color32::from_rgb(col.r, col.g, col.b);
+                        let btn = egui::Button::new(area_value.to_string()).fill(col32).min_size(Vec2 { x: 256.0, y: 1.0 });
+                        if ui.add(btn).clicked() && !self.map_editor.selected_room_idx.is_empty() {
+                            for i in 0..self.map_editor.selected_room_idx.len() {
+                                self.map_editor.apply_area(self.map_editor.selected_room_idx[i], area_value);
+                            }
+                        }
+                    }
+                });
             }
         }
         None

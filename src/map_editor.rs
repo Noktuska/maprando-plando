@@ -1,9 +1,9 @@
-use std::{fs::File, io::Write, path::Path};
+use std::{fs::File, i32, io::Write, path::Path};
 
-use anyhow::Result;
+use anyhow::{anyhow, bail, Result};
 use hashbrown::HashSet;
 use maprando_game::{GameData, Map};
-use sfml::{graphics::IntRect, system::Vector2i};
+use sfml::{graphics::{Color, IntRect}, system::Vector2i};
 
 use crate::{utils, PlandoApp};
 
@@ -11,7 +11,117 @@ use crate::{utils, PlandoApp};
 pub enum SidebarMode {
     Rooms,
     Areas,
-    SubAreas,
+}
+
+#[derive(PartialEq, Eq, Clone, Copy)]
+pub enum Area {
+    OuterCrateria,
+    InnerCrateria,
+    BlueBrinstar,
+    GreenBrinstar,
+    PinkBrinstar,
+    RedBrinstar,
+    UpperNorfair,
+    LowerNorfair,
+    WreckedShip,
+    WestMaridia,
+    YellowMaridia,
+    MetroidHabitat,
+    MechaTourian
+}
+
+impl Area {
+    pub const VALUES: [Area; 13] = [
+        Area::OuterCrateria,
+        Area::InnerCrateria,
+        Area::BlueBrinstar,
+        Area::GreenBrinstar,
+        Area::PinkBrinstar,
+        Area::RedBrinstar,
+        Area::UpperNorfair,
+        Area::LowerNorfair,
+        Area::WreckedShip,
+        Area::WestMaridia,
+        Area::YellowMaridia,
+        Area::MetroidHabitat,
+        Area::MechaTourian
+    ];
+
+    pub fn to_string(&self) -> String {
+        use Area::*;
+        match self {
+            OuterCrateria => "Outer Crateria",
+            InnerCrateria => "Inner Crateria",
+            BlueBrinstar => "Blue Brinstar",
+            GreenBrinstar => "Green Brinstar",
+            PinkBrinstar => "Pink Brinstar",
+            RedBrinstar => "Red Brinstar",
+            UpperNorfair => "Upper Norfair",
+            LowerNorfair => "Lower Norfair",
+            WreckedShip => "Wrecked Ship",
+            WestMaridia => "West Maridia",
+            YellowMaridia => "Yellow Maridia",
+            MetroidHabitat => "Metroid Habitat",
+            MechaTourian => "Mecha Tourian",
+        }.to_string()
+    }
+
+    pub fn to_tuple(&self) -> (usize, usize, usize) {
+        use Area::*;
+        match self {
+            OuterCrateria => (0, 0, 0),
+            InnerCrateria => (0, 1, 0),
+            BlueBrinstar => (0, 1, 1),
+            GreenBrinstar => (1, 0, 0),
+            PinkBrinstar => (1, 0, 1),
+            RedBrinstar => (1, 1, 0),
+            UpperNorfair => (2, 0, 0),
+            LowerNorfair => (2, 1, 0),
+            WreckedShip => (3, 0, 0),
+            WestMaridia => (4, 0, 0),
+            YellowMaridia => (4, 1, 0),
+            MetroidHabitat => (5, 0, 0),
+            MechaTourian => (5, 1, 0),
+        }
+    }
+
+    pub fn to_color(&self) -> Color {
+        use Area::*;
+        match self {
+            OuterCrateria => Color::rgb(148, 0, 222),
+            InnerCrateria => Color::rgb(222, 123, 255),
+            BlueBrinstar => Color::rgb(66, 0, 99),
+            GreenBrinstar => Color::rgb(0, 148, 0),
+            PinkBrinstar => Color::rgb(99, 206, 99),
+            RedBrinstar => Color::rgb(0, 63, 0),
+            UpperNorfair => Color::rgb(189, 0, 0),
+            LowerNorfair => Color::rgb(255, 99, 99),
+            WreckedShip => Color::rgb(132, 140, 0),
+            WestMaridia => Color::rgb(25, 99, 239),
+            YellowMaridia => Color::rgb(99, 165, 255),
+            MetroidHabitat => Color::rgb(173, 99, 0),
+            MechaTourian => Color::rgb(239, 140, 99),
+        }
+    }
+
+    pub fn from_tuple(tuple: (usize, usize, usize)) -> Self {
+        use Area::*;
+        match tuple {
+            (0, 0, _) => OuterCrateria,
+            (0, 1, 0) => InnerCrateria,
+            (0, 1, 1) => BlueBrinstar,
+            (1, 0, 0) => GreenBrinstar,
+            (1, 0, 1) => PinkBrinstar,
+            (1, 1, _) => RedBrinstar,
+            (2, 0, _) => UpperNorfair,
+            (2, 1, _) => LowerNorfair,
+            (3, _, _) => WreckedShip,
+            (4, 0, _) => WestMaridia,
+            (4, 1, _) => YellowMaridia,
+            (5, 0, _) => MetroidHabitat,
+            (5, 1, _) | _ => MechaTourian,
+        }
+    }
 }
 
 pub struct MapEditor {
@@ -45,8 +155,21 @@ impl MapEditor {
         }
     }
 
-    pub fn is_valid(&self) -> bool {
-        self.invalid_doors.is_empty() && self.missing_rooms.is_empty()
+    pub fn is_valid(&self, game_data: &GameData) -> Result<()> {
+        if !self.invalid_doors.is_empty() {
+            let &(room_idx, _door_idx) = self.invalid_doors.iter().next().unwrap();
+            let room_name = &game_data.room_geometry[room_idx].name;
+            bail!("Door has no connection: {}", room_name);
+        }
+        if !self.missing_rooms.is_empty() {
+            let &room_idx = self.missing_rooms.iter().next().unwrap();
+            let room_name = &game_data.room_geometry[room_idx].name;
+            bail!("Room is missing from map: {}", room_name);
+        }
+        self.check_area_bounds(game_data)?;
+        self.check_area_transitions(game_data)?;
+        self.check_map_connections(game_data)?;
+        Ok(())
     }
 
     pub fn reset(&mut self, map: Map) {
@@ -55,6 +178,20 @@ impl MapEditor {
         self.dragged_room_idx.clear();
         self.invalid_doors.clear();
         self.missing_rooms.clear();
+    }
+
+    pub fn apply_area(&mut self, room_idx: usize, area_value: Area) {
+        let (area, sub_area, sub_sub_area) = area_value.to_tuple();
+        self.map.area[room_idx] = area;
+        self.map.subarea[room_idx] = sub_area;
+        self.map.subsubarea[room_idx] = sub_sub_area;
+    }
+
+    pub fn get_area_value(&self, room_idx: usize) -> Area {
+        let area = self.map.area[room_idx];
+        let sub_area = self.map.subarea[room_idx];
+        let sub_sub_area = self.map.subsubarea[room_idx];
+        Area::from_tuple((area, sub_area, sub_sub_area))
     }
 
     pub fn start_drag(&mut self, room_idx_opt: Option<usize>, mouse_tile_x: usize, mouse_tile_y: usize, game_data: &GameData) {
@@ -87,7 +224,7 @@ impl MapEditor {
                 self.snap_room(self.dragged_room_idx[i], game_data);
             }
             self.selected_room_idx.append(&mut self.dragged_room_idx);
-        } else {
+        } else if self.selected_room_idx.is_empty() {
             // Otherwise we finish a selection
             let w = mouse_tile_x as i32 - self.selection_start.x;
             let h = mouse_tile_y as i32 - self.selection_start.y;
@@ -248,10 +385,124 @@ impl MapEditor {
         )
     }
 
+    fn check_area_bounds(&self, game_data: &GameData) -> Result<()> {
+        let mut area_min = [Vector2i::new(i32::MAX, i32::MAX); 6];
+        let mut area_max = [Vector2i::new(0, 0); 6];
+
+        for (room_idx, &(room_x, room_y)) in self.map.rooms.iter().enumerate() {
+            let area = self.map.area[room_idx];
+            area_min[area].x = area_min[area].x.min(room_x as i32);
+            area_min[area].y = area_min[area].y.min(room_y as i32);
+
+            let room_geometry = &game_data.room_geometry[room_idx];
+            let room_width = room_geometry.map[0].len();
+            let room_height = room_geometry.map.len();
+
+            let room_right = (room_x + room_width) as i32;
+            let room_bottom = (room_y + room_height) as i32;
+            area_max[area].x = area_max[area].x.max(room_right);
+            area_max[area].y = area_max[area].y.max(room_bottom);
+        }
+
+        for idx in 0..6 {
+            let area_size = area_max[idx] - area_min[idx];
+            if area_size.x > 64 || area_size.y > 32 {
+                let area_name = index_to_area_name(idx);
+                bail!("Area {area_name} breaks maximum boundary ({}, {}) of allowed (64, 32)", area_size.x, area_size.y);
+            }
+        }
+
+        Ok(())
+    }
+
+    fn check_area_transitions(&self, game_data: &GameData) -> Result<()> {
+        let mut connection_count = 0;
+        for (room_idx, room_geometry) in game_data.room_geometry.iter().enumerate() {
+            for (door_idx, door) in room_geometry.doors.iter().enumerate() {
+                let door_ptr_pair = (door.exit_ptr, door.entrance_ptr);
+                let door_conn_idx = self.get_door_conn_idx(room_idx, door_idx, game_data).ok_or(anyhow!("Room is missing a door connection"))?;
+                let door_conn = self.map.doors[door_conn_idx];
+                let other_door_ptr_pair = if door_conn.0 == door_ptr_pair { door_conn.1 } else { door_conn.0 };
+                let (other_room_idx, _) = game_data.room_and_door_idxs_by_door_ptr_pair[&other_door_ptr_pair];
+
+                let area = self.map.area[room_idx];
+                let other_area = self.map.area[other_room_idx];
+                if area != other_area {
+                    connection_count += 1;
+                }
+                
+            }
+        }
+        if connection_count > 46 {
+            bail!("There can be a maximum of 23 Area transitions (currently {})", connection_count / 2);
+        }
+        Ok(())
+    }
+
+    fn check_map_connections(&self, game_data: &GameData) -> Result<()> {
+        let mut area_maps = [false; 6];
+        let map_room_idxs: Vec<usize> = game_data.room_geometry.iter().enumerate().filter_map(
+            |(idx, room)| if room.name.contains(" Map Room") { Some(idx) } else { None }
+        ).collect();
+        // Check every area has exaclty one map station
+        for room_idx in map_room_idxs {
+            let area = self.map.area[room_idx];
+            if area_maps[area] {
+                let area_name = index_to_area_name(area);
+                bail!("{area_name} has multiple Map Stations");
+            }
+            area_maps[area] = true;
+        }
+
+        // Check Phantoon Map is connected to Phantoon through one room in a singular area
+        let phantoon_map_idx = game_data.room_geometry.iter().position(|x| x.name == "Wrecked Ship Map Room").unwrap();
+        let phantoon_room_idx = game_data.room_geometry.iter().position(|x| x.name == "Phantoon's Room").unwrap();
+        let phantoon_map_door = &game_data.room_geometry[phantoon_map_idx].doors[0];
+        let phantoon_room_door = &game_data.room_geometry[phantoon_room_idx].doors[0];
+        let phantoon_map_ptr_pair = (phantoon_map_door.exit_ptr, phantoon_map_door.entrance_ptr);
+        let phantoon_room_ptr_pair = (phantoon_room_door.exit_ptr, phantoon_room_door.entrance_ptr);
+
+        let phantoon_map_conn_idx = self.get_door_conn_idx(phantoon_map_idx, 0, game_data).unwrap();
+        let phantoon_room_conn_idx = self.get_door_conn_idx(phantoon_room_idx, 0, game_data).unwrap();
+        let phantoon_map_conn = self.map.doors[phantoon_map_conn_idx];
+        let phantoon_room_conn = self.map.doors[phantoon_room_conn_idx];
+
+        let other_map_ptr_pair = if phantoon_map_conn.0 == phantoon_map_ptr_pair { phantoon_map_conn.1 } else { phantoon_map_conn.0 };
+        let other_room_ptr_pair = if phantoon_room_conn.0 == phantoon_room_ptr_pair { phantoon_room_conn.1 } else { phantoon_room_conn.0 };
+
+        let other_map_room = game_data.room_and_door_idxs_by_door_ptr_pair[&other_map_ptr_pair];
+        let other_room_room = game_data.room_and_door_idxs_by_door_ptr_pair[&other_room_ptr_pair];
+
+        if other_map_room.0 != other_room_room.0 {
+            bail!("Phantoon Map Station has to connect to Phantoon's room through a singular room");
+        }
+        let area_phantoon = self.map.area[phantoon_room_idx];
+        let area_map = self.map.area[phantoon_map_idx];
+        let area_other = self.map.area[other_map_room.0];
+        if area_phantoon != area_map || area_map != area_other {
+            bail!("Phantoon Map Station, Phantoon's room and the connecting room have to be of the same Area");
+        }
+
+        Ok(())
+    }
+
     pub fn save_map(&self, path: &Path) -> Result<()> {
         let str = serde_json::to_string_pretty(&self.map)?;
         let mut file = File::create(path)?;
         file.write_all(str.as_bytes())?;
         Ok(())
     }
+}
+
+
+
+fn index_to_area_name(idx: usize) -> String {
+    match idx {
+        0 => "Crateria",
+        1 => "Brinstar",
+        2 => "Norfair",
+        3 => "Wrecked Ship",
+        4 => "Maridia",
+        _ => "Tourian"
+    }.to_string()
 }
