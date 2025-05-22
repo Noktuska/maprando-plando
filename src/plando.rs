@@ -453,6 +453,10 @@ impl Plando {
             self.start_location_data.hub_obtain_route = Vec::new();
             self.start_location_data.hub_return_route = Vec::new();
 
+            if self.auto_update_spoiler {
+                self.update_spoiler_data();
+            }
+
             return Ok(());
         }
 

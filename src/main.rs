@@ -1358,7 +1358,12 @@ impl PlandoApp {
             }
 
             // Handle Misc Mouse Buttons
-            if self.mouse_state.is_button_down(mouse::Button::Middle) && self.is_mouse_public {
+            let drag_move_button = if map_editor_mode {
+                mouse::Button::Middle
+            } else {
+                mouse::Button::Left
+            };
+            if self.mouse_state.is_button_down(drag_move_button) && self.is_mouse_public {
                 self.view.x_offset += self.mouse_state.mouse_dx;
                 self.view.y_offset += self.mouse_state.mouse_dy;
             }
@@ -1669,10 +1674,12 @@ impl PlandoApp {
                 }).response.rect.width();
 
                 // Draw Spoiler Details Window
-                if self.spoiler_type != SpoilerType::None && self.plando.randomization.is_some() {
-                    spoiler_details_hovered = self.draw_spoiler_details(ctx);
-                } else if self.plando.randomization.is_some() {
-                    spoiler_window_bounds = self.draw_spoiler_summary(ctx, self.mouse_state.mouse_y as f32, spoiler_window_bounds);
+                if !reset_after_patch {
+                    if self.spoiler_type != SpoilerType::None && self.plando.randomization.is_some() {
+                        spoiler_details_hovered = self.draw_spoiler_details(ctx);
+                    } else if self.plando.randomization.is_some() {
+                        spoiler_window_bounds = self.draw_spoiler_summary(ctx, self.mouse_state.mouse_y as f32, spoiler_window_bounds);
+                    }
                 }
 
                 if settings_open {
@@ -1683,6 +1690,11 @@ impl PlandoApp {
                     customize_open = self.draw_customization_window(ctx);
                     if !customize_open && reset_after_patch {
                         let _ = self.plando.reroll_map(MapRepositoryType::Vanilla);
+                        let preset = match self.settings.last_logic_preset.as_ref() {
+                            Some(preset) => preset.clone(),
+                            None => self.plando.preset_data.default_preset.clone()
+                        };
+                        self.plando.load_preset(preset);
                         reset_after_patch = false;
                     }
                 }

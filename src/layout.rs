@@ -234,6 +234,7 @@ pub fn window_item_progression(height: f32, open: &mut bool, cur_settings: &mut 
                         _ => 100
                     }));
                 }
+                ui.end_row();
             }
         });
     });
