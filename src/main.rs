@@ -1164,7 +1164,9 @@ impl PlandoApp {
         let settings = load_settings(settings_path).unwrap_or_default();
         if settings.auto_update {
             match check_update() {
-                Ok(_) => println!("Successful!"),
+                Ok(_) => {
+                    bail!("Please restart application for changes to take effect");
+                },
                 Err(err) => println!("{}", err.to_string())
             };
         }
@@ -1253,7 +1255,9 @@ impl PlandoApp {
         let settings_path_str = self.settings_path.clone();
         let settings_path = Path::new(&settings_path_str);
 
-        let mut window = RenderWindow::new((1080, 720), "Maprando Plando", Style::DEFAULT, &Default::default()).expect("Could not create Window");
+        let version_number = "v".to_string() + cargo_crate_version!();
+
+        let mut window = RenderWindow::new((1080, 720), &format!("Maprando Plando {version_number}"), Style::DEFAULT, &Default::default()).expect("Could not create Window");
         window.set_vertical_sync_enabled(true);
 
         let tex_items = graphics::Texture::from_file("../visualizer/items.png").unwrap();
@@ -1741,6 +1745,13 @@ impl PlandoApp {
                 }
             }).unwrap();
             sfegui.draw(gui, &mut window, Some(&mut self.user_tex_source));
+
+            // Draw current version number
+            let mut version_text = graphics::Text::new(&version_number, &font_default, 12);
+            version_text.set_fill_color(Color::rgba(0xAF, 0xAF, 0xAF, 0xCF));
+            version_text.set_position((2.0, window.size().y as f32 - 14.0));
+            window.draw(&version_text);
+
             window.display();
         }
     }
