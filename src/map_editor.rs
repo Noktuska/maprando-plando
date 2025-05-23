@@ -134,9 +134,12 @@ pub struct MapEditor {
 
     pub invalid_doors: HashSet<(usize, usize)>, // (room_idx, door_idx)
     pub missing_rooms: HashSet<usize>, // room_idx
+    pub room_overlaps: HashSet<(usize, usize)>, // (room_idx, room_idx) with the first one being the smaller one
 
     pub sidebar_mode: SidebarMode,
     pub search_str: String,
+    pub swap_first: usize,
+    pub swap_second: usize
 }
 
 impl MapEditor {
@@ -150,8 +153,11 @@ impl MapEditor {
             dragged_room_yoffset: 0,
             invalid_doors: HashSet::new(),
             missing_rooms: HashSet::new(),
+            room_overlaps: HashSet::new(),
             sidebar_mode: SidebarMode::Rooms,
             search_str: String::new(),
+            swap_first: 0,
+            swap_second: 0
         }
     }
 
@@ -165,6 +171,12 @@ impl MapEditor {
             let &room_idx = self.missing_rooms.iter().next().unwrap();
             let room_name = &game_data.room_geometry[room_idx].name;
             bail!("Room is missing from map: {}", room_name);
+        }
+        if !self.room_overlaps.is_empty() {
+            let &(r1, r2) = self.room_overlaps.iter().next().unwrap();
+            let r1_name = &game_data.room_geometry[r1].name;
+            let r2_name = &game_data.room_geometry[r2].name;
+            bail!("Rooms are overlapping: {r1_name} x {r2_name}");
         }
         self.check_area_bounds(game_data)?;
         self.check_area_transitions(game_data)?;
@@ -185,6 +197,25 @@ impl MapEditor {
         self.map.area[room_idx] = area;
         self.map.subarea[room_idx] = sub_area;
         self.map.subsubarea[room_idx] = sub_sub_area;
+    }
+
+    pub fn swap_areas(&mut self, area1: usize, area2: usize) {
+        if area1 == area2 {
+            return;
+        }
+        for room_idx in 0..self.map.rooms.len() {
+            let area_tuple = self.get_area_value(room_idx).to_tuple();
+            if area_tuple.0 != area1 && area_tuple.0 != area2 {
+                continue;
+            }
+            let other_area = if area_tuple.0 == area1 {
+                (area2, area_tuple.1, area_tuple.2)
+            } else {
+                (area1, area_tuple.1, area_tuple.2)
+            };
+            let new_area = Area::from_tuple(other_area);
+            self.apply_area(room_idx, new_area);
+        }
     }
 
     pub fn get_area_value(&self, room_idx: usize) -> Area {
@@ -298,7 +329,51 @@ impl MapEditor {
         self.snap_room(room_idx, game_data);
     }
 
+    pub fn get_room_bounds(&self, room_idx: usize, game_data: &GameData) -> IntRect {
+        let (room_x, room_y) = self.map.rooms[room_idx];
+        let room_geometry = &game_data.room_geometry[room_idx];
+        let room_width = room_geometry.map[0].len();
+        let room_height = room_geometry.map.len();
+        IntRect::new(room_x as i32, room_y as i32, room_width as i32, room_height as i32)
+    }
+
+    fn update_overlaps(&mut self, room_idx: usize, game_data: &GameData) {
+        // Remove all overlaps with this room_idx
+        self.room_overlaps.retain(|&(l, r)| l != room_idx && r != room_idx);
+
+        let bbox = self.get_room_bounds(room_idx, game_data);
+        'outer: for other_idx in 0..self.map.rooms.len() {
+            if other_idx == room_idx {
+                continue;
+            }
+            let other_bbox = self.get_room_bounds(other_idx, game_data);
+            if let Some(intersect) = bbox.intersection(&other_bbox) {
+                let (room_x, room_y) = self.map.rooms[room_idx];
+                let (other_x, other_y) = self.map.rooms[other_idx];
+
+                let map = &game_data.room_geometry[room_idx].map;
+                let other_map = &game_data.room_geometry[other_idx].map;
+                for y in intersect.top..(intersect.top + intersect.height) {
+                    for x in intersect.left..(intersect.left + intersect.width) {
+                        let tile_x = x as usize - room_x;
+                        let tile_y = y as usize - room_y;
+                        let other_tile_x = x as usize - other_x;
+                        let other_tile_y = y as usize - other_y;
+                        if map[tile_y][tile_x] == 1 && other_map[other_tile_y][other_tile_x] == 1 {
+                            let smaller_idx = room_idx.min(other_idx);
+                            let bigger_idx = room_idx.max(other_idx);
+                            self.room_overlaps.insert((smaller_idx, bigger_idx));
+                            continue 'outer;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub fn snap_room(&mut self, room_idx: usize, game_data: &GameData) {
+        self.update_overlaps(room_idx, game_data);
+
         let mut orphaned_doors = HashSet::new();
 
         let room_geometry = &game_data.room_geometry[room_idx];

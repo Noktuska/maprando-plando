@@ -1603,9 +1603,7 @@ impl PlandoApp {
                                 false => "Open Map Editor"
                             };
                             if ui.button(map_editor_str).clicked() {
-                                if map_editor_mode {
-                                    self.map_editor.reset(self.plando.map.clone());
-                                }
+                                self.map_editor.reset(self.plando.map.clone());
                                 map_editor_mode = !map_editor_mode;
                                 ui.close_menu();
                             }
@@ -1641,6 +1639,7 @@ impl PlandoApp {
                                         }
                                         self.plando.auto_update_spoiler = auto_update;
                                         self.plando.update_spoiler_data();
+                                        map_editor_mode = false;
                                     }
                                     Err(err) => {
                                         self.modal_type = ModalType::Error(format!("Invalid map: {}", err.to_string()));
@@ -1959,6 +1958,39 @@ impl PlandoApp {
             spr.set_fill_color(Color::rgba(255, 0, 0, 127));
             spr.set_position((x, y));
             rt.draw_with_renderstates(&spr, states);
+        }
+
+        // Highlight room overlaps
+        let mut highlight_rect = graphics::RectangleShape::with_size((8.0, 8.0).into());
+        highlight_rect.set_fill_color(Color::rgba(0xFF, 0, 0, 0x5F));
+        highlight_rect.set_outline_color(Color::rgba(0xFF, 0, 0, 0x9F));
+        highlight_rect.set_outline_thickness(-1.0);
+        for &(l_idx, r_idx) in &self.map_editor.room_overlaps {
+            let bbox_l = self.map_editor.get_room_bounds(l_idx, &self.plando.game_data);
+            let bbox_r = self.map_editor.get_room_bounds(r_idx, &self.plando.game_data);
+            let intersect = bbox_l.intersection(&bbox_r);
+            if intersect.is_none() {
+                continue;
+            }
+            let intersect = intersect.unwrap();
+            let (room_x, room_y) = self.map_editor.map.rooms[l_idx];
+            let (other_x, other_y) = self.map_editor.map.rooms[r_idx];
+
+            let map = &self.plando.game_data.room_geometry[l_idx].map;
+            let other_map = &self.plando.game_data.room_geometry[r_idx].map;
+
+            for y in intersect.top..(intersect.top + intersect.height) {
+                for x in intersect.left..(intersect.left + intersect.width) {
+                    let tile_x = x as usize - room_x;
+                    let tile_y = y as usize - room_y;
+                    let other_tile_x = x as usize - other_x;
+                    let other_tile_y = y as usize - other_y;
+                    if map[tile_y][tile_x] == 1 && other_map[other_tile_y][other_tile_x] == 1 {
+                        highlight_rect.set_position((x as f32 * 8.0, y as f32 * 8.0));
+                        rt.draw_with_renderstates(&highlight_rect, states);
+                    }
+                }
+            }
         }
 
         if self.mouse_state.is_button_released(mouse::Button::Left) {
@@ -2530,6 +2562,22 @@ impl PlandoApp {
                             }
                         }
                     }
+                    ui.separator();
+
+                    ui.label("Swap Areas:");
+                    egui::ComboBox::from_id_salt("combo_swap_area_first").selected_text(areas[self.map_editor.swap_first]).show_ui(ui, |ui| {
+                        for (idx, &area_str) in areas.iter().enumerate() {
+                            ui.selectable_value(&mut self.map_editor.swap_first, idx, area_str);
+                        }
+                    });
+                    if ui.button("Swap!").clicked() {
+                        self.map_editor.swap_areas(self.map_editor.swap_first, self.map_editor.swap_second);
+                    }
+                    egui::ComboBox::from_id_salt("combo_swap_area_second").selected_text(areas[self.map_editor.swap_second]).show_ui(ui, |ui| {
+                        for (idx, &area_str) in areas.iter().enumerate() {
+                            ui.selectable_value(&mut self.map_editor.swap_second, idx, area_str);
+                        }
+                    });
                 });
             }
         }
