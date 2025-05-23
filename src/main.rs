@@ -420,6 +420,13 @@ fn save_seed(plando: &Plando, path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn save_map(map: &Map, path: &Path) -> Result<()> {
+    let str = serde_json::to_string_pretty(map)?;
+    let mut file = File::create(path)?;
+    file.write_all(str.as_bytes())?;
+    Ok(())
+}
+
 fn load_map(plando: &mut Plando, path: &Path) -> Result<()> {
     let mut file = File::open(path)?;
     let mut data_str = String::new();
@@ -1493,11 +1500,11 @@ impl PlandoApp {
                                 ui.close_menu();
                             }
                             ui.separator();
-                            if ui.button("Create ROM").clicked() {
+                            if ui.button("Patch ROM").clicked() {
                                 customize_open = true;
                                 ui.close_menu();
                             }
-                            if ui.button("Create ROM from seed file").clicked() {
+                            if ui.button("Patch ROM from seed file").clicked() {
                                 if let Some(file) = FileDialog::new()
                                 .set_title("Select seed JSON file to load and patch")
                                 .set_directory("/").add_filter("JSON File", &["json"]).pick_file() {
@@ -1523,7 +1530,22 @@ impl PlandoApp {
                             if ui.add_enabled(self.plando.maps_wild.is_some(), egui::Button::new("Reroll Map (Wild)")).clicked() {
                                 self.plando.reroll_map(MapRepositoryType::Wild).unwrap();
                             }
-                            if ui.button("Load Map from JSON").clicked() {
+                            ui.separator();
+                            if ui.button("Save Map to file").clicked() {
+                                let file_opt = FileDialog::new()
+                                    .set_title("Save Map to JSON file")
+                                    .set_directory("/")
+                                    .add_filter("JSON File", &["json"])
+                                    .save_file();
+                                if let Some(file) = file_opt {
+                                    let res = save_map(&self.plando.map, file.as_path());
+                                    if res.is_err() {
+                                        self.modal_type = ModalType::Error(res.unwrap_err().to_string());
+                                    }
+                                }
+                                ui.close_menu();
+                            }
+                            if ui.button("Load Map from file").clicked() {
                                 let file_opt = FileDialog::new()
                                     .set_title("Select Map JSON to load")
                                     .set_directory("/")
@@ -1643,22 +1665,6 @@ impl PlandoApp {
                                     }
                                     Err(err) => {
                                         self.modal_type = ModalType::Error(format!("Invalid map: {}", err.to_string()));
-                                    }
-                                }
-                                ui.close_menu();
-                            }
-                            ui.separator();
-                            
-                            if ui.button("Save Map to file").clicked() {
-                                let file_opt = FileDialog::new()
-                                    .set_title("Save Map to JSON file")
-                                    .set_directory("/")
-                                    .add_filter("JSON File", &["json"])
-                                    .save_file();
-                                if let Some(file) = file_opt {
-                                    let res = self.map_editor.save_map(file.as_path());
-                                    if res.is_err() {
-                                        self.modal_type = ModalType::Error(res.unwrap_err().to_string());
                                     }
                                 }
                                 ui.close_menu();

@@ -560,13 +560,6 @@ impl MapEditor {
 
         Ok(())
     }
-
-    pub fn save_map(&self, path: &Path) -> Result<()> {
-        let str = serde_json::to_string_pretty(&self.map)?;
-        let mut file = File::create(path)?;
-        file.write_all(str.as_bytes())?;
-        Ok(())
-    }
 }
 
 
