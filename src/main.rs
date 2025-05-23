@@ -409,7 +409,7 @@ fn load_seed(plando: &mut Plando, path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn save_seed(plando: &Plando, path: &Path) -> Result<()> {
+fn save_seed(plando: &mut Plando, path: &Path) -> Result<()> {
     let mut file = File::create(path)?;
 
     let seed_data = get_seed_data(plando);
@@ -417,6 +417,8 @@ fn save_seed(plando: &Plando, path: &Path) -> Result<()> {
     let out = serde_json::to_string(&seed_data)?;
 
     file.write_all(out.as_bytes())?;
+
+    plando.dirty = false;
     Ok(())
 }
 
@@ -1335,8 +1337,14 @@ impl PlandoApp {
 
                 match ev {
                     Event::Closed => {
-                        let _ = save_settings(&self.settings, settings_path);
-                        window.close();
+                        let opt = match self.plando.dirty {
+                            true => self.modal_confirm(&mut window, &mut sfegui, "Confirm Exiting", "Are you sure you want to exit? All unsaved progress will be lost.", vec!["Yes", "No"]),
+                            false => Some("Yes".to_string())
+                        };
+                        if opt.is_some_and(|s| s == "Yes") {
+                            let _ = save_settings(&self.settings, settings_path);
+                            window.close();
+                        }
                     },
                     Event::MouseWheelScrolled { wheel: _, delta, x, y } => {
                         if self.is_mouse_public {
@@ -1464,7 +1472,7 @@ impl PlandoApp {
                                     .add_filter("JSON File", &["json"])
                                     .save_file();
                                 if let Some(file) = file_opt {
-                                    let res = save_seed(&self.plando, file.as_path());
+                                    let res = save_seed(&mut self.plando, file.as_path());
                                     if res.is_err() {
                                         self.modal_type = ModalType::Error(res.unwrap_err().to_string());
                                     }
@@ -1542,6 +1550,9 @@ impl PlandoApp {
                                     if res.is_err() {
                                         self.modal_type = ModalType::Error(res.unwrap_err().to_string());
                                     }
+                                }
+                                if map_editor_mode {
+                                    self.modal_type = ModalType::Info("Map Editor is open. This action only has saved the *active* map (as if changes were discarded). If you have made any changes in the map editor you need to apply them first before they are saved".to_string());
                                 }
                                 ui.close_menu();
                             }
@@ -1661,6 +1672,7 @@ impl PlandoApp {
                                         }
                                         self.plando.auto_update_spoiler = auto_update;
                                         self.plando.update_spoiler_data();
+                                        self.plando.dirty = true;
                                         map_editor_mode = false;
                                     }
                                     Err(err) => {
@@ -3403,6 +3415,46 @@ impl PlandoApp {
         }
 
         customize_logic_open
+    }
+
+    fn modal_confirm<S: Into<String>>(&self, window: &mut RenderWindow, sfegui: &mut SfEgui, header: S, msg: S, options: Vec<S>) -> Option<String> {
+        let header: String = header.into();
+        let msg: String = msg.into();
+        let options: Vec<String> = options.into_iter().map(|s| s.into()).collect();
+
+        while window.is_open() {
+            while let Some(ev) = window.poll_event() {
+                sfegui.add_event(&ev);
+                if ev == Event::Closed {
+                    window.close();
+                }
+            }
+
+            window.clear(Color::rgb(0x1F, 0x1F, 0x1F));
+
+            let mut result = None;
+            let input = sfegui.run(window, |_rt, ctx| {
+                egui::Modal::new(egui::Id::new("modal_confirm")).show(ctx, |ui| {
+                    ui.heading(&header);
+                    ui.label(&msg);
+                    ui.horizontal(|ui| {
+                        for opt in &options {
+                            if ui.button(opt).clicked() {
+                                result = Some(opt.clone());
+                            }
+                        }
+                    });
+                });
+            }).unwrap();
+            sfegui.draw(input, window, None);
+
+            window.display();
+
+            if result.is_some() {
+                return result;
+            }
+        }
+        None
     }
 }
 

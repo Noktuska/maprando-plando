@@ -187,7 +187,8 @@ pub struct Plando {
     pub randomization: Option<(Randomization, SpoilerLog)>,
 
     pub rng: StdRng,
-    pub auto_update_spoiler: bool
+    pub auto_update_spoiler: bool,
+    pub dirty: bool
 }
 
 impl Plando {
@@ -290,7 +291,8 @@ impl Plando {
             randomization: None,
 
             rng,
-            auto_update_spoiler: true
+            auto_update_spoiler: true,
+            dirty: false
         };
         
         plando.get_difficulty_tiers();
@@ -438,6 +440,8 @@ impl Plando {
             bail!(err)
         }
 
+        self.dirty = true;
+
         Ok(())
     }
 
@@ -452,6 +456,7 @@ impl Plando {
             self.start_location_data.hub_location = ship_hub;
             self.start_location_data.hub_obtain_route = Vec::new();
             self.start_location_data.hub_return_route = Vec::new();
+            self.dirty = true;
 
             if self.auto_update_spoiler {
                 self.update_spoiler_data();
@@ -587,6 +592,7 @@ impl Plando {
                     self.start_location_data.hub_location = hub.clone();
                     self.start_location_data.hub_obtain_route = hub_obtain_route;
                     self.start_location_data.hub_return_route = hub_return_route;
+                    self.dirty = true;
 
                     if self.auto_update_spoiler {
                         self.update_spoiler_data();
@@ -613,6 +619,7 @@ impl Plando {
         if self.auto_update_spoiler {
             self.update_spoiler_data();
         }
+        self.dirty = true;
     }
 
     pub fn place_door(&mut self, room_idx: usize, door_idx: usize, door_type_opt: Option<DoorType>, replace: bool, ignore_hub: bool) -> Result<()> {
@@ -667,6 +674,7 @@ impl Plando {
                 if self.auto_update_spoiler {
                     self.update_spoiler_data();
                 }
+                self.dirty = true;
             }
 
             return Ok(());
@@ -734,6 +742,7 @@ impl Plando {
         if self.auto_update_spoiler {
             self.update_spoiler_data();
         }
+        self.dirty = true;
 
         Ok(())
     }
