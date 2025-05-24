@@ -1,5 +1,5 @@
 use {
-    anyhow::{anyhow, bail, Result}, egui_sfml::{egui::{self, Color32, Context, Id, Modifiers, Sense, TextureId, Ui, Vec2}, SfEgui, UserTexSource}, flate2::read::GzDecoder, hashbrown::HashMap, map_editor::{MapEditor, SidebarMode}, maprando::{
+    anyhow::{anyhow, bail, Result}, egui_sfml::{egui::{self, Color32, Context, FontDefinitions, Id, Modifiers, Sense, TextureId, Ui, Vec2}, SfEgui, UserTexSource}, flate2::read::GzDecoder, hashbrown::HashMap, map_editor::{MapEditor, SidebarMode}, maprando::{
         customize::{mosaic::MosaicTheme, ControllerButton, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, MusicSettings, PaletteTheme, ShakingSetting, TileTheme}, patch::Rom, randomize::SpoilerRouteEntry, settings::{DoorLocksSize, DoorsMode, ItemDotChange, MapStationReveal, MapsRevealed, Objective, ObjectiveSetting, RandomizerSettings, SaveAnimals, WallJump}
     }, maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType}, mouse_state::MouseState, plando::{DoubleItemPlacement, MapRepositoryType, Placeable, Plando, ITEM_VALUES}, rand::RngCore, rfd::FileDialog, self_update::cargo_crate_version, serde::{Deserialize, Serialize}, sfml::{
         cpp::FBox, graphics::{
@@ -7,7 +7,7 @@ use {
         }, system::{Vector2f, Vector2i}, window::{
             mouse, Event, Key, Style
         }
-    }, std::{cmp::{max, min}, fs::File, io::{Read, Write}, path::Path, thread::{self, JoinHandle}, u32}
+    }, std::{borrow::Borrow, cmp::{max, min}, fs::File, io::{Read, Write}, path::Path, thread::{self, JoinHandle}, u32}
 };
 
 mod plando;
@@ -1269,8 +1269,16 @@ impl PlandoApp {
         let mut window = RenderWindow::new((1080, 720), &format!("Maprando Plando {version_number}"), Style::DEFAULT, &Default::default()).expect("Could not create Window");
         window.set_vertical_sync_enabled(true);
 
+        let font_default = {
+            let font = FontDefinitions::default();
+            let font_data = &font.font_data["Hack"];
+            match &font_data.font {
+                std::borrow::Cow::Borrowed(font) => graphics::Font::from_memory_static(font),
+                std::borrow::Cow::Owned(_) => panic!("Could not load default Font"),
+            }
+        }.unwrap();
+
         let tex_items = graphics::Texture::from_file("../visualizer/items.png").unwrap();
-        let font_default = graphics::Font::from_file("../segoeui.ttf").expect("Could not load default font");
 
         let mut tex_grid = graphics::Texture::from_file("../visualizer/grid.png").unwrap();
         tex_grid.set_repeated(true);
