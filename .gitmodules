@@ -1,0 +1,3 @@
+[submodule "MapRandomizer"]
+	path = MapRandomizer
+	url = https://github.com/blkerby/MapRandomizer.git
