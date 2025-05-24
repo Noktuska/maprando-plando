@@ -36,3 +36,28 @@ At the top of the sidebar you can change the dropdown to also modify the Areas o
 You can Apply/Discard the changes you make also under the "Map Editor" Menu Button. For a Map to be valid, it currently places the restrictions for all Rooms to be in a 72x72 grid, no doors to be orphaned, all rooms have to be present, no single Area can exceed a 64x32 boundary, Phantoon's Map Station and Phantoon's Room need to be connected through a singular room, all of the same Area, each Area can only have one Map Station and there can only be 23 maximum Area Transitions.
 
 You can Save/Load your custom maps under tha "Map" Menu Button.
+
+## How to Build
+1. Clone the repository with recursive submodules enabled
+```sh
+git clone --recurse-submodules https://github.com/Noktuska/maprando-plando.git
+cd maprando-plando
+```
+2. Setup the MapRandomizer
+```sh
+sh MapRandomizer/scripts/download_data.sh
+```
+3. Run the setup.sh script to copy needed dependencies from the MapRandomizer submodule
+```sh
+sh maprando-plando/setup.sh
+```
+4. Build the maprando-plando project
+```sh
+cd maprando-plando
+cargo build
+```
+5. Download [SFML](https://www.sfml-dev.org/download/sfml/2.6.1/) and copy the DLLs from the SFML-2.6.1/bin/ folder into the maprando-plando/target/debug/ folder next to the executable
+6. Run the maprando-plando project
+```sh
+cargo run
+```
