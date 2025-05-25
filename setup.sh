@@ -12,3 +12,4 @@ cp -r ../MapRandomizer/sm-json-data ./data
 cp ../MapRandomizer/room_geometry.json ./data/room_geometry.json
 mkdir -p ./data/TitleScreen/Images
 cp -r ../MapRandomizer/TitleScreen/Images ./data/TitleScreen
+cp -r ../MapRandomizer/maps/vanilla ./data/maps

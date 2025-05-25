@@ -45,11 +45,13 @@ cd maprando-plando
 ```
 2. Setup the MapRandomizer
 ```sh
-sh MapRandomizer/scripts/download_data.sh
+cd MapRandomizer
+sh scripts/download_data.sh
+cd ..
 ```
 3. Run the setup.sh script to copy needed dependencies from the MapRandomizer submodule
 ```sh
-sh maprando-plando/setup.sh
+sh setup.sh
 ```
 4. Build the maprando-plando project
 ```sh
