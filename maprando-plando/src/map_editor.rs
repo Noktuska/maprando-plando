@@ -342,34 +342,44 @@ impl MapEditor {
         // Remove all overlaps with this room_idx
         self.room_overlaps.retain(|&(l, r)| l != room_idx && r != room_idx);
 
-        let bbox = self.get_room_bounds(room_idx, game_data);
-        'outer: for other_idx in 0..self.map.rooms.len() {
+        for other_idx in 0..self.map.rooms.len() {
             if other_idx == room_idx {
                 continue;
             }
-            let other_bbox = self.get_room_bounds(other_idx, game_data);
-            if let Some(intersect) = bbox.intersection(&other_bbox) {
-                let (room_x, room_y) = self.map.rooms[room_idx];
-                let (other_x, other_y) = self.map.rooms[other_idx];
+            if self.check_overlap(room_idx, other_idx, game_data) {
+                let smaller_idx = room_idx.min(other_idx);
+                let bigger_idx = room_idx.max(other_idx);
+                self.room_overlaps.insert((smaller_idx, bigger_idx));
+                continue;
+            }
+        }
+    }
 
-                let map = &game_data.room_geometry[room_idx].map;
-                let other_map = &game_data.room_geometry[other_idx].map;
-                for y in intersect.top..(intersect.top + intersect.height) {
-                    for x in intersect.left..(intersect.left + intersect.width) {
-                        let tile_x = x as usize - room_x;
-                        let tile_y = y as usize - room_y;
-                        let other_tile_x = x as usize - other_x;
-                        let other_tile_y = y as usize - other_y;
-                        if map[tile_y][tile_x] == 1 && other_map[other_tile_y][other_tile_x] == 1 {
-                            let smaller_idx = room_idx.min(other_idx);
-                            let bigger_idx = room_idx.max(other_idx);
-                            self.room_overlaps.insert((smaller_idx, bigger_idx));
-                            continue 'outer;
-                        }
+    fn check_overlap(&self, room_idx: usize, other_idx: usize, game_data: &GameData) -> bool {
+        let bbox = self.get_room_bounds(room_idx, game_data);
+        if other_idx == room_idx {
+            return true;
+        }
+        let other_bbox = self.get_room_bounds(other_idx, game_data);
+        if let Some(intersect) = bbox.intersection(&other_bbox) {
+            let (room_x, room_y) = self.map.rooms[room_idx];
+            let (other_x, other_y) = self.map.rooms[other_idx];
+
+            let map = &game_data.room_geometry[room_idx].map;
+            let other_map = &game_data.room_geometry[other_idx].map;
+            for y in intersect.top..(intersect.top + intersect.height) {
+                for x in intersect.left..(intersect.left + intersect.width) {
+                    let tile_x = x as usize - room_x;
+                    let tile_y = y as usize - room_y;
+                    let other_tile_x = x as usize - other_x;
+                    let other_tile_y = y as usize - other_y;
+                    if map[tile_y][tile_x] == 1 && other_map[other_tile_y][other_tile_x] == 1 {
+                        return true;
                     }
                 }
             }
         }
+        false
     }
 
     pub fn snap_room(&mut self, room_idx: usize, game_data: &GameData) {
@@ -517,34 +527,59 @@ impl MapEditor {
 
     fn check_toilet(&self, game_data: &GameData) -> Result<()> {
         let (room_x, room_y) = self.map.rooms[game_data.toilet_room_idx];
-        let mut cross_room_idx: Option<usize> = None;
+        let toilet_bbox = IntRect::new(room_x as i32, room_y as i32 + 2, 1, 6);
 
-        for offset in 2..8 {
-            let tile_x = room_x;
-            let tile_y = room_y + offset;
-
-            let cross_room_opt = (0..self.map.rooms.len()).position(|idx| {
-                if idx == game_data.toilet_room_idx {
-                    return false;
-                }
-                let bbox = self.get_room_bounds(idx, game_data);
-                bbox.contains2(tile_x as i32, tile_y as i32)
-            });
-            if let Some(new_cross_room_idx) = cross_room_opt {
-                if let Some(old_cross_room_idx) = cross_room_idx {
-                    let name1 = game_data.room_geometry[new_cross_room_idx].name.clone();
-                    let name2 = game_data.room_geometry[old_cross_room_idx].name.clone();
-                    bail!("Toilet intersects at least two rooms, but can only intersect exactly one: \"{}\" and \"{}\"", name1, name2);
-                }
-                cross_room_idx = cross_room_opt;
+        let cross_rooms: Vec<usize> = (0..self.map.rooms.len()).filter_map(|idx| {
+            if idx == game_data.toilet_room_idx {
+                return None;
             }
-        }
+            let other_bbox = self.get_room_bounds(idx, game_data);
+            if other_bbox.intersection(&toilet_bbox).is_none() {
+                return None;
+            }
+            for y in 0..6 {
+                let rel_tile_x = room_x as i32 - other_bbox.left;
+                let rel_tile_y = room_y as i32 - other_bbox.top + y + 2;
+                if rel_tile_x < 0 || rel_tile_x >= other_bbox.width || rel_tile_y < 0 || rel_tile_y >= other_bbox.height {
+                    continue;
+                }
+                if game_data.room_geometry[idx].map[rel_tile_y as usize][rel_tile_x as usize] == 1 {
+                    return Some(idx);
+                }
+            }
+            None
+        }).collect();
 
-        if cross_room_idx.is_none() {
+        if cross_rooms.is_empty() {
             bail!("Toilet does not intersect any rooms, has to intersect exactly one.");
         }
+        if cross_rooms.len() == 2 {
+            // Check for vanilla toilet intersection
+            let idx_aqueduct = game_data.room_idx_by_name["Aqueduct"];
+            let idx_botwoon_hallway = game_data.room_idx_by_name["Botwoon Hallway"];
 
-        let cross_room_area = self.map.area[cross_room_idx.unwrap()];
+            if !cross_rooms.contains(&idx_aqueduct) || !cross_rooms.contains(&idx_botwoon_hallway) {
+                let name1 = game_data.room_geometry[cross_rooms[0]].name.clone();
+                let name2 = game_data.room_geometry[cross_rooms[1]].name.clone();
+                bail!("Toilet intersects at least two rooms, but can only intersect exactly one: \"{}\" and \"{}\"", name1, name2);
+            }
+
+            let pos_aqueduct = self.map.rooms[idx_aqueduct];
+            let pos_botwoon_hallway = self.map.rooms[idx_botwoon_hallway];
+
+            if !(pos_aqueduct.0 + 2 == room_x && pos_aqueduct.1 == room_y + 4 && pos_botwoon_hallway.0 + 2 == room_x && pos_botwoon_hallway.1 == room_y + 3) {
+                let name1 = game_data.room_geometry[cross_rooms[0]].name.clone();
+                let name2 = game_data.room_geometry[cross_rooms[1]].name.clone();
+                bail!("Toilet intersects at least two rooms, but can only intersect exactly one: \"{}\" and \"{}\"", name1, name2);
+            }
+        }
+        if cross_rooms.len() > 2 {
+            let name1 = game_data.room_geometry[cross_rooms[0]].name.clone();
+            let name2 = game_data.room_geometry[cross_rooms[1]].name.clone();
+            bail!("Toilet intersects at least two rooms, but can only intersect exactly one: \"{}\" and \"{}\"", name1, name2);
+        }
+        
+        let cross_room_area = self.map.area[cross_rooms[0]];
         let toilet_area = self.map.area[game_data.toilet_room_idx];
 
         if cross_room_area != toilet_area {

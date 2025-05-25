@@ -429,13 +429,12 @@ fn save_map(map: &Map, path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn load_map(plando: &mut Plando, path: &Path) -> Result<()> {
+fn load_map(path: &Path) -> Result<Map> {
     let mut file = File::open(path)?;
     let mut data_str = String::new();
     file.read_to_string(&mut data_str)?;
     let map: Map = serde_json::from_str(&data_str)?;
-    plando.load_map(map);
-    Ok(())
+    Ok(map)
 }
 
 fn save_preset(preset: &RandomizerSettings) -> Result<()> {
@@ -1554,13 +1553,19 @@ impl PlandoApp {
                                     .add_filter("JSON File", &["json"])
                                     .save_file();
                                 if let Some(file) = file_opt {
-                                    let res = save_map(&self.plando.map, file.as_path());
+                                    let map_to_save = match map_editor_mode {
+                                        true => &self.map_editor.map,
+                                        false => &self.plando.map
+                                    };
+                                    let res = save_map(map_to_save, file.as_path());
                                     if res.is_err() {
                                         self.modal_type = ModalType::Error(res.unwrap_err().to_string());
                                     }
                                 }
                                 if map_editor_mode {
-                                    self.modal_type = ModalType::Info("Map Editor is open. This action only has saved the *active* map (as if changes were discarded). If you have made any changes in the map editor you need to apply them first before they are saved".to_string());
+                                    if let Err(err) = self.map_editor.is_valid(&self.plando.game_data) {
+                                        self.modal_type = ModalType::Info(format!("The saved map is invalid. It will be opened in the Map Editor if loaded from file. Reason: {}", err.to_string()));
+                                    }
                                 }
                                 ui.close_menu();
                             }
@@ -1571,10 +1576,19 @@ impl PlandoApp {
                                     .add_filter("JSON File", &["json"])
                                     .pick_file();
                                 if let Some(file) = file_opt {
-                                    let res = load_map(&mut self.plando, &file);
-                                    if res.is_err() {
-                                        self.modal_type = ModalType::Error(res.unwrap_err().to_string());
-                                    }
+                                    match load_map(&file) {
+                                        Ok(map) => {
+                                            self.map_editor.reset(map.clone());
+                                            match self.map_editor.is_valid(&self.plando.game_data) {
+                                                Ok(_) => self.plando.load_map(map),
+                                                Err(err) => {
+                                                    self.modal_type = ModalType::Info(format!("Map opened in Map Editor: {}", err.to_string()));
+                                                    map_editor_mode = true;
+                                                }
+                                            }
+                                        }
+                                        Err(err) => self.modal_type = ModalType::Error(err.to_string())
+                                    };
                                 }
                                 ui.close_menu();
                             }
