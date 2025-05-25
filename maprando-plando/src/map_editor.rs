@@ -311,7 +311,9 @@ impl MapEditor {
     }
 
     pub fn erase_room(&mut self, room_idx: usize, game_data: &GameData) {
-        self.missing_rooms.insert(room_idx);
+        if !self.missing_rooms.insert(room_idx) {
+            return;
+        }
         let room_geometry = &game_data.room_geometry[room_idx];
         for (door_idx, door) in room_geometry.doors.iter().enumerate() {
             self.invalid_doors.remove(&(room_idx, door_idx));

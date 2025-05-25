@@ -1703,6 +1703,12 @@ impl PlandoApp {
                                 }
                                 ui.close_menu();
                             }
+                            ui.separator();
+                            if ui.button("Remove all rooms").clicked() {
+                                for idx in 0..self.map_editor.map.rooms.len() {
+                                    self.map_editor.erase_room(idx, &self.plando.game_data);
+                                }
+                            }
                         });
                         if ui.button("Help").clicked() {
                             if let Err(err) = open::that("https://github.com/Noktuska/maprando-plando/blob/main/README.md") {
@@ -1940,7 +1946,7 @@ impl PlandoApp {
             spr_room.set_position((room_x as f32 * 8.0, room_y as f32 * 8.0));
             rt.draw_with_renderstates(&spr_room, states);
 
-            if self.is_mouse_public && spr_room.global_bounds().contains2(self.local_mouse_x, self.local_mouse_y) {
+            if self.is_mouse_public && !has_dragged_room && spr_room.global_bounds().contains2(self.local_mouse_x, self.local_mouse_y) {
                 let local_cell_x = mouse_tile_x - room_x;
                 let local_cell_y = mouse_tile_y - room_y;
                 if room_geometry.map[local_cell_y][local_cell_x] == 1 {
