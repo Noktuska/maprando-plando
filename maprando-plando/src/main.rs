@@ -7,7 +7,7 @@ use {
         }, system::{Vector2f, Vector2i}, window::{
             mouse, Event, Key, Style
         }
-    }, std::{borrow::Borrow, cmp::{max, min}, fs::File, io::{Read, Write}, path::Path, thread::{self, JoinHandle}, u32}
+    }, std::{cmp::{max, min}, fs::File, io::{Read, Write}, path::Path, thread::{self, JoinHandle}, u32}
 };
 
 mod plando;
