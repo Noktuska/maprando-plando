@@ -180,6 +180,7 @@ impl MapEditor {
         }
         self.check_area_bounds(game_data)?;
         self.check_area_transitions(game_data)?;
+        self.check_toilet(game_data)?;
         self.check_map_connections(game_data)?;
         Ok(())
     }
@@ -511,6 +512,45 @@ impl MapEditor {
         if connection_count > 46 {
             bail!("There can be a maximum of 23 Area transitions (currently {})", connection_count / 2);
         }
+        Ok(())
+    }
+
+    fn check_toilet(&self, game_data: &GameData) -> Result<()> {
+        let (room_x, room_y) = self.map.rooms[game_data.toilet_room_idx];
+        let mut cross_room_idx: Option<usize> = None;
+
+        for offset in 2..8 {
+            let tile_x = room_x;
+            let tile_y = room_y + offset;
+
+            let cross_room_opt = (0..self.map.rooms.len()).position(|idx| {
+                if idx == game_data.toilet_room_idx {
+                    return false;
+                }
+                let bbox = self.get_room_bounds(idx, game_data);
+                bbox.contains2(tile_x as i32, tile_y as i32)
+            });
+            if let Some(new_cross_room_idx) = cross_room_opt {
+                if let Some(old_cross_room_idx) = cross_room_idx {
+                    let name1 = game_data.room_geometry[new_cross_room_idx].name.clone();
+                    let name2 = game_data.room_geometry[old_cross_room_idx].name.clone();
+                    bail!("Toilet intersects at least two rooms, but can only intersect exactly one: \"{}\" and \"{}\"", name1, name2);
+                }
+                cross_room_idx = cross_room_opt;
+            }
+        }
+
+        if cross_room_idx.is_none() {
+            bail!("Toilet does not intersect any rooms, has to intersect exactly one.");
+        }
+
+        let cross_room_area = self.map.area[cross_room_idx.unwrap()];
+        let toilet_area = self.map.area[game_data.toilet_room_idx];
+
+        if cross_room_area != toilet_area {
+            bail!("Toilet and intersecting room has to be of the same Area");
+        }
+
         Ok(())
     }
 
