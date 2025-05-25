@@ -38,7 +38,8 @@ struct Settings {
     last_logic_preset: Option<RandomizerSettings>,
     disable_logic: bool,
     auto_update: bool,
-    disable_bg_grid: bool
+    disable_bg_grid: bool,
+    ui_scale: f32
 }
 
 impl Default for Settings {
@@ -53,6 +54,7 @@ impl Default for Settings {
             disable_logic: false,
             auto_update: true,
             disable_bg_grid: false,
+            ui_scale: 1.0,
         }
     }
 }
@@ -2994,6 +2996,17 @@ impl PlandoApp {
                 ui.checkbox(&mut self.settings.auto_update, "Check for update on Startup");
                 if ui.add_enabled(self.settings.auto_update != default.auto_update, egui::Button::new("Reset")).clicked() {
                     self.settings.auto_update = default.auto_update;
+                }
+                ui.end_row();
+
+                ui.label("UI Scale").on_hover_text("Scales the entire UI by this factor");
+                let slider = egui::Slider::new(&mut self.settings.ui_scale, 0.1..=4.0);
+                if ui.add(slider).dragged() {
+                    ctx.set_pixels_per_point(self.settings.ui_scale);
+                }
+                if ui.add_enabled(self.settings.ui_scale != default.ui_scale, egui::Button::new("Reset")).clicked() {
+                    self.settings.ui_scale = default.ui_scale;
+                    ctx.set_pixels_per_point(self.settings.ui_scale);
                 }
                 ui.end_row();
             });
