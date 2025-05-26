@@ -1158,6 +1158,7 @@ struct PlandoApp {
     modal_type: ModalType,
     cur_customize_logic_window: CustomizeLogicWindow,
     is_customize_window_open: bool,
+    override_window: Option<usize>,
 
     map_editor: MapEditor,
 
@@ -1254,6 +1255,7 @@ impl PlandoApp {
             modal_type: ModalType::None,
             cur_customize_logic_window: CustomizeLogicWindow::None,
             is_customize_window_open: false,
+            override_window: None,
 
             map_editor,
 
@@ -1736,6 +1738,10 @@ impl PlandoApp {
                     } else if self.plando.randomization.is_some() {
                         spoiler_window_bounds = self.draw_spoiler_summary(ctx, self.mouse_state.mouse_y as f32, spoiler_window_bounds);
                     }
+                }
+
+                if self.override_window.is_some() {
+                    self.draw_spoiler_override(ctx);
                 }
 
                 if settings_open {
@@ -2632,6 +2638,16 @@ impl PlandoApp {
         None
     }
 
+    fn draw_spoiler_override(&mut self, ctx: &Context) {
+        let step = self.override_window.unwrap();
+        egui::Window::new(format!("Spoiler Overrides STEP {}", step)).resizable(false).show(ctx, |ui| {
+            let overrides: Vec<_> = self.plando.spoiler_overrides.iter().filter(|x| x.step == step).collect();
+            for item_override in overrides {
+                
+            }
+        });
+    }
+
     fn draw_spoiler_details(&mut self, ctx: &Context) -> bool {
         let (_r, spoiler_log) = self.plando.randomization.as_ref().unwrap();
         let window = egui::Window::new("Spoiler Details")
@@ -2645,7 +2661,12 @@ impl PlandoApp {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     ui.style_mut().spacing.item_spacing = Vec2::new(2.0, 2.0);
                     let details = &spoiler_log.details[self.spoiler_step];
-                    ui.heading(format!("STEP {}", details.step));
+                    ui.horizontal(|ui| {
+                        ui.heading(format!("STEP {}", details.step));
+                        //if ui.button("Modify Overrides").clicked() {
+                        //    self.override_window = Some(details.step);
+                        //}
+                    });
                     ui.label("PREVIOUSLY COLLECTIBLE");
 
                     let mut collectible_items = [0; ITEM_VALUES.len() - 1];
@@ -2999,7 +3020,7 @@ impl PlandoApp {
                 }
                 ui.end_row();
 
-                ui.label("UI Scale").on_hover_text("Scales the entire UI by this factor");
+                /*ui.label("UI Scale").on_hover_text("Scales the entire UI by this factor");
                 let slider = egui::Slider::new(&mut self.settings.ui_scale, 0.1..=4.0);
                 if ui.add(slider).dragged() {
                     ctx.set_pixels_per_point(self.settings.ui_scale);
@@ -3008,7 +3029,7 @@ impl PlandoApp {
                     self.settings.ui_scale = default.ui_scale;
                     ctx.set_pixels_per_point(self.settings.ui_scale);
                 }
-                ui.end_row();
+                ui.end_row();*/
             });
             ui.horizontal(|ui| {
                 if ui.button("Save").clicked() {

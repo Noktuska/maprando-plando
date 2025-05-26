@@ -161,6 +161,11 @@ pub enum MapRepositoryType {
     Vanilla, Standard, Wild
 }
 
+pub struct SpoilerOverride {
+    pub step: usize,
+    pub item_idx: usize
+}
+
 pub struct Plando {
     pub game_data: GameData,
     pub preset_data: PresetData,
@@ -179,6 +184,7 @@ pub struct Plando {
     pub randomizable_door_connections: Vec<(DoorPtrPair, DoorPtrPair)>,
     pub locked_doors: Vec<LockedDoor>,
     pub gray_doors: HashSet<DoorPtrPair>,
+    pub spoiler_overrides: Vec<SpoilerOverride>,
 
     door_lock_loc: Vec<(usize, usize, usize)>,
     door_beam_loc: Vec<(usize, usize, usize)>,
@@ -284,6 +290,7 @@ impl Plando {
             randomizable_door_connections,
             locked_doors: Vec::new(),
             gray_doors: get_gray_doors(),
+            spoiler_overrides: Vec::new(),
 
             door_lock_loc: Vec::new(),
             door_beam_loc: Vec::new(),
@@ -1045,11 +1052,19 @@ impl Plando {
         for &item in &placed_uncollected_bireachable_items {
             new_state.global_state.collect(item, &self.game_data, self.randomizer_settings.item_progression_settings.ammo_collect_fraction, &self.difficulty_tiers[0].tech);
         }
+        let overrides: Vec<_> = self.spoiler_overrides.iter().filter(|x| x.step == new_state.step_num).collect();
+        for item_override in &overrides {
+            let item = self.item_locations[item_override.item_idx];
+            new_state.global_state.collect(item, &self.game_data, self.randomizer_settings.item_progression_settings.ammo_collect_fraction, &self.difficulty_tiers[0].tech);
+        }
 
         randomizer.update_reachability(&mut new_state);
 
         for &loc in &placed_uncollected_bireachable_loc {
             new_state.item_location_state[loc].collected = true;
+        }
+        for item_override in overrides {
+            new_state.item_location_state[item_override.item_idx].collected = true;
         }
 
         let spoiler_summary = randomizer.get_spoiler_summary(
