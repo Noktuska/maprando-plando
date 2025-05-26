@@ -191,6 +191,7 @@ impl MapEditor {
         self.dragged_room_idx.clear();
         self.invalid_doors.clear();
         self.missing_rooms.clear();
+        self.room_overlaps.clear();
     }
 
     pub fn apply_area(&mut self, room_idx: usize, area_value: Area) {
