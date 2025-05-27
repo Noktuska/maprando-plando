@@ -608,8 +608,8 @@ impl MapEditor {
         }
 
         // Check Phantoon Map is connected to Phantoon through one room in a singular area
-        let phantoon_map_idx = game_data.room_geometry.iter().position(|x| x.name == "Wrecked Ship Map Room").unwrap();
-        let phantoon_room_idx = game_data.room_geometry.iter().position(|x| x.name == "Phantoon's Room").unwrap();
+        let phantoon_map_idx = game_data.room_idx_by_name["Wrecked Ship Map Room"];
+        let phantoon_room_idx = game_data.room_idx_by_name["Phantoon's Room"];
         let phantoon_map_door = &game_data.room_geometry[phantoon_map_idx].doors[0];
         let phantoon_room_door = &game_data.room_geometry[phantoon_room_idx].doors[0];
         let phantoon_map_ptr_pair = (phantoon_map_door.exit_ptr, phantoon_map_door.entrance_ptr);
@@ -634,6 +634,13 @@ impl MapEditor {
         let area_other = self.map.area[other_map_room.0];
         if area_phantoon != area_map || area_map != area_other {
             bail!("Phantoon Map Station, Phantoon's room and the connecting room have to be of the same Area");
+        }
+
+        // Check if Phantoon's Save is in the same Area as Phantoon
+        let phantoon_save_idx = game_data.room_idx_by_name["Wrecked Ship Save Room"];
+        let area_save = self.map.area[phantoon_save_idx];
+        if area_save != area_phantoon {
+            bail!("Wrecked Ship Save Station (Phantoon disabled save) has to be in the same Area as Phantoon's Room");
         }
 
         Ok(())
