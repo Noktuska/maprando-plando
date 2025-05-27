@@ -1,4 +1,4 @@
-use egui_sfml::egui::{self, Context};
+use egui::Context;
 use hashbrown::HashMap;
 use maprando::{preset::PresetData, settings::{ETankRefill, Fanfares, ItemMarkers, MotherBrainFight, ObjectiveScreen, ObjectiveSetting, RandomizerSettings, StartingItemsPreset}};
 use maprando_game::Item;

@@ -1,5 +1,5 @@
 use {
-    anyhow::{anyhow, bail, Result}, egui_sfml::{egui::{self, Color32, Context, FontDefinitions, Id, Modifiers, Sense, TextureId, Ui, Vec2}, SfEgui, UserTexSource}, flate2::read::GzDecoder, hashbrown::HashMap, map_editor::{MapEditor, SidebarMode}, maprando::{
+    anyhow::{anyhow, bail, Result}, egui::{self, Color32, Context, FontDefinitions, Id, Modifiers, Sense, TextureId, Ui, Vec2}, egui_sfml::{SfEgui, UserTexSource}, flate2::read::GzDecoder, hashbrown::HashMap, map_editor::{MapEditor, SidebarMode}, maprando::{
         customize::{mosaic::MosaicTheme, ControllerButton, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, MusicSettings, PaletteTheme, ShakingSetting, TileTheme}, patch::Rom, randomize::SpoilerRouteEntry, settings::{DoorLocksSize, DoorsMode, ItemDotChange, MapStationReveal, MapsRevealed, Objective, ObjectiveSetting, RandomizerSettings, SaveAnimals, WallJump}
     }, maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType}, mouse_state::MouseState, plando::{DoubleItemPlacement, MapRepositoryType, Placeable, Plando, ITEM_VALUES}, rand::RngCore, rfd::FileDialog, self_update::cargo_crate_version, serde::{Deserialize, Serialize}, sfml::{
         cpp::FBox, graphics::{
@@ -15,6 +15,7 @@ mod layout;
 mod mouse_state;
 mod map_editor;
 mod utils;
+mod egui_sfml;
 
 #[derive(Clone)]
 struct RoomData {

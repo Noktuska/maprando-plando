@@ -706,17 +706,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "egui-sfml"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8adbb3c03fd69f1294dae50f904e545348f194d11453be7d7a853db9217c34cf"
-dependencies = [
- "egui",
- "glu-sys",
- "sfml",
-]
-
-[[package]]
 name = "either"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1819,8 +1808,9 @@ version = "0.1.2"
 dependencies = [
  "anyhow",
  "crypto-hash",
- "egui-sfml",
+ "egui",
  "flate2",
+ "glu-sys",
  "hashbrown 0.14.5",
  "maprando",
  "maprando-game",
