@@ -1103,6 +1103,7 @@ enum ModalType {
     Error(String),
     Status(String),
     Info(String),
+    Confirm(String, fn(&mut PlandoApp))
 }
 
 struct View {
@@ -1264,8 +1265,6 @@ impl PlandoApp {
     }
 
     fn render_loop(&mut self) {
-        let settings_path_str = self.settings_path.clone();
-        let settings_path = Path::new(&settings_path_str);
 
         let version_number = "v".to_string() + cargo_crate_version!();
 
@@ -1348,14 +1347,16 @@ impl PlandoApp {
 
                 match ev {
                     Event::Closed => {
-                        let opt = match self.plando.dirty {
-                            true => self.modal_confirm(&mut window, &mut sfegui, "Confirm Exiting", "Are you sure you want to exit? All unsaved progress will be lost.", vec!["Yes", "No"]),
-                            false => Some("Yes".to_string())
-                        };
-                        if opt.is_some_and(|s| s == "Yes") {
-                            let _ = save_settings(&self.settings, settings_path);
-                            window.close();
-                        }
+                        //if self.plando.dirty {
+                        //    self.modal_type = ModalType::Confirm("Are you sure you want to exit? All unsaved progress will be lost.".to_string(), |plando| {
+                        //        
+                        //        let settings_path_str = plando.settings_path.clone();
+                        //        let settings_path = Path::new(&settings_path_str);
+                        //        let _ = save_settings(&plando.settings, settings_path);
+                        //        //window.close();
+                        //    });
+                        //}
+                        window.close();
                     },
                     Event::MouseWheelScrolled { wheel: _, delta, x, y } => {
                         if self.is_mouse_public {
@@ -1795,6 +1796,26 @@ impl PlandoApp {
                             if ui.button("OK").clicked() {
                                 self.modal_type = ModalType::None;
                             }
+                        });
+                        if modal.should_close() {
+                            self.modal_type = ModalType::None;
+                        }
+                    }
+                    ModalType::Confirm(msg, callback) => {
+                        let modal = egui::Modal::new(Id::new("modal_info")).show(ctx, |ui| {
+                            ui.set_min_width(256.0);
+                            ui.heading("Confirm");
+                            ui.label(msg);
+                            ui.horizontal(|ui| {
+                                if ui.button("Confirm").clicked() {
+                                    callback(self);
+                                    self.modal_type = ModalType::None;
+                                }
+                                if ui.button("Cancel").clicked() {
+                                    self.modal_type = ModalType::None;
+                                }
+                            });
+                            
                         });
                         if modal.should_close() {
                             self.modal_type = ModalType::None;
@@ -3479,7 +3500,7 @@ impl PlandoApp {
         customize_logic_open
     }
 
-    fn modal_confirm<S: Into<String>>(&self, window: &mut RenderWindow, sfegui: &mut SfEgui, header: S, msg: S, options: Vec<S>) -> Option<String> {
+    /*fn modal_confirm<S: Into<String>>(&self, window: &mut RenderWindow, sfegui: &mut SfEgui, header: S, msg: S, options: Vec<S>) -> Option<String> {
         let header: String = header.into();
         let msg: String = msg.into();
         let options: Vec<String> = options.into_iter().map(|s| s.into()).collect();
@@ -3517,7 +3538,7 @@ impl PlandoApp {
             }
         }
         None
-    }
+    }*/
 }
 
 fn main() {
