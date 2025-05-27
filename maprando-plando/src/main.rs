@@ -1,5 +1,5 @@
 use {
-    anyhow::{anyhow, bail, Result}, egui::{self, Color32, Context, FontDefinitions, Id, Modifiers, Sense, TextureId, Ui, Vec2}, egui_sfml::{SfEgui, UserTexSource}, flate2::read::GzDecoder, hashbrown::HashMap, map_editor::{MapEditor, SidebarMode}, maprando::{
+    anyhow::{anyhow, bail, Result}, egui::{self, style::default_text_styles, Color32, Context, FontDefinitions, Id, Modifiers, Sense, TextureId, Ui, Vec2}, egui_sfml::{SfEgui, UserTexSource}, flate2::read::GzDecoder, hashbrown::HashMap, map_editor::{MapEditor, SidebarMode}, maprando::{
         customize::{mosaic::MosaicTheme, ControllerButton, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, MusicSettings, PaletteTheme, ShakingSetting, TileTheme}, patch::Rom, randomize::SpoilerRouteEntry, settings::{DoorLocksSize, DoorsMode, ItemDotChange, MapStationReveal, MapsRevealed, Objective, ObjectiveSetting, RandomizerSettings, SaveAnimals, WallJump}
     }, maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType}, mouse_state::MouseState, plando::{DoubleItemPlacement, MapRepositoryType, Placeable, Plando, ITEM_VALUES}, rand::RngCore, rfd::FileDialog, self_update::cargo_crate_version, serde::{Deserialize, Serialize}, sfml::{
         cpp::FBox, graphics::{
@@ -40,7 +40,8 @@ struct Settings {
     disable_logic: bool,
     auto_update: bool,
     disable_bg_grid: bool,
-    ui_scale: f32
+    ui_scale: f32,
+    scroll_speed: f32
 }
 
 impl Default for Settings {
@@ -56,6 +57,7 @@ impl Default for Settings {
             auto_update: true,
             disable_bg_grid: false,
             ui_scale: 1.0,
+            scroll_speed: 16.0
         }
     }
 }
@@ -1303,6 +1305,13 @@ impl PlandoApp {
         let sidebar_height = 32.0;
 
         let mut sfegui = SfEgui::new(&window);
+        sfegui.get_context().all_styles_mut(|style| {
+            let mut def = default_text_styles();
+            for (_, font_id) in &mut def {
+                font_id.size *= self.settings.ui_scale;
+            }
+            style.text_styles = def;
+        });
 
         let mut settings_open = false;
         let mut customize_open = false;
@@ -1343,6 +1352,7 @@ impl PlandoApp {
                 || !self.map_editor.dragged_room_idx.is_empty());
 
             while let Some(ev) = window.poll_event() {
+                sfegui.scroll_factor = self.settings.scroll_speed;
                 sfegui.add_event(&ev);
                 self.mouse_state.add_event(ev);
 
@@ -2677,7 +2687,7 @@ impl PlandoApp {
             .title_bar(false)
             .movable(false)
             .vscroll(false)
-            .max_width(720.0)
+            .max_width(720.0 * self.settings.ui_scale)
             .fixed_pos(Vec2::new(16.0, 32.0).to_pos2())
             .show(ctx, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
@@ -2717,7 +2727,7 @@ impl PlandoApp {
                                 continue;
                             }
                             let placeable_idx = Placeable::ETank as u64 + idx as u64;
-                            let img = egui::Image::new(self.user_tex_source.get_image_source(placeable_idx)).fit_to_exact_size(Vec2::new(16.0, 16.0));
+                            let img = egui::Image::new(self.user_tex_source.get_image_source(placeable_idx)).fit_to_exact_size(Vec2::new(16.0, 16.0) * self.settings.ui_scale);
                             ui.add(img);
                             let ammo_collected = (collectible_items[idx] as f32 * self.plando.randomizer_settings.item_progression_settings.ammo_collect_fraction).round() as i32 * 5;
                             let label = if idx == Item::ETank as usize || idx == Item::ReserveTank as usize {
@@ -2735,7 +2745,7 @@ impl PlandoApp {
                                 continue;
                             }
                             let placeable_idx = Placeable::ETank as u64 + i as u64;
-                            let img = egui::Image::new(self.user_tex_source.get_image_source(placeable_idx)).fit_to_exact_size(Vec2::new(16.0, 16.0));
+                            let img = egui::Image::new(self.user_tex_source.get_image_source(placeable_idx)).fit_to_exact_size(Vec2::new(16.0, 16.0) * self.settings.ui_scale);
                             ui.add(img);
                         }
                     });
@@ -2747,7 +2757,7 @@ impl PlandoApp {
                                 continue;
                             }
                             let flag_tex_idx = UserTexId::FlagFirst as u64 + flag_id as u64;
-                            let img = egui::Image::new(self.user_tex_source.get_image_source(flag_tex_idx)).fit_to_exact_size(Vec2::new(24.0, 24.0)).sense(Sense::click());
+                            let img = egui::Image::new(self.user_tex_source.get_image_source(flag_tex_idx)).fit_to_exact_size(Vec2::new(24.0, 24.0) * self.settings.ui_scale).sense(Sense::click());
                             let resp = ui.add(img);
                             if resp.clicked() {
                                 new_spoiler_type = SpoilerType::Flag(i);
@@ -2768,7 +2778,7 @@ impl PlandoApp {
                             let item_details = &details.items[i];
                             let item_id = self.plando.game_data.item_isv.index_by_key[&item_details.item];
                             let placeable_id = Placeable::ETank as u64 + item_id as u64;
-                            let img = egui::Image::new(self.user_tex_source.get_image_source(placeable_id)).fit_to_exact_size(Vec2::new(16.0, 16.0)).sense(Sense::click());
+                            let img = egui::Image::new(self.user_tex_source.get_image_source(placeable_id)).fit_to_exact_size(Vec2::new(16.0, 16.0) * self.settings.ui_scale).sense(Sense::click());
                             if ui.add(img).clicked() {
                                 let item_idx = self.plando.game_data.item_locations.iter().position(
                                     |x| x.0 == item_details.location.room_id && x.1 == item_details.location.node_id
@@ -2785,7 +2795,7 @@ impl PlandoApp {
                                 continue;
                             }
                             let flag_tex_id = UserTexId::FlagFirst as u64 + flag_id as u64;
-                            let img = egui::Image::new(self.user_tex_source.get_image_source(flag_tex_id)).fit_to_exact_size(Vec2::new(24.0, 24.0)).sense(Sense::click());
+                            let img = egui::Image::new(self.user_tex_source.get_image_source(flag_tex_id)).fit_to_exact_size(Vec2::new(24.0, 24.0) * self.settings.ui_scale).sense(Sense::click());
                             if ui.add(img).clicked() {
                                 let flag_idx = self.plando.game_data.flag_ids.iter().position(
                                     |x| *x == flag_id
@@ -2932,7 +2942,7 @@ impl PlandoApp {
                                 items_found[item] = true;
                                 let placeable_id = Placeable::ETank as u64 + item as u64;
                                 let img = egui::Image::new(self.user_tex_source.get_image_source(placeable_id))
-                                    .fit_to_exact_size(Vec2::new(16.0, 16.0)).sense(Sense::click());
+                                    .fit_to_exact_size(Vec2::new(16.0, 16.0) * self.settings.ui_scale).sense(Sense::click());
                                 if ui.add(img).clicked() {
                                     self.spoiler_step = summary.step - 1;
                                     let item_loc = self.plando.game_data.item_locations.iter().position(
@@ -3042,16 +3052,27 @@ impl PlandoApp {
                 }
                 ui.end_row();
 
-                /*ui.label("UI Scale").on_hover_text("Scales the entire UI by this factor");
-                let slider = egui::Slider::new(&mut self.settings.ui_scale, 0.1..=4.0);
-                if ui.add(slider).dragged() {
-                    ctx.set_pixels_per_point(self.settings.ui_scale);
+                ui.label("UI Scale").on_hover_text("Scales the entire UI by this factor");
+                let slider = egui::Slider::new(&mut self.settings.ui_scale, 0.5..=3.0);
+                if ui.add(slider).drag_stopped() {
+                    ctx.all_styles_mut(|style| {
+                        let mut def = default_text_styles();
+                        for (_, font_id) in &mut def {
+                            font_id.size *= self.settings.ui_scale;
+                        }
+                        style.text_styles = def;
+                    });
                 }
                 if ui.add_enabled(self.settings.ui_scale != default.ui_scale, egui::Button::new("Reset")).clicked() {
                     self.settings.ui_scale = default.ui_scale;
-                    ctx.set_pixels_per_point(self.settings.ui_scale);
+                    ctx.all_styles_mut(|style| style.text_styles = default_text_styles());
                 }
-                ui.end_row();*/
+                ui.end_row();
+
+                ui.label("Scroll Speed").on_hover_text("Distance in pixels scrolled when scrolling using the Mouse Wheel");
+                let slider = egui::Slider::new(&mut self.settings.scroll_speed, 1.0..=300.0);
+                ui.add(slider);
+                ui.end_row();
             });
             ui.horizontal(|ui| {
                 if ui.button("Save").clicked() {

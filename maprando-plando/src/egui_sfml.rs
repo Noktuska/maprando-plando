@@ -179,7 +179,9 @@ pub struct SfEgui {
     cursors: HashMap<CursorType, FBox<Cursor>>,
     last_window_pos: Vector2i,
     raw_input: RawInput,
-    textures: HashMap<TextureId, FBox<Texture>>
+    textures: HashMap<TextureId, FBox<Texture>>,
+
+    pub scroll_factor: f32,
 }
 
 impl SfEgui {
@@ -190,8 +192,14 @@ impl SfEgui {
             cursors: get_cursor_map(),
             last_window_pos: Vector2i::default(),
             raw_input: make_raw_input(window),
-            textures: HashMap::new()
+            textures: HashMap::new(),
+
+            scroll_factor: 1.0,
         }
+    }
+
+    pub fn get_context(&self) -> &Context {
+        &self.ctx
     }
 
     pub fn add_event(&mut self, event: &Event) {
@@ -265,8 +273,8 @@ impl SfEgui {
                     raw_input.events.push(egui::Event::Zoom(if delta > 0.0 { 1.1 } else { 0.9 }));
                 } else {
                     let delta = match wheel {
-                        sfml::window::mouse::Wheel::VerticalWheel => Vec2::new(0.0, delta * 12.0),
-                        sfml::window::mouse::Wheel::HorizontalWheel => Vec2::new(delta * 12.0, 0.0),
+                        sfml::window::mouse::Wheel::VerticalWheel => Vec2::new(0.0, delta * self.scroll_factor),
+                        sfml::window::mouse::Wheel::HorizontalWheel => Vec2::new(delta * self.scroll_factor, 0.0),
                     };
                     raw_input.events.push(egui::Event::MouseWheel {
                         unit: egui::MouseWheelUnit::Point,
