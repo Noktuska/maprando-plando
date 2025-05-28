@@ -6,6 +6,7 @@ use maprando::{customize::{mosaic::MosaicTheme, samus_sprite::SamusSpriteCategor
 use maprando_game::{BeamType, DoorPtrPair, DoorType, GameData, HubLocation, Item, ItemLocationId, LinksDataGroup, Map, NodeId, RoomId, StartLocation, VertexKey};
 use maprando_logic::{GlobalState, Inventory, LocalState};
 use rand::{rngs::StdRng, RngCore, SeedableRng};
+use serde::{Deserialize, Serialize};
 use strum::VariantNames;
 
 //use crate::plando_logic::*;
@@ -162,6 +163,7 @@ pub enum MapRepositoryType {
     Vanilla, Standard, Wild
 }
 
+#[derive(Serialize, Deserialize, Clone)]
 pub struct SpoilerOverride {
     pub step: usize,
     pub item_idx: usize,

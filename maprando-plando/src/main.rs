@@ -296,7 +296,9 @@ struct SeedData {
     start_location: usize,
     item_placements: Vec<Item>,
     door_locks: Vec<LockedDoorSerializable>,
-    settings: RandomizerSettings
+    settings: RandomizerSettings,
+    #[serde(default = "Vec::new")]
+    spoiler_overrides: Vec<SpoilerOverride>
 }
 
 fn save_settings(settings: &Settings, path: &Path) -> Result<()> {
@@ -351,7 +353,8 @@ fn get_seed_data(plando: &Plando) -> SeedData {
         start_location: start_location_id,
         item_placements: plando.item_locations.clone(),
         door_locks,
-        settings: plando.randomizer_settings.clone()
+        settings: plando.randomizer_settings.clone(),
+        spoiler_overrides: plando.spoiler_overrides.clone()
     }
 }
 
@@ -407,6 +410,8 @@ fn load_seed(plando: &mut Plando, path: &Path) -> Result<()> {
     }
 
     plando.place_start_location(start_location)?;
+
+    plando.spoiler_overrides = seed_data.spoiler_overrides;
 
     plando.update_spoiler_data();
     plando.auto_update_spoiler = auto_update;
@@ -1511,9 +1516,9 @@ impl PlandoApp {
                                     .add_filter("JSON File", &["json"])
                                     .pick_file();
                                 if let Some(file) = file_opt {
-                                    let res = load_seed(&mut self.plando, file.as_path());
-                                    if res.is_err() {
-                                        self.modal_type = ModalType::Error(res.unwrap_err().to_string());
+                                    match load_seed(&mut self.plando, file.as_path()) {
+                                        Ok(_) => cur_settings = self.plando.randomizer_settings.clone(),
+                                        Err(err) => self.modal_type = ModalType::Error(err.to_string())
                                     }
                                 }
                                 ui.close_menu();
