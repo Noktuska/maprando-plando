@@ -2,10 +2,11 @@ use std::path::Path;
 
 use anyhow::{anyhow, bail, Result};
 use hashbrown::{HashMap, HashSet};
-use maprando::{customize::{mosaic::MosaicTheme, samus_sprite::SamusSpriteCategory}, map_repository::MapRepository, preset::PresetData, randomize::{DebugData, DifficultyConfig, DoorState, FlagLocationState, ItemLocationState, LockedDoor, Randomization, RandomizationState, Randomizer, SaveLocationState, SpoilerDetails, SpoilerDoorDetails, SpoilerDoorSummary, SpoilerFlagDetails, SpoilerFlagSummary, SpoilerLog, SpoilerSummary, StartLocationData}, settings::{Objective, RandomizerSettings, WallJump}, traverse::{apply_requirement, get_bireachable_idxs, get_spoiler_route, traverse, LockedDoorData}};
+use maprando::{customize::{mosaic::MosaicTheme, samus_sprite::SamusSpriteCategory}, map_repository::MapRepository, preset::PresetData, randomize::{DebugData, DifficultyConfig, DoorState, FlagLocationState, ItemLocationState, LockedDoor, Randomization, RandomizationState, Randomizer, SaveLocationState, SpoilerDetails, SpoilerDoorDetails, SpoilerDoorSummary, SpoilerFlagDetails, SpoilerFlagSummary, SpoilerItemDetails, SpoilerItemSummary, SpoilerLocation, SpoilerLog, SpoilerSummary, StartLocationData}, settings::{Objective, RandomizerSettings, WallJump}, traverse::{apply_requirement, get_bireachable_idxs, get_spoiler_route, traverse, LockedDoorData}};
 use maprando_game::{BeamType, DoorPtrPair, DoorType, GameData, HubLocation, Item, ItemLocationId, LinksDataGroup, Map, NodeId, RoomId, StartLocation, VertexKey};
 use maprando_logic::{GlobalState, Inventory, LocalState};
 use rand::{rngs::StdRng, RngCore, SeedableRng};
+use strum::VariantNames;
 
 //use crate::plando_logic::*;
 
@@ -163,7 +164,8 @@ pub enum MapRepositoryType {
 
 pub struct SpoilerOverride {
     pub step: usize,
-    pub item_idx: usize
+    pub item_idx: usize,
+    pub description: String
 }
 
 pub struct Plando {
@@ -1052,7 +1054,8 @@ impl Plando {
         for &item in &placed_uncollected_bireachable_items {
             new_state.global_state.collect(item, &self.game_data, self.randomizer_settings.item_progression_settings.ammo_collect_fraction, &self.difficulty_tiers[0].tech);
         }
-        let overrides: Vec<_> = self.spoiler_overrides.iter().filter(|x| x.step == new_state.step_num).collect();
+        // Add overrides to the current step
+        let overrides: Vec<_> = self.spoiler_overrides.iter().filter(|x| x.step == state.step_num).collect();
         for item_override in &overrides {
             let item = self.item_locations[item_override.item_idx];
             new_state.global_state.collect(item, &self.game_data, self.randomizer_settings.item_progression_settings.ammo_collect_fraction, &self.difficulty_tiers[0].tech);
@@ -1063,24 +1066,64 @@ impl Plando {
         for &loc in &placed_uncollected_bireachable_loc {
             new_state.item_location_state[loc].collected = true;
         }
-        for item_override in overrides {
-            new_state.item_location_state[item_override.item_idx].collected = true;
-        }
 
-        let spoiler_summary = randomizer.get_spoiler_summary(
+        let mut spoiler_summary = randomizer.get_spoiler_summary(
             &orig_global_state,
             &state,
             &new_state,
             spoiler_flag_summaries,
             spoiler_door_summaries
         );
-        let spoiler_details = randomizer.get_spoiler_details(
+        let mut spoiler_details = randomizer.get_spoiler_details(
             &orig_global_state,
             &state,
             &new_state,
             spoiler_flag_details,
             spoiler_door_details
         );
+
+        // Mark items as collected after getting spoiler data as they are not logicall bireachable
+        for item_override in overrides {
+            let state = &mut new_state.item_location_state[item_override.item_idx];
+            state.collected = true;
+            state.bireachable = true;
+            state.bireachable_vertex_id = self.game_data.item_vertex_ids[item_override.item_idx].first().copied();
+            state.reachable_step = Some(new_state.step_num);
+
+            let item = self.item_locations[item_override.item_idx];
+            let item_str: String = Item::VARIANTS[item as usize].to_string();
+            let (room_id, node_id) = self.game_data.item_locations[item_override.item_idx];
+            let vertex_info = self.get_vertex_info_by_id(room_id, node_id);
+
+            // Dummy fill spoiler summary and details
+            spoiler_summary.items.push(SpoilerItemSummary {
+                item: item_str.clone(),
+                location: SpoilerLocation {
+                    area: vertex_info.area_name.clone(),
+                    room_id: vertex_info.room_id,
+                    room: vertex_info.room_name.clone(),
+                    node_id: vertex_info.node_id,
+                    node: vertex_info.node_name.clone(),
+                    coords: vertex_info.room_coords
+                }
+            });
+            spoiler_details.items.push(SpoilerItemDetails {
+                item: item_str,
+                location: SpoilerLocation {
+                    area: vertex_info.area_name,
+                    room_id: vertex_info.room_id,
+                    room: vertex_info.room_name,
+                    node_id: vertex_info.node_id,
+                    node: vertex_info.node_name,
+                    coords: vertex_info.room_coords
+                },
+                reachable_step: new_state.step_num,
+                difficulty: Some("Custom".to_string()),
+                obtain_route: Vec::new(),
+                return_route: Vec::new()
+            });
+        }
+
         *state = new_state;
         (spoiler_summary, spoiler_details)
     }

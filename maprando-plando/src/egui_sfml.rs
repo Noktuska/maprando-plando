@@ -208,7 +208,7 @@ impl SfEgui {
             Event::KeyPressed { code, alt, ctrl, shift, .. } => {
                 if ctrl {
                     match code {
-                        Key::V => raw_input.events.push(egui::Event::Text(clipboard::get_string())),
+                        Key::V => raw_input.events.push(egui::Event::Paste(clipboard::get_string())),
                         Key::C => raw_input.events.push(egui::Event::Copy),
                         Key::X => raw_input.events.push(egui::Event::Cut),
                         _ => {}
@@ -263,7 +263,9 @@ impl SfEgui {
                 });
             }
             Event::TextEntered { unicode } => {
-                raw_input.events.push(egui::Event::Text(unicode.to_string()));
+                if !unicode.is_control() {
+                    raw_input.events.push(egui::Event::Text(unicode.to_string()));
+                }
             }
             Event::MouseWheelScrolled { wheel, delta, .. } => {
                 let alt = Key::LAlt.is_pressed() || Key::RAlt.is_pressed();

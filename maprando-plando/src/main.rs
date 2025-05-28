@@ -1,7 +1,7 @@
 use {
     anyhow::{anyhow, bail, Result}, egui::{self, style::default_text_styles, Color32, Context, FontDefinitions, Id, Modifiers, Sense, TextureId, Ui, Vec2}, egui_sfml::{SfEgui, UserTexSource}, flate2::read::GzDecoder, hashbrown::HashMap, map_editor::{MapEditor, SidebarMode}, maprando::{
         customize::{mosaic::MosaicTheme, ControllerButton, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, MusicSettings, PaletteTheme, ShakingSetting, TileTheme}, patch::Rom, randomize::SpoilerRouteEntry, settings::{DoorLocksSize, DoorsMode, ItemDotChange, MapStationReveal, MapsRevealed, Objective, ObjectiveSetting, RandomizerSettings, SaveAnimals, WallJump}
-    }, maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType}, mouse_state::MouseState, plando::{DoubleItemPlacement, MapRepositoryType, Placeable, Plando, ITEM_VALUES}, rand::RngCore, rfd::FileDialog, self_update::cargo_crate_version, serde::{Deserialize, Serialize}, sfml::{
+    }, maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType}, mouse_state::MouseState, plando::{DoubleItemPlacement, MapRepositoryType, Placeable, Plando, SpoilerOverride, ITEM_VALUES}, rand::RngCore, rfd::FileDialog, self_update::cargo_crate_version, serde::{Deserialize, Serialize}, sfml::{
         cpp::FBox, graphics::{
             self, CircleShape, Color, FloatRect, IntRect, PrimitiveType, RenderStates, RenderTarget, RenderWindow, Shape, Transformable, Vertex
         }, system::{Vector2f, Vector2i}, window::{
@@ -1393,6 +1393,8 @@ impl PlandoApp {
                             self.spoiler_step += 1;
                         } else if code == Key::Subtract && self.spoiler_step > 0 {
                             self.spoiler_step -= 1;
+                        } else if code == Key::F6 {
+                            self.override_window = Some(self.spoiler_step);
                         }
                     }
                     _ => {}
@@ -1753,7 +1755,7 @@ impl PlandoApp {
                 }
 
                 if self.override_window.is_some() {
-                    self.draw_spoiler_override(ctx);
+                    spoiler_details_hovered |= self.draw_spoiler_override(ctx);
                 }
 
                 if settings_open {
@@ -2670,14 +2672,80 @@ impl PlandoApp {
         None
     }
 
-    fn draw_spoiler_override(&mut self, ctx: &Context) {
+    fn draw_spoiler_override(&mut self, ctx: &Context) -> bool {
+        let mut hovered = false;
         let step = self.override_window.unwrap();
-        egui::Window::new(format!("Spoiler Overrides STEP {}", step)).resizable(false).show(ctx, |ui| {
-            let overrides: Vec<_> = self.plando.spoiler_overrides.iter().filter(|x| x.step == step).collect();
-            for item_override in overrides {
-                
+        let window = egui::Window::new(format!("Spoiler Overrides STEP {}", step)).resizable(false).show(ctx, |ui| {
+            let mut remove_idx = None;
+            let overrides: Vec<_> = self.plando.spoiler_overrides.iter_mut().enumerate().filter(|(_idx, x)| x.step == step).collect();
+            for (override_idx, item_override) in overrides {
+                ui.horizontal(|ui| {
+                    let cur_item = self.plando.item_locations[item_override.item_idx];
+                    let cur_item_name = Placeable::from_item(cur_item).to_string();
+                    hovered |= egui::ComboBox::new("combo_spoiler_override_item", "Item").selected_text(&cur_item_name).show_ui(ui, |ui| {
+                        for item in ITEM_VALUES {
+                            let locs: Vec<_> = self.plando.item_locations.iter().enumerate().filter(
+                                |&(_idx, new_item)| item == *new_item
+                            ).collect();
+                            if locs.is_empty() || item == Item::Nothing {
+                                continue;
+                            }
+                            let item_name = Placeable::from_item(item).to_string();
+                            if ui.selectable_label(item_name == cur_item_name, item_name).clicked() {
+                                item_override.item_idx = locs[0].0;
+                            }
+                        }
+                    }).response.contains_pointer();
+                    let cur_item = self.plando.item_locations[item_override.item_idx];
+                    let locs: Vec<_> = self.plando.item_locations.iter().enumerate().filter(
+                        |&(_idx, new_item)| cur_item == *new_item
+                    ).collect();
+                    let loc_strs: Vec<_> = locs.iter().map(|&(idx, _item)| {
+                        let vertex_idx = self.plando.game_data.item_vertex_ids[idx][0];
+                        let vertex = &self.plando.game_data.vertex_isv.keys[vertex_idx];
+                        let room_name = self.plando.game_data.room_json_map[&vertex.room_id]["name"].as_str().unwrap().to_string();
+                        let node_name = self.plando.game_data.node_json_map[&(vertex.room_id, vertex.node_id)]["name"].as_str().unwrap().to_string();
+                        format!("{}: {}", room_name, node_name)
+                    }).collect();
+                    let cur_loc_idx = locs.iter().position(|&(idx, _item)| idx == item_override.item_idx).unwrap();
+                    let loc_str = &loc_strs[cur_loc_idx];
+                    
+                    hovered |= egui::ComboBox::new("combo_spoiler_override_loc", "Location").selected_text(loc_str).show_ui(ui, |ui| {
+                        for (i, &(idx, _item)) in locs.iter().enumerate() {
+                            ui.selectable_value(&mut item_override.item_idx, idx, &loc_strs[i]);
+                        }
+                    }).response.contains_pointer();
+
+                    ui.label("Description");
+                    ui.text_edit_singleline(&mut item_override.description);
+
+                    if ui.button("Delete").clicked() {
+                        remove_idx = Some(override_idx);
+                    }
+                });
+                ui.separator();
             }
-        });
+
+            if let Some(idx) = remove_idx {
+                self.plando.spoiler_overrides.remove(idx);
+            }
+
+            ui.horizontal(|ui| {
+                if ui.button("New").clicked() {
+                    self.plando.spoiler_overrides.push(SpoilerOverride {
+                        step,
+                        item_idx: 0,
+                        description: String::new()
+                    });
+                }
+                if ui.button("Apply").clicked() {
+                    self.override_window = None;
+                    self.plando.update_spoiler_data();
+                }
+            });
+            
+        }).unwrap().response;
+        hovered || window.contains_pointer()
     }
 
     fn draw_spoiler_details(&mut self, ctx: &Context) -> bool {
@@ -2695,9 +2763,9 @@ impl PlandoApp {
                     let details = &spoiler_log.details[self.spoiler_step];
                     ui.horizontal(|ui| {
                         ui.heading(format!("STEP {}", details.step));
-                        //if ui.button("Modify Overrides").clicked() {
-                        //    self.override_window = Some(details.step);
-                        //}
+                        if ui.button("Modify Overrides").clicked() {
+                            self.override_window = Some(details.step);
+                        }
                     });
                     ui.label("PREVIOUSLY COLLECTIBLE");
 
@@ -2817,7 +2885,10 @@ impl PlandoApp {
                             let item_details = details.items.iter().find(
                                 |x| x.location.room_id == room_id && x.location.node_id == node_id
                             ).unwrap();
-                            details_name = item_details.item.clone() + item_details.difficulty.as_ref().unwrap_or(&String::new());
+                            details_name = match item_details.difficulty.as_ref() {
+                                None => item_details.item.clone(),
+                                Some(diff) => format!("{} ({})", item_details.item.clone(), diff)    
+                            };
                             details_location = item_details.location.room.clone() + ": " + &item_details.location.node;
                             details_area = item_details.location.area.clone();
                             details_obtain_route = &item_details.obtain_route;
@@ -2849,6 +2920,14 @@ impl PlandoApp {
                     ui.label(details_area);
 
                     ui.separator();
+                    if let SpoilerType::Item(idx) = self.spoiler_type {
+                        if let Some(item_override) = self.plando.spoiler_overrides.iter().find(|x| x.item_idx == idx) {
+                            ui.label("OVERRIDE DESCRIPTION");
+                            ui.label(&item_override.description);
+                            ui.separator();
+                        }
+                    }
+
                     ui.label("OBTAIN ROUTE");
                     for entry in details_obtain_route {
                         ui.label(entry.room.clone() + ": " + &entry.node);

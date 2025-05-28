@@ -1824,6 +1824,7 @@ dependencies = [
  "serde_derive",
  "serde_json",
  "sfml",
+ "strum",
  "tar",
 ]
 
