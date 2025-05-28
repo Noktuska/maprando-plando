@@ -1995,8 +1995,12 @@ impl PlandoApp {
                     info_overlay = Some(data.room_name.clone());
                     last_hovered_room_idx = Some(data.room_idx);
                     if self.mouse_state.is_button_pressed(mouse::Button::Left) {
+                        if Key::LControl.is_pressed() || Key::RControl.is_pressed() {
+                            self.map_editor.selected_room_idx.push(data.room_idx);
+                        } else {
+                            self.map_editor.start_drag(Some(data.room_idx), mouse_tile_x as usize, mouse_tile_y as usize, &self.plando.game_data);
+                        }
                         has_dragged_room = true;
-                        self.map_editor.start_drag(Some(data.room_idx), mouse_tile_x as usize, mouse_tile_y as usize, &self.plando.game_data);
                     } else if self.mouse_state.is_button_pressed(mouse::Button::Right) {
                         self.map_editor.erase_room(data.room_idx, &self.plando.game_data);
                     }
@@ -2012,8 +2016,9 @@ impl PlandoApp {
             self.draw_room_outline(rt, states, rect);
         } else if let Some(rect) = self.map_editor.get_dragged_bbox(&self.plando.game_data) {
             self.draw_room_outline(rt, states, rect);
-        } else if self.mouse_state.is_button_down(mouse::Button::Left) {
-            let sel_start = self.map_editor.selection_start;
+        }
+        if self.mouse_state.is_button_down(mouse::Button::Left) && self.map_editor.selection_start.is_some() {
+            let sel_start = self.map_editor.selection_start.unwrap();
             let mouse_pos = Vector2i::new(mouse_tile_x as i32, mouse_tile_y as i32);
             let size = mouse_pos - sel_start;
             let rect = IntRect::from_vecs(sel_start, size);

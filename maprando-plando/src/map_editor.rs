@@ -3,7 +3,7 @@ use std::i32;
 use anyhow::{anyhow, bail, Result};
 use hashbrown::HashSet;
 use maprando_game::{GameData, Map};
-use sfml::{graphics::{Color, IntRect}, system::Vector2i};
+use sfml::{graphics::{Color, IntRect}, system::Vector2i, window::Key};
 
 use crate::{utils, PlandoApp};
 
@@ -127,7 +127,7 @@ impl Area {
 pub struct MapEditor {
     pub map: Map,
     pub selected_room_idx: Vec<usize>,
-    pub selection_start: Vector2i,
+    pub selection_start: Option<Vector2i>,
     pub dragged_room_idx: Vec<usize>,
     pub dragged_room_xoffset: usize,
     pub dragged_room_yoffset: usize,
@@ -147,7 +147,7 @@ impl MapEditor {
         MapEditor {
             map,
             selected_room_idx: Vec::new(),
-            selection_start: Vector2i::default(),
+            selection_start: None,
             dragged_room_idx: Vec::new(),
             dragged_room_xoffset: 0,
             dragged_room_yoffset: 0,
@@ -245,8 +245,10 @@ impl MapEditor {
             }
         } else {
             // No room is being dragged, start a selection
-            self.selected_room_idx.clear();
-            self.selection_start = Vector2i::new(mouse_tile_x as i32, mouse_tile_y as i32);
+            if !(Key::LControl.is_pressed() || Key::RControl.is_pressed()) {
+                self.selected_room_idx.clear();
+            }
+            self.selection_start = Some(Vector2i::new(mouse_tile_x as i32, mouse_tile_y as i32));
         }
     }
 
@@ -257,11 +259,12 @@ impl MapEditor {
                 self.snap_room(self.dragged_room_idx[i], game_data);
             }
             self.selected_room_idx.append(&mut self.dragged_room_idx);
-        } else if self.selected_room_idx.is_empty() {
+        } else if self.selection_start.is_some() && (self.selected_room_idx.is_empty() || Key::LControl.is_pressed() || Key::RControl.is_pressed()) {
             // Otherwise we finish a selection
-            let w = mouse_tile_x as i32 - self.selection_start.x;
-            let h = mouse_tile_y as i32 - self.selection_start.y;
-            let rect = IntRect::new(self.selection_start.x, self.selection_start.y,w, h);
+            let sel_pos = self.selection_start.unwrap();
+            let w = mouse_tile_x as i32 - sel_pos.x;
+            let h = mouse_tile_y as i32 - sel_pos.y;
+            let rect = IntRect::new(sel_pos.x, sel_pos.y,w, h);
             let rect = utils::normalize_rect(rect);
 
             for (room_idx, &(room_x, room_y)) in self.map.rooms.iter().enumerate() {
@@ -276,6 +279,10 @@ impl MapEditor {
                     }
                 }
             }
+
+            self.selected_room_idx.sort();
+            self.selected_room_idx.dedup();
+            self.selection_start = None;
         }
     }
 
