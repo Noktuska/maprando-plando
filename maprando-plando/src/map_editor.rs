@@ -287,23 +287,15 @@ impl MapEditor {
     }
 
     pub fn get_selected_bbox(&self, game_data: &GameData) -> Option<IntRect> {
-        self.selected_room_idx.iter().map(|&idx| {
-            let room_geometry = &game_data.room_geometry[idx];
-            let (room_x, room_y) = self.map.rooms[idx];
-            let room_width = room_geometry.map[0].len();
-            let room_height = room_geometry.map.len();
-            IntRect::new(room_x as i32, room_y as i32, room_width as i32, room_height as i32)
-        }).reduce(|accum, elem| {
-            let left = accum.left.min(elem.left);
-            let top = accum.top.min(elem.top);
-            let right = (accum.left + accum.width).max(elem.left + elem.width);
-            let bottom = (accum.top + accum.height).max(elem.top + elem.height);
-            IntRect::new(left, top, right - left, bottom - top)
-        })
+        self.get_bbox(game_data, &self.selected_room_idx)
     }
 
     pub fn get_dragged_bbox(&self, game_data: &GameData) -> Option<IntRect> {
-        self.dragged_room_idx.iter().map(|&idx| {
+        self.get_bbox(game_data, &self.dragged_room_idx)
+    }
+
+    fn get_bbox(&self, game_data: &GameData, vec: &Vec<usize>) -> Option<IntRect> {
+        vec.iter().map(|&idx| {
             let room_geometry = &game_data.room_geometry[idx];
             let (room_x, room_y) = self.map.rooms[idx];
             let room_width = room_geometry.map[0].len();
