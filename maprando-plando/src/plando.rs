@@ -1087,6 +1087,9 @@ impl Plando {
         // Mark items as collected after getting spoiler data as they are not logicall bireachable
         for item_override in overrides {
             let state = &mut new_state.item_location_state[item_override.item_idx];
+            if state.collected {
+                continue;
+            }
             state.collected = true;
             state.bireachable = true;
             state.bireachable_vertex_id = self.game_data.item_vertex_ids[item_override.item_idx].first().copied();

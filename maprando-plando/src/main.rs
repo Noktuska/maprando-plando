@@ -1354,7 +1354,7 @@ impl PlandoApp {
             // mouse_is_public is true if the mouse is on the map view and not on some GUI
             self.is_mouse_public = !(spoiler_details_hovered || settings_open || customize_open || customize_logic_open || self.modal_type != ModalType::None
                 || spoiler_window_bounds.contains(self.mouse_state.get_mouse_pos()) || self.mouse_state.mouse_x >= window.size().x as f32 - sidebar_width
-                || !self.map_editor.dragged_room_idx.is_empty());
+                || !self.map_editor.dragged_room_idx.is_empty() || self.override_window.is_some());
 
             while let Some(ev) = window.poll_event() {
                 sfegui.scroll_factor = self.settings.scroll_speed;
@@ -1399,7 +1399,7 @@ impl PlandoApp {
                         } else if code == Key::Subtract && self.spoiler_step > 0 {
                             self.spoiler_step -= 1;
                         } else if code == Key::F6 {
-                            self.override_window = Some(self.spoiler_step);
+                            self.override_window = Some(self.spoiler_step + 1);
                         }
                     }
                     _ => {}
