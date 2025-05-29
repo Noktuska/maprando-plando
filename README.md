@@ -37,6 +37,11 @@ You can Apply/Discard the changes you make also under the "Map Editor" Menu Butt
 
 You can Save/Load your custom maps under tha "Map" Menu Button.
 
+### Hotkeys
+* +/- to increment/decrement current spoiler step
+* F5 to manually update the Spoiler Log
+* F6 to open Spoiler Overrides for the current step
+
 ## How to Build
 1. Clone the repository with recursive submodules enabled
 ```sh
