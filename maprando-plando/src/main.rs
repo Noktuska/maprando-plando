@@ -2692,7 +2692,7 @@ impl PlandoApp {
                 ui.horizontal(|ui| {
                     let cur_item = self.plando.item_locations[item_override.item_idx];
                     let cur_item_name = Placeable::from_item(cur_item).to_string();
-                    hovered |= egui::ComboBox::new("combo_spoiler_override_item", "Item").selected_text(&cur_item_name).show_ui(ui, |ui| {
+                    hovered |= egui::ComboBox::new(format!("combo_spoiler_override_item_{override_idx}"), "Item").selected_text(&cur_item_name).show_ui(ui, |ui| {
                         for item in ITEM_VALUES {
                             let locs: Vec<_> = self.plando.item_locations.iter().enumerate().filter(
                                 |&(_idx, new_item)| item == *new_item
@@ -2720,19 +2720,19 @@ impl PlandoApp {
                     let cur_loc_idx = locs.iter().position(|&(idx, _item)| idx == item_override.item_idx).unwrap();
                     let loc_str = &loc_strs[cur_loc_idx];
                     
-                    hovered |= egui::ComboBox::new("combo_spoiler_override_loc", "Location").selected_text(loc_str).show_ui(ui, |ui| {
+                    hovered |= egui::ComboBox::new(format!("combo_spoiler_override_loc_{override_idx}"), "Location").selected_text(loc_str).show_ui(ui, |ui| {
                         for (i, &(idx, _item)) in locs.iter().enumerate() {
                             ui.selectable_value(&mut item_override.item_idx, idx, &loc_strs[i]);
                         }
                     }).response.contains_pointer();
 
-                    ui.label("Description");
-                    ui.text_edit_singleline(&mut item_override.description);
-
                     if ui.button("Delete").clicked() {
                         remove_idx = Some(override_idx);
                     }
                 });
+
+                ui.label("Description");
+                ui.text_edit_multiline(&mut item_override.description);
                 ui.separator();
             }
 
@@ -2765,6 +2765,7 @@ impl PlandoApp {
             .title_bar(false)
             .movable(false)
             .vscroll(false)
+            .min_width(360.0 * self.settings.ui_scale)
             .max_width(720.0 * self.settings.ui_scale)
             .fixed_pos(Vec2::new(16.0, 32.0).to_pos2())
             .show(ctx, |ui| {
