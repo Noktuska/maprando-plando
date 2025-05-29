@@ -1664,6 +1664,14 @@ impl PlandoApp {
                                     self.plando.update_spoiler_data();
                                 }
                             }
+
+                            ui.separator();
+                            if ui.button("Reset all Spoiler Overrides").clicked() {
+                                self.plando.spoiler_overrides.clear();
+                                if self.plando.auto_update_spoiler {
+                                    self.plando.update_spoiler_data();
+                                }
+                            }
                         });
                         ui.menu_button("Settings", |ui| {
                             if ui.button("Plando Settings").clicked() {
@@ -2750,7 +2758,9 @@ impl PlandoApp {
                 }
                 if ui.button("Apply").clicked() {
                     self.override_window = None;
-                    self.plando.update_spoiler_data();
+                    if self.plando.auto_update_spoiler {
+                        self.plando.update_spoiler_data();
+                    }
                 }
             });
             
