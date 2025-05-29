@@ -318,6 +318,7 @@ impl Plando {
         for i in Placeable::ETank as usize..=Placeable::WalljumpBoots as usize {
             self.placed_item_count[i] = 0;
         }
+        self.spoiler_overrides.clear();
 
         if self.auto_update_spoiler {
             self.update_spoiler_data();
