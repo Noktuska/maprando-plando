@@ -1,8 +1,9 @@
-use std::i32;
+use std::{fs::File, i32, io::{Read, Write}, path::Path};
 
 use anyhow::{anyhow, bail, Result};
 use hashbrown::HashSet;
 use maprando_game::{GameData, Map};
+use serde_json::Value;
 use sfml::{graphics::{Color, IntRect}, system::Vector2i, window::Key};
 
 use crate::{utils, PlandoApp};
@@ -159,6 +160,44 @@ impl MapEditor {
             swap_first: 0,
             swap_second: 0
         }
+    }
+
+    pub fn save_map(&self, game_data: &GameData, path: &Path) -> Result<()> {
+        let mut file = File::create(path)?;
+        if self.is_valid(game_data).is_ok() {
+            let str = serde_json::to_string_pretty(&self.map)?;
+            file.write_all(str.as_bytes())?;
+            return Ok(());
+        }
+
+        let mut data = serde_json::to_value(&self.map)?;
+        let missing_rooms = serde_json::to_value(&self.missing_rooms)?;
+        data.as_object_mut().unwrap().insert("missing_rooms".to_string(), missing_rooms);
+        let str = serde_json::to_string_pretty(&data)?;
+        file.write_all(str.as_bytes())?;
+
+        Ok(())
+    }
+
+    pub fn load_map(&mut self, game_data: &GameData, path: &Path) -> Result<()> {
+        let mut file = File::open(path)?;
+        let mut data_str = String::new();
+        file.read_to_string(&mut data_str)?;
+        let mut data: Value = serde_json::from_str(&data_str)?;
+
+        let missing_rooms = match data.as_object_mut().unwrap().remove("missing_rooms") {
+            Some(value) => value.as_array().unwrap().iter().map(|x| x.as_u64().unwrap() as usize).collect(),
+            None => Vec::new()
+        };
+
+        let map: Map = serde_json::from_value(data)?;
+        self.reset(map);
+
+        for room in missing_rooms {
+            self.erase_room(room, game_data);
+        }
+
+        Ok(())
     }
 
     pub fn is_valid(&self, game_data: &GameData) -> Result<()> {

@@ -432,21 +432,6 @@ fn save_seed(plando: &mut Plando, path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn save_map(map: &Map, path: &Path) -> Result<()> {
-    let str = serde_json::to_string_pretty(map)?;
-    let mut file = File::create(path)?;
-    file.write_all(str.as_bytes())?;
-    Ok(())
-}
-
-fn load_map(path: &Path) -> Result<Map> {
-    let mut file = File::open(path)?;
-    let mut data_str = String::new();
-    file.read_to_string(&mut data_str)?;
-    let map: Map = serde_json::from_str(&data_str)?;
-    Ok(map)
-}
-
 fn save_preset(preset: &RandomizerSettings) -> Result<()> {
     let str = serde_json::to_string_pretty(preset)?;
     let dir = Path::new("./data/presets/full-settings/");
@@ -1576,11 +1561,7 @@ impl PlandoApp {
                                     .add_filter("JSON File", &["json"])
                                     .save_file();
                                 if let Some(file) = file_opt {
-                                    let map_to_save = match map_editor_mode {
-                                        true => &self.map_editor.map,
-                                        false => &self.plando.map
-                                    };
-                                    let res = save_map(map_to_save, file.as_path());
+                                    let res = self.map_editor.save_map(&self.plando.game_data, file.as_path());
                                     if res.is_err() {
                                         self.modal_type = ModalType::Error(res.unwrap_err().to_string());
                                     }
@@ -1599,15 +1580,12 @@ impl PlandoApp {
                                     .add_filter("JSON File", &["json"])
                                     .pick_file();
                                 if let Some(file) = file_opt {
-                                    match load_map(&file) {
-                                        Ok(map) => {
-                                            self.map_editor.reset(map.clone());
-                                            match self.map_editor.is_valid(&self.plando.game_data) {
-                                                Ok(_) => self.plando.load_map(map),
-                                                Err(err) => {
-                                                    self.modal_type = ModalType::Info(format!("Map opened in Map Editor: {}", err.to_string()));
-                                                    map_editor_mode = true;
-                                                }
+                                    match self.map_editor.load_map(&self.plando.game_data, &file) {
+                                        Ok(_) => match self.map_editor.is_valid(&self.plando.game_data) {
+                                            Ok(_) => self.plando.load_map(self.map_editor.map.clone()),
+                                            Err(err) => {
+                                                self.modal_type = ModalType::Info(format!("Map opened in Map Editor: {}", err.to_string()));
+                                                map_editor_mode = true;
                                             }
                                         }
                                         Err(err) => self.modal_type = ModalType::Error(err.to_string())
