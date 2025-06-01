@@ -364,6 +364,7 @@ impl MapEditor {
                 self.invalid_doors.insert(invalid_door);
             }
         }
+        self.update_overlaps(room_idx, game_data);
     }
 
     pub fn spawn_room(&mut self, room_idx: usize, game_data: &GameData) {
@@ -382,9 +383,12 @@ impl MapEditor {
     fn update_overlaps(&mut self, room_idx: usize, game_data: &GameData) {
         // Remove all overlaps with this room_idx
         self.room_overlaps.retain(|&(l, r)| l != room_idx && r != room_idx);
+        if self.missing_rooms.contains(&room_idx) {
+            return;
+        }
 
         for other_idx in 0..self.map.rooms.len() {
-            if other_idx == room_idx {
+            if other_idx == room_idx || self.missing_rooms.contains(&other_idx) {
                 continue;
             }
             if self.check_overlap(room_idx, other_idx, game_data) {
