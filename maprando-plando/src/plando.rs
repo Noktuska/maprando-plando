@@ -973,8 +973,8 @@ impl Plando {
             spoiler_summary_vec,
             spoiler_details_vec,
             debug_data_vec,
-            0,
-            0,
+            32,
+            32,
             &mut self.rng
         ).ok();
     }
