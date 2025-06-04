@@ -7,7 +7,7 @@ use {
         }, system::{Vector2f, Vector2i}, window::{
             mouse, Event, Key, Style
         }
-    }, std::{cmp::{max, min}, fs::File, io::{Read, Write}, path::Path, thread::{self, JoinHandle}, u32}
+    }, std::{cmp::{max, min}, ffi::{OsStr, OsString}, fs::File, io::{Read, Write}, path::Path, thread::{self, JoinHandle}, u32}
 };
 
 mod plando;
@@ -500,12 +500,6 @@ fn check_update() -> Result<()> {
     let tmp_archive_path = tmp_dir_path.join(&asset.name);
     let file_ext = tmp_archive_path.extension().ok_or(anyhow!("Found asset has no file extension"))?.to_str().unwrap();
 
-    match file_ext {
-        "exe" => {}
-        "zip" => bail!("Extracting ZIP files is not yet supported, please manually download and install update"),
-        _ => bail!("Unexpected file type")
-    }
-
     std::fs::create_dir_all(tmp_dir_path)?;
     let tmp_file = File::create(&tmp_archive_path)?;
 
@@ -514,8 +508,47 @@ fn check_update() -> Result<()> {
         .set_header(reqwest::header::ACCEPT, "application/octet-stream".parse()?)
         .download_to(tmp_file)?;
 
-    println!("Replacing executable...");
-    self_update::self_replace::self_replace(&tmp_archive_path)?;
+    match file_ext {
+        "exe" => {
+            println!("Replacing executable...");
+            self_update::self_replace::self_replace(&tmp_archive_path)?;
+        }
+        "zip" => {
+            let exe_path = std::env::current_exe()?;
+            let dir_path = exe_path.parent().unwrap();
+            
+            let file = File::open(&tmp_archive_path)?;
+            let mut archive = zip::ZipArchive::new(file)?;
+            let new_exe_path = dir_path.join(Path::new("maprando-plando__new__.exe"));
+
+            for i in 0..archive.len() {
+                let mut file = archive.by_index(i)?;
+                let path = match file.enclosed_name() {
+                    Some(path) => path,
+                    None => continue
+                };
+
+                let out_path = dir_path.join(&path);
+                if file.is_dir() {
+                    std::fs::create_dir_all(out_path)?;
+                } else if path.file_name() == Some(OsStr::new("maprando-plando.exe")) {
+                    let mut outfile = File::create(&new_exe_path)?;
+                    std::io::copy(&mut file, &mut outfile)?;
+                } else {
+                    if let Some(parent) = out_path.parent() {
+                        if !parent.exists() {
+                            std::fs::create_dir_all(parent)?;
+                        }
+                    }
+                    let mut outfile = File::create(out_path)?;
+                    std::io::copy(&mut file, &mut outfile)?;
+                }
+            }
+
+            self_update::self_replace::self_replace(&new_exe_path)?;
+        }
+        _ => bail!("Unexpected file type")
+    }
 
     println!("Removing tmp directory...");
     std::fs::remove_dir_all(tmp_dir_path)?;
@@ -1163,8 +1196,6 @@ impl PlandoApp {
     const GRID_SIZE: usize = 72;
 
     fn new() -> Result<PlandoApp> {
-        let mut plando = Plando::new();
-
         let settings_path = Path::new("../plando_settings.json");
         let settings = load_settings(settings_path).unwrap_or_default();
         if settings.auto_update {
@@ -1175,6 +1206,8 @@ impl PlandoApp {
                 Err(err) => println!("{}", err.to_string())
             };
         }
+
+        let mut plando = Plando::new();
 
         plando.auto_update_spoiler = settings.spoiler_auto_update;
         if let Some(preset) = &settings.last_logic_preset {
