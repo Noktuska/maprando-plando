@@ -968,13 +968,16 @@ impl Plando {
             }
         }
 
+        let seed_part = (self.rng.next_u32() % 0xFE) + 1; // Generate seed_part 1-255 so seed can't be 0
+        let seed = seed_part | (seed_part << 8) | (seed_part << 16) | (seed_part << 24);
+
         self.randomization = randomizer.get_randomization(
             &state,
             spoiler_summary_vec,
             spoiler_details_vec,
             debug_data_vec,
-            32,
-            32,
+            seed as usize,
+            seed as usize,
             &mut self.rng
         ).ok();
     }
