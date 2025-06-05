@@ -1,18 +1,18 @@
 use {
-    anyhow::{anyhow, bail, Result}, egui::{self, style::default_text_styles, Color32, Context, FontDefinitions, Id, Modifiers, Sense, TextureId, Ui, Vec2}, egui_sfml::{SfEgui, UserTexSource}, flate2::read::GzDecoder, hashbrown::HashMap, map_editor::{MapEditor, SidebarMode}, maprando::{
+    crate::{input_state::KeyState, layout::{hotkey_settings::Keybind, Layout, WindowType}}, anyhow::{anyhow, bail, Result}, egui::{self, style::default_text_styles, Color32, Context, FontDefinitions, Id, Modifiers, Sense, TextureId, Ui, Vec2}, egui_sfml::{SfEgui, UserTexSource}, flate2::read::GzDecoder, hashbrown::{HashMap, HashSet}, input_state::MouseState, map_editor::{MapEditor, SidebarMode}, maprando::{
         customize::{mosaic::MosaicTheme, ControllerButton, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, MusicSettings, PaletteTheme, ShakingSetting, TileTheme}, patch::Rom, randomize::SpoilerRouteEntry, settings::{DoorLocksSize, DoorsMode, ItemDotChange, MapStationReveal, MapsRevealed, Objective, ObjectiveSetting, RandomizerSettings, SaveAnimals, WallJump}
-    }, maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType}, mouse_state::MouseState, plando::{DoubleItemPlacement, MapRepositoryType, Placeable, Plando, SpoilerOverride, ITEM_VALUES}, rand::RngCore, rfd::FileDialog, self_update::cargo_crate_version, serde::{Deserialize, Serialize}, sfml::{
+    }, maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType}, plando::{DoubleItemPlacement, MapRepositoryType, Placeable, Plando, SpoilerOverride, ITEM_VALUES}, rand::RngCore, rfd::FileDialog, self_update::cargo_crate_version, serde::{Deserialize, Serialize}, sfml::{
         cpp::FBox, graphics::{
             self, CircleShape, Color, FloatRect, IntRect, PrimitiveType, RenderStates, RenderTarget, RenderWindow, Shape, Transformable, Vertex
         }, system::{Vector2f, Vector2i}, window::{
             mouse, Event, Key, Style
         }
-    }, std::{cmp::{max, min}, ffi::{OsStr, OsString}, fs::File, io::{Read, Write}, path::Path, thread::{self, JoinHandle}, u32}
+    }, std::{cmp::{max, min}, ffi::OsStr, fs::File, io::{Read, Write}, path::Path, thread::{self, JoinHandle}}
 };
 
 mod plando;
 mod layout;
-mod mouse_state;
+mod input_state;
 mod map_editor;
 mod utils;
 mod egui_sfml;
@@ -41,7 +41,8 @@ struct Settings {
     auto_update: bool,
     disable_bg_grid: bool,
     ui_scale: f32,
-    scroll_speed: f32
+    scroll_speed: f32,
+    hotkeys: HashMap<usize, Vec<Key>>
 }
 
 impl Default for Settings {
@@ -57,7 +58,8 @@ impl Default for Settings {
             auto_update: true,
             disable_bg_grid: false,
             ui_scale: 1.0,
-            scroll_speed: 16.0
+            scroll_speed: 16.0,
+            hotkeys: HashMap::new()
         }
     }
 }
@@ -1161,6 +1163,42 @@ impl View {
     }
 }
 
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum Hotkeys {
+    IncrementStep,
+    DecrementStep,
+    UpdateSpoiler,
+    OpenSpoilerOverride,
+    ToggleAutoSpoiler,
+    Undo,
+    Redo
+}
+
+impl Hotkeys {
+    const VARIANTS: &'static [Self] = &[
+        Hotkeys::IncrementStep,
+        Hotkeys::DecrementStep,
+        Hotkeys::UpdateSpoiler,
+        Hotkeys::OpenSpoilerOverride,
+        Hotkeys::ToggleAutoSpoiler,
+        Hotkeys::Undo,
+        Hotkeys::Redo
+    ];
+
+    fn to_keybind(&self) -> Keybind {
+        let id = *self as usize;
+        match *self {
+            Hotkeys::IncrementStep => Keybind::new(id, "Increment Spoiler Step", "Increments the current spoiler step", vec![Key::Add]),
+            Hotkeys::DecrementStep => Keybind::new(id, "Decrement Spoiler Step", "Decrement the current spoiler step", vec![Key::Subtract]),
+            Hotkeys::UpdateSpoiler => Keybind::new(id, "Update Spoiler Log", "Manually updates the spoiler log", vec![Key::F5]),
+            Hotkeys::OpenSpoilerOverride => Keybind::new(id, "Open Spoiler Overrides", "Opens the Spoiler Overrides window for the current step", vec![Key::F6]),
+            Hotkeys::ToggleAutoSpoiler => Keybind::new(id, "Toggle Auto-Spoiler", "Toggles the automatic spoiler update setting", vec![Key::F7]),
+            Hotkeys::Undo => Keybind::new(id, "Undo", "Undoes the last action", vec![Key::LControl, Key::Z]),
+            Hotkeys::Redo => Keybind::new(id, "Redo", "Redoes the last action", vec![Key::LControl, Key::Y]),
+        }
+    }
+}
+
 struct PlandoApp {
     plando: Plando,
     settings: Settings,
@@ -1174,6 +1212,7 @@ struct PlandoApp {
 
     view: View,
 
+    key_state: KeyState,
     mouse_state: MouseState,
     local_mouse_x: f32,
     local_mouse_y: f32,
@@ -1186,6 +1225,8 @@ struct PlandoApp {
     cur_customize_logic_window: CustomizeLogicWindow,
     is_customize_window_open: bool,
     override_window: Option<usize>,
+
+    layout: Layout,
 
     map_editor: MapEditor,
 
@@ -1258,6 +1299,16 @@ impl PlandoApp {
         mouse_state.click_pos_leniency = settings.mouse_click_pos_tolerance as f32;
         mouse_state.click_time_leniency = settings.mouse_click_delay_tolerance as u32;
 
+        let mut layout = Layout::new();
+        for hotkey in Hotkeys::VARIANTS {
+            let mut keybind = hotkey.to_keybind();
+            if let Some(bind) = settings.hotkeys.get(&(*hotkey as usize)) {
+                keybind.bind = HashSet::from_iter(bind.iter().cloned());
+            }
+            
+            layout.hotkey_settings.add_keybind(keybind);
+        }
+
         Ok(PlandoApp {
             plando,
             settings,
@@ -1271,6 +1322,7 @@ impl PlandoApp {
 
             view: View::new(),
 
+            key_state: KeyState::new(),
             mouse_state,
             local_mouse_x: 0.0,
             local_mouse_y: 0.0,
@@ -1284,10 +1336,16 @@ impl PlandoApp {
             is_customize_window_open: false,
             override_window: None,
 
+            layout,
+
             map_editor,
 
             global_timer: 0
         })
+    }
+
+    fn update_settings(&mut self) {
+        self.settings.hotkeys = self.layout.hotkey_settings.get_hotkeys().iter().map(|bind| (bind.id, bind.bind.iter().cloned().collect())).collect();
     }
 
     fn render_loop(&mut self) {
@@ -1296,6 +1354,7 @@ impl PlandoApp {
 
         let mut window = RenderWindow::new((1080, 720), &format!("Maprando Plando {version_number}"), Style::DEFAULT, &Default::default()).expect("Could not create Window");
         window.set_vertical_sync_enabled(true);
+        window.set_key_repeat_enabled(false);
 
         let font_default = {
             let font = FontDefinitions::default();
@@ -1351,6 +1410,7 @@ impl PlandoApp {
         let mut map_editor_mode = false;
 
         while window.is_open() {
+            self.key_state.next_frame();
             self.mouse_state.next_frame();
             self.global_timer += 1;
             (self.local_mouse_x, self.local_mouse_y) = self.view.to_local_coords(self.mouse_state.mouse_x, self.mouse_state.mouse_y);
@@ -1372,24 +1432,20 @@ impl PlandoApp {
             // mouse_is_public is true if the mouse is on the map view and not on some GUI
             self.is_mouse_public = !(spoiler_details_hovered || settings_open || customize_open || customize_logic_open || self.modal_type != ModalType::None
                 || spoiler_window_bounds.contains(self.mouse_state.get_mouse_pos()) || self.mouse_state.mouse_x >= window.size().x as f32 - sidebar_width
-                || !self.map_editor.dragged_room_idx.is_empty() || self.override_window.is_some());
+                || !self.map_editor.dragged_room_idx.is_empty() || self.override_window.is_some() || self.layout.is_open_any());
 
             while let Some(ev) = window.poll_event() {
                 sfegui.scroll_factor = self.settings.scroll_speed;
                 sfegui.add_event(&ev);
+                self.key_state.add_event(ev);
                 self.mouse_state.add_event(ev);
 
                 match ev {
                     Event::Closed => {
-                        //if self.plando.dirty {
-                        //    self.modal_type = ModalType::Confirm("Are you sure you want to exit? All unsaved progress will be lost.".to_string(), |plando| {
-                        //        
-                        //        let settings_path_str = plando.settings_path.clone();
-                        //        let settings_path = Path::new(&settings_path_str);
-                        //        let _ = save_settings(&plando.settings, settings_path);
-                        //        //window.close();
-                        //    });
-                        //}
+                        let settings_path_str = self.settings_path.clone();
+                        let settings_path = Path::new(&settings_path_str);
+                        self.update_settings();
+                        let _ = save_settings(&self.settings, settings_path);
                         window.close();
                     },
                     Event::MouseWheelScrolled { wheel: _, delta, x, y } => {
@@ -1409,18 +1465,26 @@ impl PlandoApp {
                     Event::Resized { width, height } => {
                         window.set_view(&graphics::View::from_rect(graphics::Rect::new(0.0, 0.0, width as f32, height as f32)).unwrap());
                     },
-                    Event::KeyPressed { code, .. } => {
-                        if code == Key::F5 {
-                            self.plando.update_spoiler_data();
-                        } else if code == Key::Add {
-                            self.spoiler_step += 1;
-                        } else if code == Key::Subtract && self.spoiler_step > 0 {
-                            self.spoiler_step -= 1;
-                        } else if code == Key::F6 {
-                            self.override_window = Some(self.spoiler_step + 1);
+                    _ => {}
+                }
+            }
+
+            if !self.layout.is_open(WindowType::HotkeySettings) {
+                for (idx, hotkey) in self.layout.hotkey_settings.get_hotkeys().iter().enumerate() {
+                    if hotkey.is_pressed(&self.key_state) {
+                        match Hotkeys::VARIANTS[idx] {
+                            Hotkeys::IncrementStep => self.spoiler_step += 1,
+                            Hotkeys::DecrementStep => if self.spoiler_step > 0 { self.spoiler_step -= 1 },
+                            Hotkeys::UpdateSpoiler => self.plando.update_spoiler_data(),
+                            Hotkeys::OpenSpoilerOverride => self.override_window = Some(self.spoiler_step + 1),
+                            Hotkeys::ToggleAutoSpoiler => {
+                                self.plando.auto_update_spoiler ^= true;
+                                self.settings.spoiler_auto_update ^= true;
+                            },
+                            Hotkeys::Undo => println!("Undo"),
+                            Hotkeys::Redo => println!("Redo"),
                         }
                     }
-                    _ => {}
                 }
             }
 
@@ -1693,6 +1757,9 @@ impl PlandoApp {
                                 customize_logic_open = true;
                                 ui.close_menu();
                             }
+                            if ui.button("Hotkeys").clicked() {
+                                self.layout.open(WindowType::HotkeySettings);
+                            }
                         });
                         ui.menu_button("Map Editor", |ui| {
                             let map_editor_str = match map_editor_mode {
@@ -1759,6 +1826,8 @@ impl PlandoApp {
                         }
                     });
                 });
+
+                self.layout.render(ctx);
 
                 // Draw item selection sidebar
                 sidebar_width = egui::SidePanel::right("panel_item_select").resizable(false).show(ctx, |ui| {
@@ -3092,7 +3161,8 @@ impl PlandoApp {
 
     fn draw_settings_window(&mut self, ctx: &Context) -> bool {
         let mut settings_open = true;
-        let settings_path = Path::new(&self.settings_path);
+        let settings_path_str = self.settings_path.clone();
+        let settings_path = Path::new(&settings_path_str);
         
         egui::Window::new("Settings")
         .resizable(false)
@@ -3187,6 +3257,7 @@ impl PlandoApp {
             });
             ui.horizontal(|ui| {
                 if ui.button("Save").clicked() {
+                    self.update_settings();
                     if let Err(err) = save_settings(&self.settings, settings_path) {
                         self.modal_type = ModalType::Error(err.to_string());
                     }
@@ -3633,45 +3704,6 @@ impl PlandoApp {
         customize_logic_open
     }
 
-    /*fn modal_confirm<S: Into<String>>(&self, window: &mut RenderWindow, sfegui: &mut SfEgui, header: S, msg: S, options: Vec<S>) -> Option<String> {
-        let header: String = header.into();
-        let msg: String = msg.into();
-        let options: Vec<String> = options.into_iter().map(|s| s.into()).collect();
-
-        while window.is_open() {
-            while let Some(ev) = window.poll_event() {
-                sfegui.add_event(&ev);
-                if ev == Event::Closed {
-                    window.close();
-                }
-            }
-
-            window.clear(Color::rgb(0x1F, 0x1F, 0x1F));
-
-            let mut result = None;
-            let input = sfegui.run(window, |_rt, ctx| {
-                egui::Modal::new(egui::Id::new("modal_confirm")).show(ctx, |ui| {
-                    ui.heading(&header);
-                    ui.label(&msg);
-                    ui.horizontal(|ui| {
-                        for opt in &options {
-                            if ui.button(opt).clicked() {
-                                result = Some(opt.clone());
-                            }
-                        }
-                    });
-                });
-            }).unwrap();
-            sfegui.draw(input, window, None);
-
-            window.display();
-
-            if result.is_some() {
-                return result;
-            }
-        }
-        None
-    }*/
 }
 
 fn main() {

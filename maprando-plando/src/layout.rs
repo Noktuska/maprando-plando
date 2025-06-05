@@ -1,9 +1,11 @@
-use egui::Context;
+pub mod hotkey_settings;
+
+use egui::{Context, Ui};
 use hashbrown::HashMap;
 use maprando::{preset::PresetData, settings::{ETankRefill, Fanfares, ItemMarkers, MotherBrainFight, ObjectiveScreen, ObjectiveSetting, RandomizerSettings, StartingItemsPreset}};
 use maprando_game::Item;
 
-use crate::plando::Placeable;
+use crate::{layout::hotkey_settings::HotkeySettingsWindow, plando::Placeable};
 
 pub fn window_skill_assumptions(height: f32, open: &mut bool, cur_settings: &mut RandomizerSettings, preset_data: &PresetData, ctx: &Context) {
     egui::Window::new("Customize Skill Assumptions").collapsible(false).vscroll(true).max_height(height).resizable(false).open(open).show(ctx, |ui| {
@@ -467,3 +469,67 @@ pub fn window_objectives(height: f32, open: &mut bool, cur_settings: &mut Random
     });
 }
 
+
+pub struct Layout {
+    pub hotkey_settings: HotkeySettingsWindow,
+
+    window_stack: Vec<WindowType>
+}
+
+#[derive(PartialEq, Eq, Clone, Copy)]
+pub enum WindowType {
+    HotkeySettings
+}
+
+impl Layout {
+    pub fn new() -> Self {
+        Layout {
+            hotkey_settings: HotkeySettingsWindow::new(),
+            window_stack: Vec::new()
+        }
+    }
+
+    pub fn is_open_any(&self) -> bool {
+        !self.window_stack.is_empty()
+    }
+
+    pub fn render(&mut self, ctx: &Context) {
+        let mut windows_to_close = Vec::new();
+        for window_type in self.window_stack.iter().cloned() {
+            let window: &mut dyn LayoutWindow = match window_type {
+                WindowType::HotkeySettings => &mut self.hotkey_settings,
+            };
+
+            egui::Window::new(window.get_title()).resizable(false).show(ctx, |ui| {
+                if window.render(ctx, ui) {
+                    windows_to_close.push(window.get_type());
+                }
+            });
+        }
+
+        for window_type in windows_to_close {
+            self.close(window_type);
+        }
+    }
+
+    pub fn open(&mut self, window_type: WindowType) {
+        if self.window_stack.contains(&window_type) {
+            return;
+        }
+        self.window_stack.push(window_type);
+    }
+
+    pub fn close(&mut self, window_type: WindowType) {
+        self.window_stack.retain(|&x| x != window_type);
+    }
+
+    pub fn is_open(&self, window_type: WindowType) -> bool {
+        self.window_stack.contains(&window_type)
+    }
+}
+
+trait LayoutWindow {
+    fn render(&mut self, ctx: &Context, ui: &mut Ui) -> bool;
+    fn get_title(&self) -> String;
+    fn get_type(&self) -> WindowType;
+}

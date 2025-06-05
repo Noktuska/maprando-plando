@@ -1,5 +1,5 @@
-use hashbrown::HashMap;
-use sfml::{system::Vector2f, window::{mouse::Button, Event}};
+use hashbrown::{HashMap, HashSet};
+use sfml::{system::Vector2f, window::{mouse::Button, Event, Key}};
 
 struct ClickData {
     x: f32,
@@ -98,5 +98,52 @@ impl MouseState {
 
     pub fn get_mouse_pos(&self) -> Vector2f {
         Vector2f::new(self.mouse_x, self.mouse_y)
+    }
+}
+
+pub struct KeyState {
+    pub keys_pressed: HashSet<Key>,
+    pub keys_released: HashSet<Key>,
+    pub keys_down: HashSet<Key>,
+}
+
+impl KeyState {
+    pub fn new() -> KeyState {
+        KeyState {
+            keys_pressed: HashSet::new(),
+            keys_released: HashSet::new(),
+            keys_down: HashSet::new(),
+        }
+    }
+
+    pub fn next_frame(&mut self) {
+        self.keys_pressed.clear();
+        self.keys_released.clear();
+    }
+
+    pub fn add_event(&mut self, ev: Event) {
+        match ev {
+            Event::KeyPressed { code, .. } => {
+                self.keys_pressed.insert(code);
+                self.keys_down.insert(code);
+            }
+            Event::KeyReleased { code, .. } => {
+                self.keys_released.insert(code);
+                self.keys_down.remove(&code);
+            }
+            _ => {}
+        }
+    }
+
+    pub fn is_key_pressed(&self, key: Key) -> bool {
+        self.keys_pressed.contains(&key)
+    }
+
+    pub fn is_key_released(&self, key: Key) -> bool {
+        self.keys_released.contains(&key)
+    }
+
+    pub fn is_key_down(&self, key: Key) -> bool {
+        self.keys_down.contains(&key)
     }
 }
