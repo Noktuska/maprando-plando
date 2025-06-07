@@ -307,6 +307,10 @@ impl MapEditor {
             let rect = utils::normalize_rect(rect);
 
             for (room_idx, &(room_x, room_y)) in self.map.rooms.iter().enumerate() {
+                if self.missing_rooms.contains(&room_idx) {
+                    continue;
+                }
+
                 let room_geometry = &game_data.room_geometry[room_idx];
                 let room_width = room_geometry.map[0].len();
                 let room_height = room_geometry.map.len();

@@ -1130,8 +1130,7 @@ enum ModalType {
     None,
     Error(String),
     Status(String),
-    Info(String),
-    Confirm(String, fn(&mut PlandoApp))
+    Info(String)
 }
 
 struct View {
@@ -1170,8 +1169,8 @@ enum Hotkeys {
     UpdateSpoiler,
     OpenSpoilerOverride,
     ToggleAutoSpoiler,
-    Undo,
-    Redo
+    //Undo,
+    //Redo
 }
 
 impl Hotkeys {
@@ -1181,8 +1180,8 @@ impl Hotkeys {
         Hotkeys::UpdateSpoiler,
         Hotkeys::OpenSpoilerOverride,
         Hotkeys::ToggleAutoSpoiler,
-        Hotkeys::Undo,
-        Hotkeys::Redo
+        //Hotkeys::Undo,
+        //Hotkeys::Redo
     ];
 
     fn to_keybind(&self) -> Keybind {
@@ -1193,8 +1192,8 @@ impl Hotkeys {
             Hotkeys::UpdateSpoiler => Keybind::new(id, "Update Spoiler Log", "Manually updates the spoiler log", vec![Key::F5]),
             Hotkeys::OpenSpoilerOverride => Keybind::new(id, "Open Spoiler Overrides", "Opens the Spoiler Overrides window for the current step", vec![Key::F6]),
             Hotkeys::ToggleAutoSpoiler => Keybind::new(id, "Toggle Auto-Spoiler", "Toggles the automatic spoiler update setting", vec![Key::F7]),
-            Hotkeys::Undo => Keybind::new(id, "Undo", "Undoes the last action", vec![Key::LControl, Key::Z]),
-            Hotkeys::Redo => Keybind::new(id, "Redo", "Redoes the last action", vec![Key::LControl, Key::Y]),
+            //Hotkeys::Undo => Keybind::new(id, "Undo", "Undoes the last action", vec![Key::LControl, Key::Z]),
+            //Hotkeys::Redo => Keybind::new(id, "Redo", "Redoes the last action", vec![Key::LControl, Key::Y]),
         }
     }
 }
@@ -1481,8 +1480,8 @@ impl PlandoApp {
                                 self.plando.auto_update_spoiler ^= true;
                                 self.settings.spoiler_auto_update ^= true;
                             },
-                            Hotkeys::Undo => println!("Undo"),
-                            Hotkeys::Redo => println!("Redo"),
+                            //Hotkeys::Undo => println!("Undo"),
+                            //Hotkeys::Redo => println!("Redo"),
                         }
                     }
                 }
@@ -1902,26 +1901,6 @@ impl PlandoApp {
                             if ui.button("OK").clicked() {
                                 self.modal_type = ModalType::None;
                             }
-                        });
-                        if modal.should_close() {
-                            self.modal_type = ModalType::None;
-                        }
-                    }
-                    ModalType::Confirm(msg, callback) => {
-                        let modal = egui::Modal::new(Id::new("modal_info")).show(ctx, |ui| {
-                            ui.set_min_width(256.0);
-                            ui.heading("Confirm");
-                            ui.label(msg);
-                            ui.horizontal(|ui| {
-                                if ui.button("Confirm").clicked() {
-                                    callback(self);
-                                    self.modal_type = ModalType::None;
-                                }
-                                if ui.button("Cancel").clicked() {
-                                    self.modal_type = ModalType::None;
-                                }
-                            });
-                            
                         });
                         if modal.should_close() {
                             self.modal_type = ModalType::None;
