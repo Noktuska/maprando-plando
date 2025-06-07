@@ -872,7 +872,15 @@ impl Plando {
         }
     }
 
+    pub fn update_overrides(&mut self) {
+        self.spoiler_overrides.retain(|x| {
+            self.item_locations[x.item_idx] != Item::Nothing
+        });
+    }
+
     pub fn update_spoiler_data(&mut self) {
+        self.update_overrides();
+
         let locked_door_data = self.get_locked_door_data();
         let implicit_tech = &self.preset_data.tech_by_difficulty["Implicit"];
         let implicit_notables = &self.preset_data.notables_by_difficulty["Implicit"];

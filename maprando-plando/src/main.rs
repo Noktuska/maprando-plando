@@ -2809,11 +2809,14 @@ impl PlandoApp {
 
             ui.horizontal(|ui| {
                 if ui.button("New").clicked() {
-                    self.plando.spoiler_overrides.push(SpoilerOverride {
-                        step,
-                        item_idx: 0,
-                        description: String::new()
-                    });
+                    match self.plando.item_locations.iter().position(|&item| item != Item::Nothing) {
+                        None => self.modal_type = ModalType::Error("There needs to be at least one item placed to configure overrides".to_string()),
+                        Some(item_idx) => self.plando.spoiler_overrides.push(SpoilerOverride {
+                            step,
+                            item_idx,
+                            description: String::new()
+                        })
+                    }
                 }
                 if ui.button("Apply").clicked() {
                     self.override_window = None;
