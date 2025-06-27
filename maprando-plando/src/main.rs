@@ -7,7 +7,7 @@ use {
         }, system::{Vector2f, Vector2i}, window::{
             mouse, Event, Key, Style
         }
-    }, std::{cmp::{max, min}, ffi::OsStr, fs::File, io::{Read, Write}, path::Path, thread::{self, JoinHandle}}
+    }, std::{cmp::{max, min}, ffi::OsStr, fs::File, io::{Read, Write}, path::Path, thread::{self, JoinHandle}, time::Instant}
 };
 
 mod plando;
@@ -1209,6 +1209,8 @@ struct PlandoApp {
     room_data: Vec<RoomData>,
     atlas_tex: FBox<graphics::Texture>,
 
+    tex_base_map: FBox<graphics::RenderTexture>,
+
     view: View,
 
     key_state: KeyState,
@@ -1319,6 +1321,8 @@ impl PlandoApp {
             room_data,
             atlas_tex,
 
+            tex_base_map: graphics::RenderTexture::new(PlandoApp::GRID_SIZE as u32 * 8, PlandoApp::GRID_SIZE as u32 * 8)?,
+
             view: View::new(),
 
             key_state: KeyState::new(),
@@ -1347,12 +1351,91 @@ impl PlandoApp {
         self.settings.hotkeys = self.layout.hotkey_settings.get_hotkeys().iter().map(|bind| (bind.id, bind.bind.iter().cloned().collect())).collect();
     }
 
+    fn redraw_map(&mut self) {
+        let mut img_obj = graphics::Image::new_solid(8, 8, Color::TRANSPARENT).unwrap();
+        let img_obj_mask = get_special_room_mask(SpecialRoom::Objective);
+        for y in 0..8 {
+            for x in 0..8 {
+                if img_obj_mask[x][y] == 1 {
+                    img_obj.set_pixel(x as u32, y as u32, Color::WHITE).unwrap();
+                }
+            }
+        }
+        let tex_obj = graphics::Texture::from_image(&img_obj, IntRect::default()).unwrap();
+
+        self.tex_base_map.clear(Color::TRANSPARENT);
+
+        for i in 0..self.room_data.len() {
+            let data = &self.room_data[i];
+            let (x, y) = self.plando.map.rooms[data.room_idx];
+            let room_geometry = &self.plando.game_data.room_geometry[data.room_idx];
+
+            let is_objective = data.room_id == 238 || self.obj_room_map.get(&data.room_id).is_some_and(
+                |obj| self.plando.objectives.contains(obj)
+            );
+
+            // Draw the background color
+            for (local_y, row) in room_geometry.map.iter().enumerate() {
+                for (local_x, &cell) in row.iter().enumerate() {
+                    // Ignore map tiles on toilet
+                    if cell == 0 && data.room_id != 321 {
+                        continue;
+                    }
+
+                    let mut color_div = 1;
+                    if !self.settings.disable_logic {
+                        if let Some((_r, spoiler_log)) = &self.plando.randomization {
+                            if spoiler_log.all_rooms[data.room_idx].map_bireachable_step[local_y][local_x] > self.spoiler_step as u8 {
+                                color_div *= 2;
+                            }
+                            if spoiler_log.all_rooms[data.room_idx].map_reachable_step[local_y][local_x] > self.spoiler_step as u8 {
+                                color_div *= 3;
+                            }
+                        }
+                    }
+
+                    let cell_x = (local_x + x) * 8;
+                    let cell_y = (local_y + y) * 8;
+                    let color_value = if room_geometry.heated { 2 } else { 1 };
+                    let mut cell_color = get_explored_color(color_value, self.plando.map.area[data.room_idx]);
+                    cell_color.r /= color_div;
+                    cell_color.g /= color_div;
+                    cell_color.b /= color_div;
+
+                    let mut bg_rect = graphics::RectangleShape::with_size(Vector2f::new(8.0, 8.0));
+                    bg_rect.set_position(Vector2f::new(cell_x as f32, cell_y as f32));
+                    bg_rect.set_fill_color(cell_color);
+                    self.tex_base_map.draw(&bg_rect);
+
+                    // Draw Tile Outline
+                    let sprite_tile_rect = IntRect::new(8 * (data.atlas_x_offset as i32 + local_x as i32), 8 * (data.atlas_y_offset as i32 + local_y as i32), 8, 8);
+                    let mut sprite_tile = graphics::Sprite::with_texture_and_rect(&self.atlas_tex, sprite_tile_rect);
+                    sprite_tile.set_position(Vector2f::new(cell_x as f32, cell_y as f32));
+                    sprite_tile.set_color(Color::rgb(255 / color_div, 255 / color_div, 255 / color_div));
+                    self.tex_base_map.draw(&sprite_tile);
+
+                    if is_objective && get_objective_mask(data.room_id, local_x, local_y) {
+                        sprite_tile.set_texture(&tex_obj, true);
+                        self.tex_base_map.draw(&sprite_tile);
+                    }
+
+                    let (tex_helm_w, _, tex_helm) = self.user_tex_source.get_texture(Placeable::Helm as u64);
+                    let mut sprite_helm = graphics::Sprite::with_texture(tex_helm);
+                    sprite_helm.set_scale(8.0 / tex_helm_w);
+                }
+            }
+        }
+
+        self.tex_base_map.display();
+    }
+
     fn render_loop(&mut self) {
 
         let version_number = "v".to_string() + cargo_crate_version!();
 
         let mut window = RenderWindow::new((1080, 720), &format!("Maprando Plando {version_number}"), Style::DEFAULT, &Default::default()).expect("Could not create Window");
-        window.set_vertical_sync_enabled(true);
+        window.set_vertical_sync_enabled(false);
+        window.set_framerate_limit(0);
         window.set_key_repeat_enabled(false);
 
         let font_default = {
@@ -1368,17 +1451,6 @@ impl PlandoApp {
 
         let mut tex_grid = graphics::Texture::from_file("../visualizer/grid.png").unwrap();
         tex_grid.set_repeated(true);
-
-        let mut img_obj = graphics::Image::new_solid(8, 8, Color::TRANSPARENT).unwrap();
-        let img_obj_mask = get_special_room_mask(SpecialRoom::Objective);
-        for y in 0..8 {
-            for x in 0..8 {
-                if img_obj_mask[x][y] == 1 {
-                    img_obj.set_pixel(x as u32, y as u32, Color::WHITE).unwrap();
-                }
-            }
-        }
-        let tex_obj = graphics::Texture::from_image(&img_obj, IntRect::default()).unwrap();
 
         let mut cur_settings = self.plando.randomizer_settings.clone();
 
@@ -1408,6 +1480,13 @@ impl PlandoApp {
 
         let mut map_editor_mode = false;
 
+        let mut frame_counter = 0;
+        let mut start = Instant::now();
+        let mut fps_text = graphics::Text::new("FPS: 0", &font_default, 12);
+
+        let mut last_spoiler_step = self.spoiler_step;
+        self.redraw_map();
+
         while window.is_open() {
             self.key_state.next_frame();
             self.mouse_state.next_frame();
@@ -1426,6 +1505,11 @@ impl PlandoApp {
                     download_thread_active = false;
                     download_thread_handle = thread::spawn(|| { Ok(()) }); // Reset the handle
                 }
+            }
+
+            if self.spoiler_step != last_spoiler_step {
+                self.redraw_map();
+                last_spoiler_step = self.spoiler_step;
             }
 
             // mouse_is_public is true if the mouse is on the map view and not on some GUI
@@ -1515,10 +1599,11 @@ impl PlandoApp {
                 }
 
                 // Draw the entire map
-                let mut info_overlay_opt = match map_editor_mode {
-                    false => self.draw_map(&mut *window, &states, &tex_obj),
-                    true => self.draw_map_editor(&mut *window, &states)
-                };
+                let mut info_overlay_opt = None;
+                {
+                    let spr_map = graphics::Sprite::with_texture(self.tex_base_map.texture());
+                    window.draw_with_renderstates(&spr_map, &states);
+                }
 
                 if !map_editor_mode {
                     // Draw Possible Start Locations
@@ -1601,6 +1686,7 @@ impl PlandoApp {
                                         Ok(_) => cur_settings = self.plando.randomizer_settings.clone(),
                                         Err(err) => self.modal_type = ModalType::Error(err.to_string())
                                     }
+                                    self.redraw_map();
                                 }
                                 ui.close_menu();
                             }
@@ -1916,84 +2002,19 @@ impl PlandoApp {
             version_text.set_position((2.0, window.size().y as f32 - 14.0));
             window.draw(&version_text);
 
+            frame_counter += 1;
+            if (Instant::now() - start).as_secs_f32() >= 1.0 {
+                fps_text.set_string(&format!("FPS: {frame_counter}"));
+                fps_text.set_fill_color(Color::rgba(0xAF, 0xAF, 0xAF, 0xCF));
+                fps_text.set_position((2.0, window.size().y as f32 - 30.0));
+
+                frame_counter = 0;
+                start = Instant::now();
+            }
+            window.draw(&fps_text);
+
             window.display();
         }
-    }
-
-    fn draw_map(&mut self, rt: &mut dyn RenderTarget, states: &RenderStates, tex_obj: &FBox<graphics::Texture>) -> Option<String> {
-        let mut info_overlay = None;
-
-        for i in 0..self.room_data.len() {
-            let data = &self.room_data[i];
-            let (x, y) = self.plando.map.rooms[data.room_idx];
-            let room_geometry = &self.plando.game_data.room_geometry[data.room_idx];
-
-            let is_objective = data.room_id == 238 || self.obj_room_map.get(&data.room_id).is_some_and(
-                |obj| self.plando.objectives.contains(obj)
-            );
-
-            // Draw the background color
-            for (local_y, row) in room_geometry.map.iter().enumerate() {
-                for (local_x, &cell) in row.iter().enumerate() {
-                    // Ignore map tiles on toilet
-                    if cell == 0 && data.room_id != 321 {
-                        continue;
-                    }
-
-                    let mut color_div = 1;
-                    if !self.settings.disable_logic {
-                        if let Some((_r, spoiler_log)) = &self.plando.randomization {
-                            if spoiler_log.all_rooms[data.room_idx].map_bireachable_step[local_y][local_x] > self.spoiler_step as u8 {
-                                color_div *= 2;
-                            }
-                            if spoiler_log.all_rooms[data.room_idx].map_reachable_step[local_y][local_x] > self.spoiler_step as u8 {
-                                color_div *= 3;
-                            }
-                        }
-                    }
-
-                    let cell_x = (local_x + x) * 8;
-                    let cell_y = (local_y + y) * 8;
-                    let color_value = if room_geometry.heated { 2 } else { 1 };
-                    let mut cell_color = get_explored_color(color_value, self.plando.map.area[data.room_idx]);
-                    cell_color.r /= color_div;
-                    cell_color.g /= color_div;
-                    cell_color.b /= color_div;
-
-                    let mut bg_rect = graphics::RectangleShape::with_size(Vector2f::new(8.0, 8.0));
-                    bg_rect.set_position(Vector2f::new(cell_x as f32, cell_y as f32));
-                    bg_rect.set_fill_color(cell_color);
-                    rt.draw_with_renderstates(&bg_rect, &states);
-
-                    // Set up an info overlay we'll draw later, so it'll be on top
-                    if graphics::FloatRect::new(cell_x as f32, cell_y as f32, 8.0, 8.0).contains2(self.local_mouse_x, self.local_mouse_y) {
-                        let mut info_str = data.room_name.to_string();
-                        if self.plando.start_location_data.hub_location.room_id == data.room_id {
-                            info_str += " (Hub)";
-                        }
-                        info_overlay = Some(info_str);
-                    }
-
-                    // Draw Tile Outline
-                    let sprite_tile_rect = IntRect::new(8 * (data.atlas_x_offset as i32 + local_x as i32), 8 * (data.atlas_y_offset as i32 + local_y as i32), 8, 8);
-                    let mut sprite_tile = graphics::Sprite::with_texture_and_rect(&self.atlas_tex, sprite_tile_rect);
-                    sprite_tile.set_position(Vector2f::new(cell_x as f32, cell_y as f32));
-                    sprite_tile.set_color(Color::rgb(255 / color_div, 255 / color_div, 255 / color_div));
-                    rt.draw_with_renderstates(&sprite_tile, &states);
-
-                    if is_objective && get_objective_mask(data.room_id, local_x, local_y) {
-                        sprite_tile.set_texture(&tex_obj, true);
-                        rt.draw_with_renderstates(&sprite_tile, &states);
-                    }
-
-                    let (tex_helm_w, _, tex_helm) = self.user_tex_source.get_texture(Placeable::Helm as u64);
-                    let mut sprite_helm = graphics::Sprite::with_texture(tex_helm);
-                    sprite_helm.set_scale(8.0 / tex_helm_w);
-                }
-            }
-        }
-
-        info_overlay
     }
 
     fn draw_map_editor(&mut self, rt: &mut dyn RenderTarget, states: &RenderStates) -> Option<String> {
