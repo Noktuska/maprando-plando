@@ -1294,7 +1294,7 @@ impl PlandoApp {
         let (atlas_img, room_data) = load_room_sprites(&plando.game_data)?;
         let atlas_tex = graphics::Texture::from_image(&atlas_img, IntRect::default())?;
 
-        let map_editor = MapEditor::new(plando.map.clone());
+        let map_editor = MapEditor::new();
 
         let mut mouse_state = MouseState::default();
         mouse_state.click_pos_leniency = settings.mouse_click_pos_tolerance as f32;
@@ -1478,7 +1478,7 @@ impl PlandoApp {
         let mut download_thread_active = false;
         let mut download_thread_handle: JoinHandle<Result<(), anyhow::Error>> = thread::spawn(|| { Ok(()) });
 
-        let mut map_editor_mode = false;
+        //let mut map_editor_mode = false;
 
         let mut frame_counter = 0;
         let mut start = Instant::now();
@@ -1571,13 +1571,8 @@ impl PlandoApp {
                 }
             }
 
-            // Handle Misc Mouse Buttons
-            let drag_move_button = if map_editor_mode {
-                mouse::Button::Middle
-            } else {
-                mouse::Button::Left
-            };
-            if self.mouse_state.is_button_down(drag_move_button) && self.is_mouse_public {
+            // Drag to pan the view
+            if self.mouse_state.is_button_down(mouse::Button::Middle) && self.is_mouse_public {
                 self.view.x_offset += self.mouse_state.mouse_dx;
                 self.view.y_offset += self.mouse_state.mouse_dy;
             }
@@ -1605,29 +1600,32 @@ impl PlandoApp {
                     window.draw_with_renderstates(&spr_map, &states);
                 }
 
-                if !map_editor_mode {
-                    // Draw Possible Start Locations
-                    self.draw_start_locations(&mut *window, &states, sidebar_selection);
+                // Draw Possible Start Locations
+                self.draw_start_locations(&mut *window, &states, sidebar_selection);
 
-                    // Draw Doors
-                    self.draw_placed_doors(&mut *window, &states);
+                // Draw Doors
+                self.draw_placed_doors(&mut *window, &states);
 
-                    // Draw Gray Doors
-                    self.draw_gray_doors(&mut *window, &states);
+                // Draw Gray Doors
+                self.draw_gray_doors(&mut *window, &states);
 
-                    // Draw items
-                    if let Some(s) = self.draw_items(&mut *window, &states, sidebar_selection, &tex_items) {
-                        info_overlay_opt = Some(s);
-                    }
-
-                    // Draw flags
-                    if let Some(s) = self.draw_flags(&mut *window, &states, sidebar_selection) {
-                        info_overlay_opt = Some(s);
-                    }
-            
-                    // Draw Door hover
-                    self.draw_door_hover(&mut *window, &states, sidebar_selection);
+                // Draw items
+                if let Some(s) = self.draw_items(&mut *window, &states, sidebar_selection, &tex_items) {
+                    info_overlay_opt = Some(s);
                 }
+
+                // Draw flags
+                if let Some(s) = self.draw_flags(&mut *window, &states, sidebar_selection) {
+                    info_overlay_opt = Some(s);
+                }
+
+                // Handle map io after all other io has been handled, also draws errors and editor overlays
+                if let Some(s) = self.handle_map_io(&mut *window, &states) {
+                    info_overlay_opt = Some(s);
+                }
+        
+                // Draw Door hover
+                self.draw_door_hover(&mut *window, &states, sidebar_selection);
 
                 // Draw the info overlay
                 if let Some(info_overlay) = info_overlay_opt {
@@ -1743,14 +1741,9 @@ impl PlandoApp {
                                     .add_filter("JSON File", &["json"])
                                     .save_file();
                                 if let Some(file) = file_opt {
-                                    let res = self.map_editor.save_map(&self.plando.game_data, file.as_path());
+                                    let res = self.map_editor.save_map(&self.plando.map, &self.plando.game_data, file.as_path());
                                     if res.is_err() {
                                         self.modal_type = ModalType::Error(res.unwrap_err().to_string());
-                                    }
-                                }
-                                if map_editor_mode {
-                                    if let Err(err) = self.map_editor.is_valid(&self.plando.game_data) {
-                                        self.modal_type = ModalType::Info(format!("The saved map is invalid. It will be opened in the Map Editor if loaded from file. Reason: {}", err.to_string()));
                                     }
                                 }
                                 ui.close_menu();
@@ -1763,13 +1756,7 @@ impl PlandoApp {
                                     .pick_file();
                                 if let Some(file) = file_opt {
                                     match self.map_editor.load_map(&self.plando.game_data, &file) {
-                                        Ok(_) => match self.map_editor.is_valid(&self.plando.game_data) {
-                                            Ok(_) => self.plando.load_map(self.map_editor.map.clone()),
-                                            Err(err) => {
-                                                self.modal_type = ModalType::Info(format!("Map opened in Map Editor: {}", err.to_string()));
-                                                map_editor_mode = true;
-                                            }
-                                        }
+                                        Ok(map) => self.plando.load_map(map),
                                         Err(err) => self.modal_type = ModalType::Error(err.to_string())
                                     };
                                 }
@@ -1846,7 +1833,7 @@ impl PlandoApp {
                                 self.layout.open(WindowType::HotkeySettings);
                             }
                         });
-                        ui.menu_button("Map Editor", |ui| {
+                        /*ui.menu_button("Map Editor", |ui| {
                             let map_editor_str = match map_editor_mode {
                                 true => "Discard Changes",
                                 false => "Open Map Editor"
@@ -1903,7 +1890,7 @@ impl PlandoApp {
                                     self.map_editor.erase_room(idx, &self.plando.game_data);
                                 }
                             }
-                        });
+                        });*/
                         if ui.button("Help").clicked() {
                             if let Err(err) = open::that("https://github.com/Noktuska/maprando-plando/blob/main/README.md") {
                                 self.modal_type = ModalType::Error(err.to_string());
@@ -1916,11 +1903,7 @@ impl PlandoApp {
 
                 // Draw item selection sidebar
                 sidebar_width = egui::SidePanel::right("panel_item_select").resizable(false).show(ctx, |ui| {
-                    if map_editor_mode {
-                        self.draw_sidebar_room_select(ui, screen_size);
-                    } else {
-                        sidebar_selection = self.draw_sidebar_item_select(ui, sidebar_height, sidebar_selection);
-                    }
+                    sidebar_selection = self.draw_sidebar_item_select(ui, sidebar_height, sidebar_selection);
                 }).response.rect.width();
 
                 // Draw Spoiler Details Window
@@ -2017,7 +2000,65 @@ impl PlandoApp {
         }
     }
 
-    fn draw_map_editor(&mut self, rt: &mut dyn RenderTarget, states: &RenderStates) -> Option<String> {
+    fn handle_map_io(&mut self, rt: &mut dyn RenderTarget, states: &RenderStates) -> Option<String> {
+        let mut info_overlay = None;
+
+        let mouse_tile_x = ((self.local_mouse_x / 8.0).floor().max(0.0) as usize).min(PlandoApp::GRID_SIZE);
+        let mouse_tile_y = ((self.local_mouse_y / 8.0).floor().max(0.0) as usize).min(PlandoApp::GRID_SIZE);
+
+        // Find hovered room for info overlay and possible selections
+        let mut last_hovered_room_idx = None;
+        for room_idx in 0..self.room_data.len() {
+            let room_bounds = self.map_editor.get_room_bounds(&self.plando.map, room_idx, &self.plando.game_data);
+
+            if !room_bounds.contains2(mouse_tile_x as i32, mouse_tile_y as i32) {
+                continue;
+            }
+
+            let room_geometry = &self.plando.game_data.room_geometry[room_idx];
+            let (room_x, room_y) = self.plando.map.rooms[room_idx];
+            let room_width = room_geometry.map[0].len() as i32;
+            let room_height = room_geometry.map.len() as i32;
+            let local_tile_x = mouse_tile_x as i32 - room_x as i32;
+            let local_tile_y = mouse_tile_y as i32 - room_y as i32;
+            if local_tile_x < 0 || local_tile_y < 0 || local_tile_x >= room_width || local_tile_y >= room_height
+                    || room_geometry.map[local_tile_y as usize][local_tile_x as usize] == 0 {
+                continue;
+            }
+
+            let room_name = self.plando.game_data.room_geometry[room_idx].name.clone();
+            info_overlay = Some(room_name);
+            last_hovered_room_idx = Some(room_idx);
+
+            if self.map_editor.selected_room_idx.is_empty() && self.map_editor.dragged_room_idx.is_empty() {
+                self.draw_room_outline(rt, states, room_bounds);
+            }
+        }
+
+        // Update dragged room positions
+        let mut should_redraw = self.map_editor.move_dragged_rooms(&mut self.plando.map, mouse_tile_x, mouse_tile_y, &self.plando.game_data);
+
+        // Start and stop drags
+        if self.is_mouse_public && !self.click_consumed && self.mouse_state.is_button_pressed(mouse::Button::Left) {
+            self.map_editor.start_drag(&self.plando.map, last_hovered_room_idx, mouse_tile_x, mouse_tile_y, &self.plando.game_data);
+        }
+
+        if self.mouse_state.is_button_released(mouse::Button::Left) {
+            self.map_editor.stop_drag(&mut self.plando.map, mouse_tile_x, mouse_tile_y, &self.plando.game_data);
+            should_redraw = true;
+        }
+
+        // Draw any selection highlights
+        
+
+        if should_redraw {
+            self.redraw_map();
+        }
+
+        info_overlay
+    }
+
+    /*fn draw_map_editor(&mut self, rt: &mut dyn RenderTarget, states: &RenderStates) -> Option<String> {
         let mut info_overlay = None;
 
         // Tile position the mouse is hovering
@@ -2184,7 +2225,7 @@ impl PlandoApp {
         }
 
         info_overlay
-    }
+    }*/
 
     fn draw_room_outline(&self, rt: &mut dyn RenderTarget, states: &RenderStates, rect: IntRect) {
         let mut vbuffs = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
@@ -2671,7 +2712,7 @@ impl PlandoApp {
         sidebar_selection
     }
 
-    fn draw_sidebar_room_select(&mut self, ui: &mut Ui, screen_size: Vector2f) -> Option<usize> {
+    /*fn draw_sidebar_room_select(&mut self, ui: &mut Ui, screen_size: Vector2f) -> Option<usize> {
         let mode_text = match self.map_editor.sidebar_mode {
             SidebarMode::Rooms => "Rooms",
             SidebarMode::Areas => "Areas",
@@ -2768,7 +2809,7 @@ impl PlandoApp {
             }
         }
         None
-    }
+    }*/
 
     fn draw_spoiler_override(&mut self, ctx: &Context) -> bool {
         let mut hovered = false;
