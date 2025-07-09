@@ -378,7 +378,7 @@ impl Plando {
         self.clear_doors();
         self.start_location_data.start_location = Plando::get_ship_start();
         self.update_hub_location()?;
-        self.randomizable_door_connections = get_randomizable_door_connections(&self.game_data, &self.map, &self.objectives);
+        self.update_randomizable_door_connections();
         self.auto_update_spoiler = auto_update;
         self.update_spoiler_data();
         Ok(())
@@ -387,7 +387,7 @@ impl Plando {
     pub fn load_preset_from_file(&mut self, path: &Path) -> Result<()> {
         self.randomizer_settings = load_preset(path)?;
         self.objectives = maprando::randomize::get_objectives(&self.randomizer_settings, &mut self.rng);
-        self.randomizable_door_connections = get_randomizable_door_connections(&self.game_data, &self.map, &self.objectives);
+        self.update_randomizable_door_connections();
         self.get_difficulty_tiers();
         if self.auto_update_spoiler {
             self.update_spoiler_data();
@@ -398,11 +398,15 @@ impl Plando {
     pub fn load_preset(&mut self, preset: RandomizerSettings) {
         self.randomizer_settings = preset;
         self.objectives = maprando::randomize::get_objectives(&self.randomizer_settings, &mut self.rng);
-        self.randomizable_door_connections = get_randomizable_door_connections(&self.game_data, &self.map, &self.objectives);
+        self.update_randomizable_door_connections();
         self.get_difficulty_tiers();
         if self.auto_update_spoiler {
             self.update_spoiler_data();
         }
+    }
+
+    pub fn update_randomizable_door_connections(&mut self) {
+        self.randomizable_door_connections = get_randomizable_door_connections(&self.game_data, &self.map, &self.objectives);
     }
 
     pub fn get_difficulty_tiers(&mut self) {

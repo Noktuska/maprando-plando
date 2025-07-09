@@ -1727,13 +1727,16 @@ impl PlandoApp {
                         ui.menu_button("Map", |ui| {
                             if ui.button("Reroll Map (Vanilla)").clicked() {
                                 self.plando.reroll_map(MapRepositoryType::Vanilla).unwrap();
+                                self.redraw_map();
                                 ui.close_menu();
                             }
                             if ui.add_enabled(self.plando.maps_standard.is_some(), egui::Button::new("Reroll Map (Standard)")).clicked() {
                                 self.plando.reroll_map(MapRepositoryType::Standard).unwrap();
+                                self.redraw_map();
                             }
                             if ui.add_enabled(self.plando.maps_wild.is_some(), egui::Button::new("Reroll Map (Wild)")).clicked() {
                                 self.plando.reroll_map(MapRepositoryType::Wild).unwrap();
+                                self.redraw_map();
                             }
                             ui.separator();
                             if ui.button("Save Map to file").clicked() {
@@ -1761,6 +1764,7 @@ impl PlandoApp {
                                         Ok(map) => self.plando.load_map(map),
                                         Err(err) => self.modal_type = ModalType::Error(err.to_string())
                                     };
+                                    self.redraw_map();
                                 }
                                 ui.close_menu();
                             }
@@ -2073,8 +2077,31 @@ impl PlandoApp {
         }
 
         if self.mouse_state.is_button_released(mouse::Button::Left) {
+            should_redraw = !self.map_editor.dragged_room_idx.is_empty();
+
             self.map_editor.stop_drag(&mut self.plando.map, mouse_tile_x, mouse_tile_y, &self.plando.game_data);
-            should_redraw = true;
+
+            if should_redraw {
+                // Fix any potential issues that may come up such as syncing up door locks
+                let update = self.plando.auto_update_spoiler;
+                self.plando.auto_update_spoiler = false;
+
+                self.plando.update_randomizable_door_connections();
+
+                let door_locks = self.plando.locked_doors.clone();
+                self.plando.clear_doors();
+                for door in door_locks {
+                    let (room_idx, door_idx) = self.plando.game_data.room_and_door_idxs_by_door_ptr_pair[&door.src_ptr_pair];
+                    if self.plando.place_door(room_idx, door_idx, Some(door.door_type), false, true).is_err() {
+                        // TODO: Potentially Notify user?
+                    }
+                }
+
+                self.plando.auto_update_spoiler = update;
+                if self.plando.auto_update_spoiler {
+                    self.plando.update_spoiler_data();
+                }
+            }
         }
 
         // Draw any errors
@@ -2564,12 +2591,14 @@ impl PlandoApp {
                                 let as_placeable = Placeable::VALUES[item_to_place as usize + Placeable::ETank as usize];
                                 if self.plando.placed_item_count[as_placeable as usize] < self.plando.get_max_placeable_count(as_placeable).unwrap() {
                                     self.plando.place_item(i, item_to_place);
+                                    self.redraw_map();
                                 }
                             } else {
                                 self.spoiler_type = SpoilerType::Item(i);
                             }
                         } else if bt == mouse::Button::Right {
                             self.plando.place_item(i, Item::Nothing);
+                            self.redraw_map();
                         }
                         self.click_consumed = true;
                     }
