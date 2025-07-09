@@ -1,5 +1,5 @@
 use {
-    crate::{input_state::KeyState, layout::{hotkey_settings::Keybind, Layout, WindowType}}, anyhow::{anyhow, bail, Result}, egui::{self, style::default_text_styles, Color32, Context, FontDefinitions, Id, Modifiers, Sense, TextureId, Ui, Vec2}, egui_sfml::{SfEgui, UserTexSource}, flate2::read::GzDecoder, hashbrown::{HashMap, HashSet}, input_state::MouseState, map_editor::{MapEditor, SidebarMode}, maprando::{
+    crate::{input_state::KeyState, layout::{hotkey_settings::Keybind, Layout, WindowType}, map_editor::MapErrorType}, anyhow::{anyhow, bail, Result}, egui::{self, style::default_text_styles, Color32, Context, FontDefinitions, Id, Modifiers, Sense, TextureId, Ui, Vec2}, egui_sfml::{SfEgui, UserTexSource}, flate2::read::GzDecoder, hashbrown::{HashMap, HashSet}, input_state::MouseState, map_editor::{MapEditor, SidebarMode}, maprando::{
         customize::{mosaic::MosaicTheme, ControllerButton, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, MusicSettings, PaletteTheme, ShakingSetting, TileTheme}, patch::Rom, randomize::SpoilerRouteEntry, settings::{DoorLocksSize, DoorsMode, ItemDotChange, MapStationReveal, MapsRevealed, Objective, ObjectiveSetting, RandomizerSettings, SaveAnimals, WallJump}
     }, maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType}, plando::{DoubleItemPlacement, MapRepositoryType, Placeable, Plando, SpoilerOverride, ITEM_VALUES}, rand::RngCore, rfd::FileDialog, self_update::cargo_crate_version, serde::{Deserialize, Serialize}, sfml::{
         cpp::FBox, graphics::{
@@ -1435,7 +1435,7 @@ impl PlandoApp {
 
         let mut window = RenderWindow::new((1080, 720), &format!("Maprando Plando {version_number}"), Style::DEFAULT, &Default::default()).expect("Could not create Window");
         window.set_vertical_sync_enabled(false);
-        window.set_framerate_limit(0);
+        window.set_framerate_limit(60);
         window.set_key_repeat_enabled(false);
 
         let font_default = {
@@ -1620,8 +1620,10 @@ impl PlandoApp {
                 }
 
                 // Handle map io after all other io has been handled, also draws errors and editor overlays
-                if let Some(s) = self.handle_map_io(&mut *window, &states) {
-                    info_overlay_opt = Some(s);
+                if sidebar_selection.is_none() {
+                    if let Some(s) = self.handle_map_io(&mut *window, &states) {
+                        info_overlay_opt = Some(s);
+                    }
                 }
         
                 // Draw Door hover
@@ -2029,10 +2031,36 @@ impl PlandoApp {
             let room_name = self.plando.game_data.room_geometry[room_idx].name.clone();
             info_overlay = Some(room_name);
             last_hovered_room_idx = Some(room_idx);
+        }
 
-            if self.map_editor.selected_room_idx.is_empty() && self.map_editor.dragged_room_idx.is_empty() {
-                self.draw_room_outline(rt, states, room_bounds);
+        if let Some(pt) = self.map_editor.selection_start {
+            if self.mouse_state.is_button_down(mouse::Button::Left) {
+                let mouse_pos = Vector2i::new(mouse_tile_x as i32, mouse_tile_y as i32);
+                let size = mouse_pos - pt;
+                let rect = IntRect::from_vecs(pt, size);
+                let rect = utils::normalize_rect(rect);
+                self.draw_room_outline(rt, states, vec![rect]);
             }
+        }
+
+        if let Some(room_idx) = last_hovered_room_idx {
+            if self.map_editor.dragged_room_idx.is_empty() {
+                let bbox = self.map_editor.get_room_bounds(&self.plando.map, room_idx, &self.plando.game_data);
+                self.draw_room_outline(rt, states, vec![bbox]);
+            }
+        }
+
+        if !self.map_editor.selected_room_idx.is_empty() || !self.map_editor.dragged_room_idx.is_empty() {
+            let idx_list = if self.map_editor.selected_room_idx.is_empty() {
+                &self.map_editor.dragged_room_idx
+            } else {
+                &self.map_editor.selected_room_idx
+            };
+
+            let bbox_list: Vec<IntRect> = idx_list.iter().map(
+                |&idx| self.map_editor.get_room_bounds(&self.plando.map, idx, &self.plando.game_data)
+            ).collect();
+            self.draw_room_outline(rt, states, bbox_list);
         }
 
         // Update dragged room positions
@@ -2041,6 +2069,7 @@ impl PlandoApp {
         // Start and stop drags
         if self.is_mouse_public && !self.click_consumed && self.mouse_state.is_button_pressed(mouse::Button::Left) {
             self.map_editor.start_drag(&self.plando.map, last_hovered_room_idx, mouse_tile_x, mouse_tile_y, &self.plando.game_data);
+            self.spoiler_type = SpoilerType::None;
         }
 
         if self.mouse_state.is_button_released(mouse::Button::Left) {
@@ -2048,14 +2077,73 @@ impl PlandoApp {
             should_redraw = true;
         }
 
-        // Draw any selection highlights
-        
+        // Draw any errors
+        //self.draw_map_error_overlay(rt, states);
 
         if should_redraw {
             self.redraw_map();
         }
 
         info_overlay
+    }
+
+    fn draw_map_error_overlay(&mut self, rt: &mut dyn RenderTarget, states: &RenderStates) -> Option<String> {
+        let mut res = None;
+        for &err in &self.map_editor.error_list {
+            res = match err {
+                MapErrorType::DoorDisconnected(room_idx, door_idx) => {
+                    let door = &self.plando.game_data.room_geometry[room_idx].doors[door_idx];
+                    if self.highlight_room_red(rt, states, room_idx, vec![(door.x, door.y)]) {
+                        Some("Door is not connected".to_string())
+                    } else { None }
+                },
+                MapErrorType::AreaBounds(area, w, h) => {
+                    let mut any_hovered = false;
+                    for room_idx in 0..self.plando.map.rooms.len() {
+                        if self.plando.map.area[room_idx] == area {
+                            any_hovered |= self.highlight_room_red(rt, states, room_idx, Vec::new());
+                        }
+                    }
+                    if any_hovered {
+                        Some(format!("Area exceeds boundary limit of ({}, {}), currently ({w}, {h})", MapEditor::AREA_MAX_WIDTH, MapEditor::AREA_MAX_HEIGHT))
+                    } else { None }
+                },
+                MapErrorType::AreaTransitions(num) => {
+                    None
+                },
+                MapErrorType::MapPerArea(_) => todo!(),
+                MapErrorType::PhantoonMap => todo!(),
+                MapErrorType::PhantoonSave => todo!(),
+                MapErrorType::ToiletNoRoom => todo!(),
+                MapErrorType::ToiletMultipleRooms(_, _) => todo!(),
+                MapErrorType::ToiletArea(_, _, _) => todo!(),
+                MapErrorType::ToiletNoPatch(_, _, _) => todo!(),
+            }
+        }
+        res
+    }
+
+    fn highlight_room_red(&self, rt: &mut dyn RenderTarget, states: &RenderStates, room_idx: usize, tiles: Vec<(usize, usize)>) -> bool {
+        let mouse_tile_x = ((self.local_mouse_x / 8.0).floor().max(0.0) as usize).min(PlandoApp::GRID_SIZE);
+        let mouse_tile_y = ((self.local_mouse_y / 8.0).floor().max(0.0) as usize).min(PlandoApp::GRID_SIZE);
+
+        let (room_x, room_y) = self.plando.map.rooms[room_idx];
+        let room_geometry = &self.plando.game_data.room_geometry[room_idx];
+        
+        let local_mouse_tile_x = mouse_tile_x as i32 - room_x as i32;
+        let local_mouse_tile_y = mouse_tile_y as i32 - room_y as i32;
+
+        let mut res = false;
+        if local_mouse_tile_x >= 0 && local_mouse_tile_y >= 0 && local_mouse_tile_x < room_geometry.map[0].len() as i32
+                && local_mouse_tile_y < room_geometry.map.len() as i32 && room_geometry.map[local_mouse_tile_y as usize][local_mouse_tile_x as usize] == 1 {
+            if tiles.is_empty() || tiles.contains(&(local_mouse_tile_x as usize, local_mouse_tile_y as usize)) {
+                res = true;
+            }
+        }
+
+        // TODO: Draw red overlay
+
+        res
     }
 
     /*fn draw_map_editor(&mut self, rt: &mut dyn RenderTarget, states: &RenderStates) -> Option<String> {
@@ -2227,8 +2315,38 @@ impl PlandoApp {
         info_overlay
     }*/
 
-    fn draw_room_outline(&self, rt: &mut dyn RenderTarget, states: &RenderStates, rect: IntRect) {
-        let mut vbuffs = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+    fn draw_room_outline(&self, rt: &mut dyn RenderTarget, states: &RenderStates, rects: Vec<IntRect>) {
+        let line_strip_len = 0.5;
+
+        let disjoint_sets = utils::disjoin_rects(rects);
+
+        for rect_set in disjoint_sets {
+            let path = utils::merge_rects(rect_set);
+
+            for i in 0..path.vertices.len() {
+                let v1 = path.vertices[i];
+                let v2 = path.vertices[(i + 1) % path.vertices.len()];
+                let diff = v2 - v1;
+                let len = diff.length_sq().sqrt();
+
+                let mut vbuff: Vec<Vertex> = Vec::new();
+
+                let mut step = -line_strip_len;
+                while step < len + line_strip_len {
+                    let step_clamp = step + ((self.global_timer as f32 * 0.02) % (line_strip_len * 2.0));
+                    let step_clamp = step_clamp.min(len).max(0.0);
+                    let p = (v1 + diff * step_clamp / len) * 8.0;
+
+                    vbuff.push(Vertex { position: p, color: Color::CYAN, tex_coords: Vector2f::default() });
+
+                    step += line_strip_len;
+                }
+
+                rt.draw_primitives(&vbuff, PrimitiveType::LINES, states);
+            }
+        }
+
+        /*let mut vbuffs = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
 
         let rect = utils::normalize_rect(rect);
 
@@ -2274,7 +2392,7 @@ impl PlandoApp {
         rt.draw_primitives(&vbuffs[0], PrimitiveType::LINES, states);
         rt.draw_primitives(&vbuffs[1], PrimitiveType::LINES, states);
         rt.draw_primitives(&vbuffs[2], PrimitiveType::LINES, states);
-        rt.draw_primitives(&vbuffs[3], PrimitiveType::LINES, states);
+        rt.draw_primitives(&vbuffs[3], PrimitiveType::LINES, states);*/
     }
 
     fn draw_start_locations(&mut self, rt: &mut dyn RenderTarget, states: &RenderStates, sidebar_selection: Option<Placeable>) {
@@ -2455,6 +2573,8 @@ impl PlandoApp {
                         }
                         self.click_consumed = true;
                     }
+
+                    self.is_mouse_public = false;
                 }
 
                 rt.draw_with_renderstates(&spr_item, &states);
@@ -2493,6 +2613,8 @@ impl PlandoApp {
                     self.spoiler_type = SpoilerType::Flag(i);
                     self.click_consumed = true;
                 }
+
+                self.is_mouse_public = false;
             }
 
             rt.draw_with_renderstates(&spr_flag, &states);

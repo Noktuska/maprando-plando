@@ -1,7 +1,7 @@
 use std::{fs::File, i32, io::{Read, Write}, path::Path};
 
-use anyhow::{anyhow, bail, Result};
-use hashbrown::{HashMap, HashSet};
+use anyhow::Result;
+use hashbrown::HashSet;
 use maprando_game::{GameData, Map};
 use serde_json::Value;
 use sfml::{graphics::{Color, IntRect}, system::Vector2i, window::Key};
@@ -125,9 +125,10 @@ impl Area {
     }
 }
 
+#[derive(PartialEq, Eq, Clone, Copy)]
 pub enum MapErrorType {
     DoorDisconnected(usize, usize), // (room_idx, door_idx) of door which is not connected
-    AreaBounds(usize), // Area idx which exceeds boundary limits
+    AreaBounds(usize, usize, usize), // Area idx which exceeds boundary limits followed by current (width, height)
     AreaTransitions(usize), // Number of area transition which exceeds limit
     MapPerArea(usize), // Area idx which has no map
     PhantoonMap, // Phantoon map is not connected to phantoon via exaclty one room inbetween
@@ -152,9 +153,9 @@ pub struct MapEditor {
 }
 
 impl MapEditor {
-    const AREA_MAX_WIDTH: usize = 60;
-    const AREA_MAX_HEIGHT: usize = 28;
-    const AREA_MAX_TRANSITIONS: usize = 23;
+    pub const AREA_MAX_WIDTH: usize = 60;
+    pub const AREA_MAX_HEIGHT: usize = 28;
+    pub const AREA_MAX_TRANSITIONS: usize = 23;
 
     pub fn new() -> MapEditor {
         MapEditor {
@@ -270,11 +271,15 @@ impl MapEditor {
                 self.dragged_room_yoffset = mouse_tile_y - bbox.top as usize;
             } else {
                 // User starts dragging a non-selected room, deselect and only drag this one
-                let (room_x, room_y) = map.rooms[room_idx];
                 self.dragged_room_idx.push(room_idx);
-                self.dragged_room_xoffset = mouse_tile_x - room_x;
-                self.dragged_room_yoffset = mouse_tile_y - room_y;
-                self.selected_room_idx.clear();
+                if Key::LControl.is_pressed() || Key::RControl.is_pressed() {
+                    self.dragged_room_idx.append(&mut self.selected_room_idx);
+                } else {
+                    self.selected_room_idx.clear();
+                }
+                let bbox = self.get_dragged_bbox(map, game_data).unwrap();
+                self.dragged_room_xoffset = mouse_tile_x - bbox.left as usize;
+                self.dragged_room_yoffset = mouse_tile_y - bbox.top as usize;
             }
         } else {
             // No room is being dragged, start a selection
@@ -565,7 +570,7 @@ impl MapEditor {
         for idx in 0..6 {
             let area_size = area_max[idx] - area_min[idx];
             if area_size.x > Self::AREA_MAX_WIDTH as i32 || area_size.y > Self::AREA_MAX_HEIGHT as i32 {
-                self.error_list.push(MapErrorType::AreaBounds(idx));
+                self.error_list.push(MapErrorType::AreaBounds(idx, area_size.x as usize, area_size.y as usize));
             }
         }
     }
