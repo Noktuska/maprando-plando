@@ -9,7 +9,7 @@ use rand::{rngs::StdRng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
 use strum::VariantNames;
 
-//use crate::plando_logic::*;
+use crate::backend::map_editor::MapEditor;
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DoubleItemPlacement {
@@ -50,11 +50,11 @@ pub enum Placeable {
     DoorMissile,
     DoorSuper,
     DoorPowerBomb,
-    DoorCharge,
-    DoorIce,
-    DoorWave,
     DoorSpazer,
-    DoorPlasma
+    DoorWave,
+    DoorIce,
+    DoorPlasma,
+    DoorCharge,
 }
 
 impl Placeable {
@@ -153,12 +153,6 @@ impl Placeable {
     }
 }
 
-pub struct TileInfo {
-    pub room_id: usize,
-    pub tile_x: usize,
-    pub tile_y: usize
-}
-
 pub enum MapRepositoryType {
     Vanilla, Standard, Wild
 }
@@ -179,7 +173,7 @@ pub struct Plando {
     pub maps_vanilla: MapRepository,
     pub maps_standard: Option<MapRepository>,
     pub maps_wild: Option<MapRepository>,
-    pub map: Map,
+    pub map_editor: MapEditor,
     pub randomizer_settings: RandomizerSettings,
     pub objectives: Vec<Objective>,
     pub item_locations: Vec<Item>,
@@ -202,8 +196,8 @@ pub struct Plando {
 }
 
 impl Plando {
-    pub fn new() -> Self {
-        let game_data = load_game_data().unwrap();
+    pub fn new() -> Result<Self> {
+        let game_data = load_game_data()?;
 
         let samus_sprites_path = Path::new("../MapRandoSprites/samus_sprites/manifest.json");
         let samus_sprite_categories: Vec<SamusSpriteCategory> = serde_json::from_str(&std::fs::read_to_string(&samus_sprites_path).unwrap()).unwrap();
@@ -229,7 +223,7 @@ impl Plando {
         })
         .collect();
     
-        let maps_vanilla = Plando::load_map_repository(MapRepositoryType::Vanilla).expect("Vanilla Map Repository not found");
+        let maps_vanilla = Plando::load_map_repository(MapRepositoryType::Vanilla).ok_or(anyhow!("Vanilla Map Repository not found"))?;
         let maps_standard = Plando::load_map_repository(MapRepositoryType::Standard);
         let maps_wild = Plando::load_map_repository(MapRepositoryType::Wild);
 
@@ -240,15 +234,16 @@ impl Plando {
             println!("WARN: Wild Map Repository not found");
         }
 
-        let preset_data = load_preset_data(&game_data).unwrap();
+        let preset_data = load_preset_data(&game_data)?;
 
-        let map = roll_map(&maps_vanilla, &game_data).unwrap();
+        let map = roll_map(&maps_vanilla, &game_data)?;
+        let map_editor = MapEditor::new(map);
 
         let randomizer_settings = preset_data.default_preset.clone();
 
         let mut rng = rand::rngs::StdRng::from_entropy();
         let objectives = maprando::randomize::get_objectives(&randomizer_settings, &mut rng);
-        let randomizable_door_connections = get_randomizable_door_connections(&game_data, &map, &objectives);
+        let randomizable_door_connections = get_randomizable_door_connections(&game_data, map_editor.get_map(), &objectives);
 
         let mut ship_start = StartLocation::default();
         ship_start.name = "Ship".to_string();
@@ -285,7 +280,7 @@ impl Plando {
             maps_vanilla,
             maps_standard,
             maps_wild,
-            map,
+            map_editor,
             randomizer_settings,
             objectives,
             item_locations: vec![Item::Nothing; item_location_len],
@@ -308,7 +303,11 @@ impl Plando {
         
         plando.get_difficulty_tiers();
 
-        plando
+        Ok(plando)
+    }
+
+    pub fn map(&self) -> &Map {
+        self.map_editor.get_map()
     }
 
     pub fn clear_item_locations(&mut self) {
@@ -321,7 +320,7 @@ impl Plando {
         self.spoiler_overrides.clear();
 
         if self.auto_update_spoiler {
-            self.update_spoiler_data();
+            let _ = self.update_spoiler_data();
         }
     }
 
@@ -338,19 +337,6 @@ impl Plando {
             return Some(door_idx);
         }
         None
-    }
-
-    pub fn load_map(&mut self, map: Map) {
-        let auto_update = self.auto_update_spoiler;
-        self.auto_update_spoiler = false;
-        self.map = map;
-        self.clear_item_locations();
-        self.clear_doors();
-        self.start_location_data.start_location = Plando::get_ship_start();
-        let _ = self.update_hub_location();
-        self.randomizable_door_connections = get_randomizable_door_connections(&self.game_data, &self.map, &self.objectives);
-        self.auto_update_spoiler = auto_update;
-        self.update_spoiler_data();
     }
 
     pub fn load_map_repository(map_repo_type: MapRepositoryType) -> Option<MapRepository> {
@@ -373,25 +359,15 @@ impl Plando {
         };
         let auto_update = self.auto_update_spoiler;
         self.auto_update_spoiler = false;
-        self.map = roll_map(&map_repository, &self.game_data)?;
+        let map = roll_map(&map_repository, &self.game_data)?;
+        self.map_editor.load_map(map);
         self.clear_item_locations();
         self.clear_doors();
         self.start_location_data.start_location = Plando::get_ship_start();
         self.update_hub_location()?;
         self.update_randomizable_door_connections();
         self.auto_update_spoiler = auto_update;
-        self.update_spoiler_data();
-        Ok(())
-    }
-
-    pub fn load_preset_from_file(&mut self, path: &Path) -> Result<()> {
-        self.randomizer_settings = load_preset(path)?;
-        self.objectives = maprando::randomize::get_objectives(&self.randomizer_settings, &mut self.rng);
-        self.update_randomizable_door_connections();
-        self.get_difficulty_tiers();
-        if self.auto_update_spoiler {
-            self.update_spoiler_data();
-        }
+        self.update_spoiler_data()?;
         Ok(())
     }
 
@@ -401,12 +377,12 @@ impl Plando {
         self.update_randomizable_door_connections();
         self.get_difficulty_tiers();
         if self.auto_update_spoiler {
-            self.update_spoiler_data();
+            let _ = self.update_spoiler_data();
         }
     }
 
     pub fn update_randomizable_door_connections(&mut self) {
-        self.randomizable_door_connections = get_randomizable_door_connections(&self.game_data, &self.map, &self.objectives);
+        self.randomizable_door_connections = get_randomizable_door_connections(&self.game_data, self.map(), &self.objectives);
     }
 
     pub fn get_difficulty_tiers(&mut self) {
@@ -419,12 +395,12 @@ impl Plando {
         );
     }
 
-    pub fn get_tile_at(&self, x: usize, y: usize) -> Option<TileInfo> {
+    /*pub fn get_tile_at(&self, x: usize, y: usize) -> Option<TileInfo> {
         for map_tile in &self.game_data.map_tile_data {
             let room_id = map_tile.room_id;
             let room_idx = self.room_id_to_idx(room_id);
             let room_geometry = &self.game_data.room_geometry[room_idx];
-            let (room_x, room_y) = self.map.rooms[room_idx];
+            let (room_x, room_y) = self.get_map().rooms[room_idx];
             for (tile_y, row) in room_geometry.map.iter().enumerate() {
                 for (tile_x, &tile) in row.iter().enumerate() {
                     if tile == 1 && room_x + tile_x == x && room_y + tile_y == y {
@@ -434,7 +410,7 @@ impl Plando {
             }
         }
         None
-    }
+    }*/
 
     pub fn get_ship_start() -> StartLocation {
         let mut ship_start = StartLocation::default();
@@ -475,7 +451,7 @@ impl Plando {
             self.dirty = true;
 
             if self.auto_update_spoiler {
-                self.update_spoiler_data();
+                self.update_spoiler_data()?;
             }
 
             return Ok(());
@@ -497,7 +473,7 @@ impl Plando {
             0,
         );
         let randomizer = Randomizer::new(
-            &self.map, 
+            self.map_editor.get_map(), 
             &locked_door_data, 
             self.objectives.clone(), 
             &self.randomizer_settings,
@@ -611,7 +587,7 @@ impl Plando {
                     self.dirty = true;
 
                     if self.auto_update_spoiler {
-                        self.update_spoiler_data();
+                        self.update_spoiler_data()?;
                     }
 
                     return Ok(());
@@ -633,7 +609,7 @@ impl Plando {
         }
         self.item_locations[item_loc] = item;
         if self.auto_update_spoiler {
-            self.update_spoiler_data();
+            let _ = self.update_spoiler_data();
         }
         self.dirty = true;
     }
@@ -688,7 +664,7 @@ impl Plando {
                 // This should never error
                 let _ = self.update_hub_location();
                 if self.auto_update_spoiler {
-                    self.update_spoiler_data();
+                    self.update_spoiler_data()?;
                 }
                 self.dirty = true;
             }
@@ -756,7 +732,7 @@ impl Plando {
             bail!("Placing door would block all logical hub locations");
         }
         if self.auto_update_spoiler {
-            self.update_spoiler_data();
+            self.update_spoiler_data()?;
         }
         self.dirty = true;
 
@@ -774,7 +750,7 @@ impl Plando {
         }
 
         if self.auto_update_spoiler {
-            self.update_spoiler_data();
+            let _ = self.update_spoiler_data();
         }
     }
 
@@ -858,8 +834,8 @@ impl Plando {
     pub fn get_vertex_info_by_id(&self, room_id: RoomId, node_id: NodeId) -> VertexInfo {
         let room_ptr = self.game_data.room_ptr_by_id[&room_id];
         let room_idx = self.game_data.room_idx_by_ptr[&room_ptr];
-        let area = self.map.area[room_idx];
-        let room_coords = self.map.rooms[room_idx];
+        let area = self.map().area[room_idx];
+        let room_coords = self.map().rooms[room_idx];
         VertexInfo {
             area_name: self.game_data.area_names[area].clone(),
             room_name: self.game_data.room_json_map[&room_id]["name"]
@@ -882,7 +858,30 @@ impl Plando {
         });
     }
 
-    pub fn update_spoiler_data(&mut self) {
+    pub fn is_map_logic_valid(&self) -> Result<()> {
+        let needed_doors = vec![
+            (321, 1), (321, 2), // Toilet top and bottom, because logic creates a link that skips over toilet
+            (32, 1), // West Ocean Bottom Left Door, because logic links the bridge door
+            (32, 5) // West Ocean Bottom Right Door, because logic links the bridge door
+        ];
+
+        for door in needed_doors {
+            let door_ptr_pair = self.game_data.reverse_door_ptr_pair_map[&door];
+
+            if !self.map().doors.iter().any(|x| x.0 == door_ptr_pair || x.1 == door_ptr_pair) {
+                bail!("Door needs connection for logic to be calculated: ({}, {})", door.0, door.1);
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn update_spoiler_data(&mut self) -> Result<()> {
+        if let Err(err) = self.is_map_logic_valid() {
+            self.randomization = None;
+            return Err(err);
+        }
+
         self.update_overrides();
 
         let locked_door_data = self.get_locked_door_data();
@@ -901,7 +900,7 @@ impl Plando {
             0,
         );
         let randomizer = Randomizer::new(
-            &self.map, 
+            self.map_editor.get_map(), 
             &locked_door_data, 
             self.objectives.clone(), 
             &self.randomizer_settings,
@@ -992,6 +991,11 @@ impl Plando {
             seed as usize,
             &mut self.rng
         ).ok();
+
+        match self.randomization {
+            Some(_) => Ok(()),
+            None => Err(anyhow!("Couldn't compute valid escape route"))
+        }
     }
 
     fn update_step(&self, state: &mut RandomizationState, randomizer: &Randomizer) -> (SpoilerSummary, SpoilerDetails) {

@@ -1,11 +1,12 @@
 pub mod hotkey_settings;
+pub mod map_editor_ui;
 
 use egui::{Context, Ui};
 use hashbrown::HashMap;
 use maprando::{preset::PresetData, settings::{ETankRefill, Fanfares, ItemMarkers, MotherBrainFight, ObjectiveScreen, ObjectiveSetting, RandomizerSettings, StartingItemsPreset}};
 use maprando_game::Item;
 
-use crate::{layout::hotkey_settings::HotkeySettingsWindow, plando::Placeable};
+use crate::{backend::plando::Placeable, layout::hotkey_settings::HotkeySettingsWindow};
 
 pub fn window_skill_assumptions(height: f32, open: &mut bool, cur_settings: &mut RandomizerSettings, preset_data: &PresetData, ctx: &Context) {
     egui::Window::new("Customize Skill Assumptions").collapsible(false).vscroll(true).max_height(height).resizable(false).open(open).show(ctx, |ui| {
