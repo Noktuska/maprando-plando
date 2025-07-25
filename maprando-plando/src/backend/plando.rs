@@ -351,16 +351,10 @@ impl Plando {
         }
     }
 
-    pub fn reroll_map(&mut self, map_repository: MapRepositoryType) -> Result<()> {
-        let map_repository = match map_repository {
-            MapRepositoryType::Vanilla => &self.maps_vanilla,
-            MapRepositoryType::Standard => self.maps_standard.as_ref().unwrap(),
-            MapRepositoryType::Wild => self.maps_wild.as_ref().unwrap()
-        };
+    pub fn load_map(&mut self, map: Map) -> Result<()> {
         let auto_update = self.auto_update_spoiler;
         self.auto_update_spoiler = false;
-        let map = roll_map(&map_repository, &self.game_data)?;
-        self.map_editor.load_map(map);
+        self.map_editor.load_map(map, &self.game_data);
         self.clear_item_locations();
         self.clear_doors();
         self.start_location_data.start_location = Plando::get_ship_start();
@@ -368,6 +362,31 @@ impl Plando {
         self.update_randomizable_door_connections();
         self.auto_update_spoiler = auto_update;
         self.update_spoiler_data()?;
+        Ok(())
+    }
+
+    pub fn load_map_from_file(&mut self, path: &Path) -> Result<()> {
+        let auto_update = self.auto_update_spoiler;
+        self.auto_update_spoiler = false;
+        self.map_editor.load_map_from_file(&self.game_data, path);
+        self.clear_item_locations();
+        self.clear_doors();
+        self.start_location_data.start_location = Plando::get_ship_start();
+        self.update_hub_location()?;
+        self.update_randomizable_door_connections();
+        self.auto_update_spoiler = auto_update;
+        self.update_spoiler_data()?;
+        Ok(())
+    }
+
+    pub fn reroll_map(&mut self, map_repository: MapRepositoryType) -> Result<()> {
+        let map_repository = match map_repository {
+            MapRepositoryType::Vanilla => &self.maps_vanilla,
+            MapRepositoryType::Standard => self.maps_standard.as_ref().unwrap(),
+            MapRepositoryType::Wild => self.maps_wild.as_ref().unwrap()
+        };
+        let map = roll_map(&map_repository, &self.game_data)?;
+        self.load_map(map)?;
         Ok(())
     }
 
@@ -394,23 +413,6 @@ impl Plando {
             &self.preset_data.notables_by_difficulty["Implicit"]
         );
     }
-
-    /*pub fn get_tile_at(&self, x: usize, y: usize) -> Option<TileInfo> {
-        for map_tile in &self.game_data.map_tile_data {
-            let room_id = map_tile.room_id;
-            let room_idx = self.room_id_to_idx(room_id);
-            let room_geometry = &self.game_data.room_geometry[room_idx];
-            let (room_x, room_y) = self.get_map().rooms[room_idx];
-            for (tile_y, row) in room_geometry.map.iter().enumerate() {
-                for (tile_x, &tile) in row.iter().enumerate() {
-                    if tile == 1 && room_x + tile_x == x && room_y + tile_y == y {
-                        return Some(TileInfo { room_id, tile_x, tile_y })
-                    }
-                }
-            }
-        }
-        None
-    }*/
 
     pub fn get_ship_start() -> StartLocation {
         let mut ship_start = StartLocation::default();

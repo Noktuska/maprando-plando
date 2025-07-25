@@ -1,7 +1,7 @@
 use std::{fs::File, i32, io::{Read, Write}, path::Path};
 
 use anyhow::Result;
-use hashbrown::HashSet;
+use hashbrown::{HashMap, HashSet};
 use maprando_game::{GameData, Map};
 use serde_json::Value;
 use sfml::{graphics::{Color, IntRect}, system::Vector2i};
@@ -124,17 +124,56 @@ pub enum MapErrorType {
     DoorDisconnected(usize, usize), // (room_idx, door_idx) of door which is not connected
     AreaBounds(usize, usize, usize), // Area idx which exceeds boundary limits followed by current (width, height)
     AreaTransitions(usize), // Number of area transition which exceeds limit
-    MapPerArea(usize), // Area idx which has no map
+    MapPerArea(usize), // room_idx of a double map
+    MapBounds(i32, i32, usize, usize), // Map exceeds boundary limits with current size (x, y, width, height)
     PhantoonMap, // Phantoon map is not connected to phantoon via exaclty one room inbetween
     PhantoonSave, // Phantoon Save is not in the same area as phantoon and his map
     ToiletNoRoom, // Toilet passes through no room
     ToiletMultipleRooms(usize, usize), // Toilet passes through at least two rooms and is not vanilla
     ToiletArea(usize, usize, usize), // (room_idx, toilet_area_idx, room_area_idx) Toilet area and the passing through room have different areas
-    ToiletNoPatch(usize, i32, i32) // (room_idx, xoffset, yoffset) which the toilet passes through has no patch
+    ToiletNoPatch(usize, i32, i32, Option<(i32, i32)>) // (room_idx, xoffset, yoffset, alternative) which the toilet passes through has no patch
+}
+
+impl MapErrorType {
+    pub fn to_string(&self, game_data: &GameData) -> String {
+        match self {
+            MapErrorType::DoorDisconnected(_, _) => format!("Door is not connected"),
+            MapErrorType::AreaBounds(_, w, h) =>
+                format!("Area exceeds maximum size: Currently ({w}, {h}), Maximum: ({}, {})", MapEditor::AREA_MAX_WIDTH, MapEditor::AREA_MAX_HEIGHT),
+            MapErrorType::AreaTransitions(t) =>
+                format!("Number of maximum area transitions exceeded: Currently {t}, Maximum {}", MapEditor::AREA_MAX_TRANSITIONS),
+            MapErrorType::MapPerArea(_) => 
+                format!("This map already has a Map Station"),
+            MapErrorType::MapBounds(_, _, w, h) => 
+                format!("Map exceeds maximum size: Currently ({w}, {h}), Maximum: ({}, {})", MapEditor::MAP_MAX_SIZE, MapEditor::MAP_MAX_SIZE),
+            MapErrorType::PhantoonMap => 
+                format!("Phantoon Map Station has to be connected to Phantoon's Room via one intermediate room, all of the same area"),
+            MapErrorType::PhantoonSave => 
+                format!("Wrecked Ship Map Station has to be in the same area as Phantoon's Room"),
+            MapErrorType::ToiletNoRoom => 
+                format!("Toilet has to cross exactly one room. Currently crossing no room"),
+            MapErrorType::ToiletMultipleRooms(idx1, idx2) => {
+                let room_name1 = &game_data.room_geometry[*idx1].name;
+                let room_name2 = &game_data.room_geometry[*idx2].name;
+                format!("Toilet has to cross exactly one room. Currently ({room_name1} and {room_name2})")
+            }
+            MapErrorType::ToiletArea(_, _, _) => 
+                format!("Toilet has to be of the same area as the room it is crossing"),
+            MapErrorType::ToiletNoPatch(idx, x_offset, y_offset, alternative) => {
+                let room_name = &game_data.room_geometry[*idx].name;
+                match alternative {
+                    Some((x, y)) => format!("There is no mosaic patch for the toilet crossing {room_name} at offset ({x_offset}, {y_offset}). A possible offset would be ({x}, {y})"),
+                    None => format!("There is no mosaic patch for the toilet crossing {room_name}")
+                }
+            }
+        }
+    }
 }
 
 pub struct MapEditor {
     map: Map,
+
+    toilet_patch_map: HashMap<usize, Vec<(i32, i32)>>,
 
     pub room_overlaps: HashSet<(usize, usize)>,
     pub error_list: Vec<MapErrorType>,
@@ -146,15 +185,52 @@ impl MapEditor {
     pub const AREA_MAX_WIDTH: usize = 60;
     pub const AREA_MAX_HEIGHT: usize = 28;
     pub const AREA_MAX_TRANSITIONS: usize = 23;
+    pub const MAP_MAX_SIZE: usize = 72;
 
     pub fn new(map: Map) -> MapEditor {
         MapEditor {
             map,
+            toilet_patch_map: Self::generate_toilet_map().unwrap_or_default(),
             room_overlaps: HashSet::new(),
             error_list: Vec::new(),
             invalid_doors: HashSet::new(),
             missing_rooms: HashSet::new(),
         }
+    }
+
+    fn generate_toilet_map() -> Result<HashMap<usize, Vec<(i32, i32)>>> {
+        let mut toilet_patch_map: HashMap<usize, Vec<(i32, i32)>> = HashMap::new();
+
+        let dir_path = Path::new("../patches/mosaic");
+        let patches: Vec<_> = std::fs::read_dir(dir_path)?.filter_map(|path| {
+            path.ok().map(|path| path.file_name().into_string().unwrap().trim_end_matches(".bps").to_string())
+        }).collect();
+
+        for patch in patches {
+            let split: Vec<&str> = patch.splitn(5, '-').collect();
+
+            if split.len() < 5 { continue; }
+            if split[0] != "Base" || split[2] != "Transit" { continue; }
+            let room_ptr = match usize::from_str_radix(split[1], 16) {
+                Ok(idx) => idx,
+                Err(_) => continue
+            };
+            let x_offset: i32 = match split[3].parse() {
+                Ok(num) => num,
+                Err(_) => continue
+            };
+            let y_offset: i32 = match split[4].parse() {
+                Ok(num) => num,
+                Err(_) => continue
+            };
+
+            match toilet_patch_map.get_mut(&room_ptr) {
+                Some(vec) => vec.push((x_offset, y_offset)),
+                None => { toilet_patch_map.insert(room_ptr, vec![(x_offset, y_offset)]); }
+            };
+        }
+
+        Ok(toilet_patch_map)
     }
 
     pub fn get_map(&self) -> &Map {
@@ -191,9 +267,10 @@ impl MapEditor {
         Ok(())
     }
 
-    pub fn load_map(&mut self, map: Map) {
+    pub fn load_map(&mut self, map: Map, game_data: &GameData) {
         self.reset();
         self.map = map;
+        self.is_valid(game_data);
     }
 
     pub fn load_map_from_file(&mut self, game_data: &GameData, path: &Path) -> Result<()> {
@@ -214,6 +291,8 @@ impl MapEditor {
             self.erase_room(room, game_data);
         }
 
+        self.is_valid(game_data);
+
         Ok(())
     }
 
@@ -223,6 +302,7 @@ impl MapEditor {
             self.error_list.push(MapErrorType::DoorDisconnected(room_idx, door_idx));
         }
         self.check_area_bounds(game_data);
+        self.check_map_bounds(game_data);
         self.check_area_transitions(game_data);
         self.check_toilet(game_data);
         self.check_map_connections(game_data);
@@ -232,9 +312,10 @@ impl MapEditor {
     pub fn reset(&mut self) {
         self.invalid_doors.clear();
         self.missing_rooms.clear();
+        self.error_list.clear();
     }
 
-    pub fn apply_area(&mut self, room_idx: usize, area_value: Area) {
+    /*pub fn apply_area(&mut self, room_idx: usize, area_value: Area) {
         let (area, sub_area, sub_sub_area) = area_value.to_tuple();
         self.map.area[room_idx] = area;
         self.map.subarea[room_idx] = sub_area;
@@ -265,7 +346,7 @@ impl MapEditor {
         let sub_area = self.map.subarea[room_idx];
         let sub_sub_area = self.map.subsubarea[room_idx];
         Area::from_tuple((area, sub_area, sub_sub_area))
-    }
+    }*/
 
     pub fn erase_room(&mut self, room_idx: usize, game_data: &GameData) {
         if !self.missing_rooms.insert(room_idx) {
@@ -374,6 +455,8 @@ impl MapEditor {
             }
             orphaned_doors.remove(&(room_idx, door_idx));
         }
+
+        self.is_valid(game_data);
     }
 
     fn validate_door(&mut self, room_idx: usize, door_idx: usize, game_data: &GameData) -> Option<(usize, usize)> {
@@ -461,6 +544,33 @@ impl MapEditor {
         }
     }
 
+    fn check_map_bounds(&mut self, game_data: &GameData) {
+        let mut min_x = i32::MAX;
+        let mut min_y = i32::MAX;
+        let mut max_x = 0;
+        let mut max_y = 0;
+
+        for (room_idx, &(room_x, room_y)) in self.map.rooms.iter().enumerate() {
+            let room_geometry = &game_data.room_geometry[room_idx];
+            let room_width = room_geometry.map[0].len();
+            let room_height = room_geometry.map.len();
+
+            let room_right = (room_x + room_width) as i32;
+            let room_bottom = (room_y + room_height) as i32;
+
+            min_x = min_x.min(room_x as i32);
+            min_y = min_y.min(room_y as i32);
+            max_x = max_x.max(room_right);
+            max_y = max_y.max(room_bottom);
+        }
+
+        let map_width = (max_x - min_x) as usize;
+        let map_height = (max_y - min_y) as usize;
+        if map_width > Self::MAP_MAX_SIZE || map_height > Self::MAP_MAX_SIZE {
+            self.error_list.push(MapErrorType::MapBounds(min_x, min_y, map_width, map_height));
+        }
+    }
+
     fn check_area_transitions(&mut self, game_data: &GameData) {
         let mut connection_count = 0;
         for (room_idx, room_geometry) in game_data.room_geometry.iter().enumerate() {
@@ -533,6 +643,9 @@ impl MapEditor {
 
             if !(pos_aqueduct.0 + 2 == room_x && pos_aqueduct.1 == room_y + 4 && pos_botwoon_hallway.0 + 2 == room_x && pos_botwoon_hallway.1 == room_y + 3) {
                 self.error_list.push(MapErrorType::ToiletMultipleRooms(cross_rooms[0], cross_rooms[1]));
+            } else {
+                // Toilet is vanilla, don't check for patches
+                return;
             }
         }
         if cross_rooms.len() > 2 {
@@ -553,11 +666,21 @@ impl MapEditor {
         let (room_x, room_y) = self.map.rooms[cross_room_idx];
         let x_offset = toilet_x as i32 - room_x as i32;
         let y_offset = toilet_y as i32 - room_y as i32;
-        let patch_path = format!("../patches/mosaic/Base-{:X}-Transit-{x_offset}-{y_offset}.bps", room_ptr);
 
-        let path = Path::new(&patch_path);
-        if !path.exists() {
-            self.error_list.push(MapErrorType::ToiletNoPatch(cross_room_idx, x_offset, y_offset));
+        let offsets = match self.toilet_patch_map.get(&room_ptr) {
+            Some(vec) => vec,
+            None => {
+                self.error_list.push(MapErrorType::ToiletNoPatch(cross_room_idx, x_offset, y_offset, None));
+                return;
+            }
+        };
+
+        let min_dist_offset = *offsets.iter().min_by_key(|&&(x, y)| {
+            (x - x_offset).abs() + (y - y_offset).abs()
+        }).unwrap();
+
+        if min_dist_offset != (0, 0) {
+            self.error_list.push(MapErrorType::ToiletNoPatch(cross_room_idx, x_offset, y_offset, Some(min_dist_offset)));
         }
     }
 

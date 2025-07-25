@@ -1,4 +1,4 @@
-use crate::{backend::plando::{get_double_item_offset, DoubleItemPlacement, MapRepositoryType, Placeable, Plando, SpoilerOverride, ITEM_VALUES}, input_state::KeyState, layout::{hotkey_settings::Keybind, map_editor_ui::MapEditorUi, Layout, WindowType}};
+use crate::{backend::{map_editor::MapErrorType, plando::{get_double_item_offset, DoubleItemPlacement, MapRepositoryType, Placeable, Plando, SpoilerOverride, ITEM_VALUES}}, input_state::KeyState, layout::{hotkey_settings::Keybind, map_editor_ui::MapEditorUi, Layout, WindowType}};
 use anyhow::{anyhow, bail, Result};
 use egui::{self, style::default_text_styles, Color32, Context, FontDefinitions, Id, Sense, TextureId, Ui, Vec2};
 use egui_sfml::{SfEgui, UserTexSource};
@@ -390,10 +390,7 @@ fn load_seed(plando: &mut Plando, path: &Path) -> Result<()> {
 
     plando.load_preset(seed_data.settings);
 
-    plando.clear_item_locations();
-    plando.clear_doors();
-
-    plando.map_editor.load_map(seed_data.map);
+    plando.load_map(seed_data.map)?;
     let start_location = if seed_data.start_location == plando.game_data.start_locations.len() {
         Plando::get_ship_start()
     } else {
@@ -432,7 +429,7 @@ fn load_seed(plando: &mut Plando, path: &Path) -> Result<()> {
 
     plando.spoiler_overrides = seed_data.spoiler_overrides;
 
-    plando.update_spoiler_data();
+    plando.update_spoiler_data()?;
     plando.auto_update_spoiler = auto_update;
 
     Ok(())
@@ -690,20 +687,20 @@ fn get_explored_color(value: u8, area: usize) -> graphics::Color {
     }
 }
 
-fn load_textures(game_data: &GameData) -> (ImplUserTexSource, Vec<usize>) {
+fn load_textures(game_data: &GameData) -> Result<(ImplUserTexSource, Vec<usize>)> {
     let mut user_tex_source = ImplUserTexSource::new();
 
-    let img_items = graphics::Image::from_file("../visualizer/items.png").unwrap();
-    let tex_items = graphics::Texture::from_image(&img_items, IntRect::default()).unwrap();
+    let img_items = graphics::Image::from_file("../visualizer/items.png")?;
+    let tex_items = graphics::Texture::from_image(&img_items, IntRect::default())?;
     let tex_item_width = (tex_items.size().x / 24) as i32;
 
-    let img_doors = generate_door_sprites().unwrap();
+    let img_doors = generate_door_sprites()?;
     let img_door_width = (img_doors.size().x / 8) as i32;
 
-    let tex_helm = graphics::Texture::from_file("../visualizer/helm.png").unwrap();
-    let tex_bosses = graphics::Texture::from_file("../visualizer/bosses.png").unwrap();
-    let tex_minibosses = graphics::Texture::from_file("../visualizer/minibosses.png").unwrap();
-    let tex_misc = graphics::Texture::from_file("../visualizer/misc.png").unwrap();
+    let tex_helm = graphics::Texture::from_file("../visualizer/helm.png")?;
+    let tex_bosses = graphics::Texture::from_file("../visualizer/bosses.png")?;
+    let tex_minibosses = graphics::Texture::from_file("../visualizer/minibosses.png")?;
+    let tex_misc = graphics::Texture::from_file("../visualizer/misc.png")?;
 
     user_tex_source.add_texture(Placeable::Helm as u64, tex_helm);
     user_tex_source.add_texture(UserTexId::FlagTypeBosses as u64, tex_bosses);
@@ -713,13 +710,13 @@ fn load_textures(game_data: &GameData) -> (ImplUserTexSource, Vec<usize>) {
     // Add item textures to egui
     for i in 0..22 {
         let source_rect = IntRect::new(i * tex_item_width, 0, tex_item_width, img_items.size().y as i32);
-        let tex = graphics::Texture::from_image(&img_items, source_rect).unwrap();
+        let tex = graphics::Texture::from_image(&img_items, source_rect)?;
         user_tex_source.add_texture(Placeable::ETank as u64 + i as u64, tex);
     }
     // Add Door textures to egui
     for i in 0..9 {
         let source_rect = IntRect::new(i * img_door_width, 0, img_door_width, img_doors.size().y as i32);
-        let tex = graphics::Texture::from_image(&img_doors, source_rect).unwrap();
+        let tex = graphics::Texture::from_image(&img_doors, source_rect)?;
         user_tex_source.add_texture(Placeable::DoorMissile as u64 + i as u64, tex);
     }
     // Add Flag textures to egui
@@ -733,7 +730,7 @@ fn load_textures(game_data: &GameData) -> (ImplUserTexSource, Vec<usize>) {
         }
     }
 
-    (user_tex_source, flag_has_tex)
+    Ok((user_tex_source, flag_has_tex))
 }
 
 // Creates a texture atlas and maps all rooms into it
@@ -1000,11 +997,11 @@ fn generate_door_sprites() -> Result<FBox<graphics::Image>> {
     let mut img_doors = graphics::Image::new_solid(3 * 9, 8, Color::TRANSPARENT).unwrap();
     for x in 0..9 {
         let door_color_index = match x {
-            0 | 5 => 7,
-            1 | 7 => 14,
-            2 | 6 => 6,
-            3 | 8 => 15,
-            4 => 8,
+            0 | 4 => 7,
+            1 | 6 => 14,
+            2 | 3 => 6,
+            7 | 8 => 15,
+            5 => 8,
             _ => 15
         };
         
@@ -1111,7 +1108,7 @@ enum UserTexId {
     FlagTypeBosses,
     FlagTypeMinibosses,
     FlagTypeMisc,
-    FlagFirst
+    FlagFirst,
 }
 
 enum CustomizeLogicWindow {
@@ -1251,7 +1248,7 @@ impl PlandoApp {
         let rom_vanilla_path = Path::new(&settings.rom_path);
         let rom_vanilla = load_vanilla_rom(rom_vanilla_path).ok();
 
-        let (user_tex_source, flag_has_tex) = load_textures(&plando.game_data);
+        let (user_tex_source, flag_has_tex) = load_textures(&plando.game_data)?;
 
         let obj_room_map: HashMap<usize, Objective> = vec![
             Objective::Kraid,
@@ -1290,7 +1287,7 @@ impl PlandoApp {
         mouse_state.click_pos_leniency = settings.mouse_click_pos_tolerance as f32;
         mouse_state.click_time_leniency = settings.mouse_click_delay_tolerance as u32;
 
-        let mut layout = Layout::new();
+        let mut layout = Layout::new()?;
         for hotkey in Hotkeys::VARIANTS {
             let mut keybind = hotkey.to_keybind();
             if let Some(bind) = settings.hotkeys.get(&(*hotkey as usize)) {
@@ -1338,6 +1335,10 @@ impl PlandoApp {
 
     fn update_settings(&mut self) {
         self.settings.hotkeys = self.layout.hotkey_settings.get_hotkeys().iter().map(|bind| (bind.id, bind.bind.iter().cloned().collect())).collect();
+    }
+
+    fn global_seconds(&self) -> f32 {
+        self.global_timer as f32 / self.settings.fps_cap as f32
     }
 
     fn patch_rom(&self, save_path: &Path) -> Result<()> {
@@ -1577,7 +1578,11 @@ impl PlandoApp {
                         match Hotkeys::VARIANTS[idx] {
                             Hotkeys::IncrementStep => self.spoiler_step += 1,
                             Hotkeys::DecrementStep => if self.spoiler_step > 0 { self.spoiler_step -= 1 },
-                            Hotkeys::UpdateSpoiler => { self.plando.update_spoiler_data(); },
+                            Hotkeys::UpdateSpoiler => {
+                                if let Err(err) = self.plando.update_spoiler_data() {
+                                    self.modal_type = ModalType::Error(err.to_string());
+                                }
+                            },
                             Hotkeys::OpenSpoilerOverride => self.override_window = Some(self.spoiler_step + 1),
                             Hotkeys::ToggleAutoSpoiler => {
                                 self.plando.auto_update_spoiler ^= true;
@@ -1614,7 +1619,6 @@ impl PlandoApp {
                 }
 
                 // Draw the entire map
-                let mut info_overlay_opt = None;
                 {
                     let spr_map = graphics::Sprite::with_texture(self.tex_base_map.texture());
                     window.draw_with_renderstates(&spr_map, &states);
@@ -1630,38 +1634,29 @@ impl PlandoApp {
                 self.draw_gray_doors(&mut *window, &states);
 
                 // Draw items
-                if let Some(s) = self.draw_items(&mut *window, &states, sidebar_selection, &tex_items) {
-                    info_overlay_opt = Some(s);
-                }
+                self.draw_items(&mut *window, &states, sidebar_selection, &tex_items);
 
                 // Draw flags
-                if let Some(s) = self.draw_flags(&mut *window, &states, sidebar_selection) {
-                    info_overlay_opt = Some(s);
-                }
+                self.draw_flags(&mut *window, &states, sidebar_selection);
 
                 // Handle map io after all other io has been handled, also draws errors and editor overlays
                 if sidebar_selection.is_none() {
-                    if let Some(s) = self.handle_map_io(&mut *window, &states) {
-                        info_overlay_opt = Some(s);
-                    }
+                    self.handle_map_io(&mut *window, &states);
                 }
         
                 // Draw Door hover
                 self.draw_door_hover(&mut *window, &states, sidebar_selection);
 
                 // Draw the info overlay
-                if let Some(info_overlay) = info_overlay_opt {
-                    let mut text = graphics::Text::new(&info_overlay, &font_default, 16);
-                    text.set_fill_color(graphics::Color::WHITE);
-                    text.set_position(Vector2f::new(self.mouse_state.mouse_x as f32 + 16.0, self.mouse_state.mouse_y as f32));
-                    let mut bg_rect = graphics::RectangleShape::new();
-                    bg_rect.set_position(Vector2f::new(self.mouse_state.mouse_x as f32 + 12.0, self.mouse_state.mouse_y as f32));
-                    bg_rect.set_size(Vector2f::new(text.global_bounds().size().x + 8.0, 24.0));
-                    bg_rect.set_fill_color(graphics::Color::rgba(0x1F, 0x1F, 0x1F, 0xBF));
-
-                    window.draw(&bg_rect);
-                    window.draw(&text);
-                }
+                let window_size = window.size();
+                self.layout.info_overlay_builder.render(
+                    &mut *window,
+                    self.mouse_state.mouse_x,
+                    self.mouse_state.mouse_y,
+                    window_size.x as f32 - self.mouse_state.mouse_x - sidebar_width,
+                    &font_default,
+                    14
+                );
 
                 // Draw spoiler route
                 self.draw_spoiler_route(&mut *window, &states);
@@ -1780,7 +1775,7 @@ impl PlandoApp {
                                     .add_filter("JSON File", &["json"])
                                     .pick_file();
                                 if let Some(file) = file_opt {
-                                    let res = self.plando.map_editor.load_map_from_file(&self.plando.game_data, &file);
+                                    let res = self.plando.load_map_from_file(&file);
                                     if let Err(err) = res {
                                         self.modal_type = ModalType::Error(err.to_string())
                                     };
@@ -1812,7 +1807,7 @@ impl PlandoApp {
                                     }
                                 }
                                 self.plando.auto_update_spoiler = auto_update;
-                                self.plando.update_spoiler_data();
+                                let _ = self.plando.update_spoiler_data();
                                 ui.close_menu();
                             }
                             if ui.button("Randomize Doors").clicked() {
@@ -1834,7 +1829,7 @@ impl PlandoApp {
 
                                 self.plando.auto_update_spoiler = update;
                                 if update {
-                                    self.plando.update_spoiler_data();
+                                    let _ = self.plando.update_spoiler_data();
                                 }
                             }
 
@@ -1842,7 +1837,7 @@ impl PlandoApp {
                             if ui.button("Reset all Spoiler Overrides").clicked() {
                                 self.plando.spoiler_overrides.clear();
                                 if self.plando.auto_update_spoiler {
-                                    self.plando.update_spoiler_data();
+                                    let _ = self.plando.update_spoiler_data();
                                 }
                             }
                         });
@@ -1917,7 +1912,7 @@ impl PlandoApp {
                                 }
                             }
                         });*/
-                        if ui.button("Help").clicked() {
+                        if ui.button("Github").clicked() {
                             if let Err(err) = open::that("https://github.com/Noktuska/maprando-plando/blob/main/README.md") {
                                 self.modal_type = ModalType::Error(err.to_string());
                             }
@@ -2026,7 +2021,7 @@ impl PlandoApp {
         }
     }
 
-    fn handle_map_io(&mut self, rt: &mut dyn RenderTarget, states: &RenderStates) -> Option<String> {
+    fn handle_map_io(&mut self, rt: &mut dyn RenderTarget, states: &RenderStates) {
         let mut info_overlay = None;
 
         let mouse_tile_x = ((self.local_mouse_x / 8.0).floor().max(0.0) as usize).min(PlandoApp::GRID_SIZE);
@@ -2125,104 +2120,93 @@ impl PlandoApp {
         }
 
         // Draw any errors
-        //self.draw_map_error_overlay(rt, states);
+        self.draw_map_error_overlay(rt, states);
 
         if should_redraw {
             self.redraw_map();
         }
 
-        info_overlay
+        if let Some(io) = info_overlay {
+            self.layout.info_overlay_builder.new_line(io, Color::WHITE);
+        }
     }
 
-    /*fn draw_map_error_overlay(&mut self, rt: &mut dyn RenderTarget, states: &RenderStates) -> Option<String> {
+    fn draw_map_error_overlay(&mut self, rt: &mut dyn RenderTarget, states: &RenderStates) {
         let mut res = None;
-        for &err in &self.map_editor.error_list {
-            res = match err {
+
+        let mouse_tile_x = (self.local_mouse_x / 8.0).floor() as i32;
+        let mouse_tile_y = (self.local_mouse_y / 8.0).floor() as i32;
+
+        for i in 0..self.plando.map_editor.error_list.len() {
+            let rects = match self.plando.map_editor.error_list[i] {
                 MapErrorType::DoorDisconnected(room_idx, door_idx) => {
+                    let (room_x, room_y) = self.plando.map().rooms[room_idx];
                     let door = &self.plando.game_data.room_geometry[room_idx].doors[door_idx];
-                    if self.highlight_room_red(rt, states, room_idx, vec![(door.x, door.y)]) {
-                        Some("Door is not connected".to_string())
-                    } else { None }
+                    vec![IntRect::new((room_x + door.x) as i32, (room_y + door.y) as i32, 1, 1)]
                 },
                 MapErrorType::AreaBounds(area, w, h) => {
-                    let mut any_hovered = false;
-                    for room_idx in 0..self.plando.map.rooms.len() {
-                        if self.plando.map.area[room_idx] == area {
-                            any_hovered |= self.highlight_room_red(rt, states, room_idx, Vec::new());
-                        }
-                    }
-                    if any_hovered {
-                        Some(format!("Area exceeds boundary limit of ({}, {}), currently ({w}, {h})", MapEditor::AREA_MAX_WIDTH, MapEditor::AREA_MAX_HEIGHT))
-                    } else { None }
+                    (0..self.plando.map().rooms.len()).filter(|&room_idx| {
+                        self.plando.map().area[room_idx] == area
+                    }).map(|room_idx| {
+                        self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data)
+                    }).collect()
                 },
                 MapErrorType::AreaTransitions(num) => {
-                    None
+                    vec![]
                 },
-                MapErrorType::MapPerArea(_) => todo!(),
-                MapErrorType::PhantoonMap => todo!(),
-                MapErrorType::PhantoonSave => todo!(),
-                MapErrorType::ToiletNoRoom => todo!(),
-                MapErrorType::ToiletMultipleRooms(_, _) => todo!(),
-                MapErrorType::ToiletArea(_, _, _) => todo!(),
-                MapErrorType::ToiletNoPatch(_, _, _) => todo!(),
+                MapErrorType::MapPerArea(room_idx) => {
+                    vec![self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data)]
+                },
+                MapErrorType::MapBounds(x, y, width, height) => {
+                    vec![IntRect::new(x, y, width as i32, height as i32)]
+                }
+                MapErrorType::PhantoonMap => {
+                    let room_idx = self.plando.game_data.room_idx_by_name["Wrecked Ship Map Room"];
+                    vec![self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data)]
+                },
+                MapErrorType::PhantoonSave => {
+                    let room_idx = self.plando.game_data.room_idx_by_name["Wrecked Ship Save Room"];
+                    vec![self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data)]
+                },
+                MapErrorType::ToiletNoRoom => {
+                    let room_idx = self.plando.game_data.toilet_room_idx;
+                    vec![self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data)]
+                },
+                MapErrorType::ToiletMultipleRooms(room_idx1, room_idx2) => {
+                    let room_idx = self.plando.game_data.toilet_room_idx;
+                    vec![self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data),
+                    self.plando.map_editor.get_room_bounds(room_idx1, &self.plando.game_data),
+                    self.plando.map_editor.get_room_bounds(room_idx2, &self.plando.game_data)]
+                },
+                MapErrorType::ToiletArea(room_idx, _, _) => {
+                    vec![self.plando.map_editor.get_room_bounds(self.plando.game_data.toilet_room_idx, &self.plando.game_data),
+                    self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data)]
+                },
+                MapErrorType::ToiletNoPatch(_, _, _, _) => {
+                    vec![self.plando.map_editor.get_room_bounds(self.plando.game_data.toilet_room_idx, &self.plando.game_data)]
+                },
+            };
+
+            if rects.iter().any(|rect| rect.contains2(mouse_tile_x, mouse_tile_y)) {
+                res = Some(self.plando.map_editor.error_list[i].to_string(&self.plando.game_data));
+            }
+            
+            if !rects.is_empty() {
+                self.layout.render_selection.render(rt, states, rects, Color::RED, self.global_seconds());
             }
         }
-        res
-    }*/
 
-    fn highlight_room_red(&self, rt: &mut dyn RenderTarget, states: &RenderStates, room_idx: usize, tiles: Vec<(usize, usize)>) -> bool {
-        let mouse_tile_x = ((self.local_mouse_x / 8.0).floor().max(0.0) as usize).min(PlandoApp::GRID_SIZE);
-        let mouse_tile_y = ((self.local_mouse_y / 8.0).floor().max(0.0) as usize).min(PlandoApp::GRID_SIZE);
-
-        let (room_x, room_y) = self.plando.map().rooms[room_idx];
-        let room_geometry = &self.plando.game_data.room_geometry[room_idx];
-        
-        let local_mouse_tile_x = mouse_tile_x as i32 - room_x as i32;
-        let local_mouse_tile_y = mouse_tile_y as i32 - room_y as i32;
-
-        let mut res = false;
-        if local_mouse_tile_x >= 0 && local_mouse_tile_y >= 0 && local_mouse_tile_x < room_geometry.map[0].len() as i32
-                && local_mouse_tile_y < room_geometry.map.len() as i32 && room_geometry.map[local_mouse_tile_y as usize][local_mouse_tile_x as usize] == 1 {
-            if tiles.is_empty() || tiles.contains(&(local_mouse_tile_x as usize, local_mouse_tile_y as usize)) {
-                res = true;
-            }
+        if let Some(io) = res {
+            self.layout.info_overlay_builder.new_line(io, Color::RED);
         }
-
-        // TODO: Draw red overlay
-
-        res
     }
 
-    fn draw_room_outline(&self, rt: &mut dyn RenderTarget, states: &RenderStates, rects: Vec<IntRect>) {
-        let line_strip_len = 0.5;
-
-        let disjoint_sets = utils::disjoin_rects(rects);
-
-        for rect_set in disjoint_sets {
-            let path = utils::merge_rects(rect_set);
-
-            for i in 0..path.vertices.len() {
-                let v1 = path.vertices[i];
-                let v2 = path.vertices[(i + 1) % path.vertices.len()];
-                let diff = v2 - v1;
-                let len = diff.length_sq().sqrt();
-
-                let mut vbuff: Vec<Vertex> = Vec::new();
-
-                let mut step = -line_strip_len;
-                while step < len + line_strip_len {
-                    let step_clamp = step + ((self.global_timer as f32 * 0.02 * self.settings.animation_speed) % (line_strip_len * 2.0));
-                    let step_clamp = step_clamp.min(len).max(0.0);
-                    let p = (v1 + diff * step_clamp / len) * 8.0;
-
-                    vbuff.push(Vertex { position: p, color: Color::CYAN, tex_coords: Vector2f::default() });
-
-                    step += line_strip_len;
-                }
-
-                rt.draw_primitives(&vbuff, PrimitiveType::LINES, states);
-            }
+    fn draw_room_outline(&mut self, rt: &mut dyn RenderTarget, states: &RenderStates, rects: Vec<IntRect>) {
+        if rects.is_empty() {
+            return;
         }
+
+        self.layout.render_selection.render(rt, states, rects, Color::CYAN, self.global_seconds());
     }
 
     fn draw_start_locations(&mut self, rt: &mut dyn RenderTarget, states: &RenderStates, sidebar_selection: Option<Placeable>) {
@@ -2350,7 +2334,7 @@ impl PlandoApp {
         }
     }
 
-    fn draw_items(&mut self, rt: &mut dyn RenderTarget, states: &RenderStates, sidebar_selection: Option<Placeable>, tex_items: &FBox<graphics::Texture>) -> Option<String> {
+    fn draw_items(&mut self, rt: &mut dyn RenderTarget, states: &RenderStates, sidebar_selection: Option<Placeable>, tex_items: &FBox<graphics::Texture>) {
         let mut info_overlay = None;
         if sidebar_selection.is_none() || sidebar_selection.is_some_and(|x| x >= Placeable::ETank) {
             let tex_item_width = tex_items.size().x as i32 / 24;
@@ -2413,10 +2397,12 @@ impl PlandoApp {
             }
         }
 
-        info_overlay
+        if let Some(io) = info_overlay {
+            self.layout.info_overlay_builder.new_line(io, Color::WHITE);
+        }
     }
 
-    fn draw_flags(&mut self, rt: &mut dyn RenderTarget, states: &RenderStates, sidebar_selection: Option<Placeable>) -> Option<String> {
+    fn draw_flags(&mut self, rt: &mut dyn RenderTarget, states: &RenderStates, sidebar_selection: Option<Placeable>) {
         let mut info_overlay = None;
         for (i, &flag_id) in self.plando.game_data.flag_ids.iter().enumerate() {
             let vertex_info = &self.plando.get_vertex_info(self.plando.game_data.flag_vertex_ids[i][0]);
@@ -2452,7 +2438,9 @@ impl PlandoApp {
             rt.draw_with_renderstates(&spr_flag, &states);
         }
 
-        info_overlay
+        if let Some(io) = info_overlay {
+            self.layout.info_overlay_builder.new_line(io, Color::WHITE);
+        }
     }
 
     fn draw_door_hover(&mut self, rt: &mut dyn RenderTarget, states: &RenderStates, sidebar_selection: Option<Placeable>) {
@@ -2637,7 +2625,7 @@ impl PlandoApp {
                 for (row, placeable) in Placeable::VALUES.iter().enumerate() {
                     // If settigs don't allow ammo or beam doors, we don't allow their placement
                     if (*placeable >= Placeable::DoorMissile && self.plando.randomizer_settings.doors_mode == DoorsMode::Blue)
-                        || (*placeable >= Placeable::DoorCharge && self.plando.randomizer_settings.doors_mode == DoorsMode::Ammo) {
+                        || (*placeable >= Placeable::DoorSpazer && self.plando.randomizer_settings.doors_mode == DoorsMode::Ammo) {
                         break;
                     }
 

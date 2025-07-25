@@ -1,12 +1,15 @@
 pub mod hotkey_settings;
+pub mod info_overlay;
 pub mod map_editor_ui;
+pub mod render_selection;
 
+use anyhow::Result;
 use egui::{Context, Ui};
 use hashbrown::HashMap;
 use maprando::{preset::PresetData, settings::{ETankRefill, Fanfares, ItemMarkers, MotherBrainFight, ObjectiveScreen, ObjectiveSetting, RandomizerSettings, StartingItemsPreset}};
 use maprando_game::Item;
 
-use crate::{backend::plando::Placeable, layout::hotkey_settings::HotkeySettingsWindow};
+use crate::{backend::plando::Placeable, layout::{hotkey_settings::HotkeySettingsWindow, info_overlay::InfoOverlayBuilder, render_selection::RenderSelection}};
 
 pub fn window_skill_assumptions(height: f32, open: &mut bool, cur_settings: &mut RandomizerSettings, preset_data: &PresetData, ctx: &Context) {
     egui::Window::new("Customize Skill Assumptions").collapsible(false).vscroll(true).max_height(height).resizable(false).open(open).show(ctx, |ui| {
@@ -473,6 +476,9 @@ pub fn window_objectives(height: f32, open: &mut bool, cur_settings: &mut Random
 
 pub struct Layout {
     pub hotkey_settings: HotkeySettingsWindow,
+    
+    pub render_selection: RenderSelection,
+    pub info_overlay_builder: InfoOverlayBuilder,
 
     window_stack: Vec<WindowType>
 }
@@ -483,11 +489,13 @@ pub enum WindowType {
 }
 
 impl Layout {
-    pub fn new() -> Self {
-        Layout {
+    pub fn new() -> Result<Self> {
+        Ok(Layout {
             hotkey_settings: HotkeySettingsWindow::new(),
+            render_selection: RenderSelection::new()?,
+            info_overlay_builder: InfoOverlayBuilder::new(),
             window_stack: Vec::new()
-        }
+        })
     }
 
     pub fn is_open_any(&self) -> bool {
