@@ -768,17 +768,19 @@ impl Plando {
         } else if placeable == Placeable::WalljumpBoots {
             return if self.randomizer_settings.other_settings.wall_jump == WallJump::Vanilla { Some(0) } else { Some(1) };
         } else if placeable < Placeable::DoorMissile {
-            let item_pool = &self.randomizer_settings.item_progression_settings.item_pool;
             let count = match placeable {
-                Placeable::Missile => item_pool.iter().find(|elem| elem.item == Item::Missile).unwrap().count,
-                Placeable::SuperMissile => item_pool.iter().find(|elem| elem.item == Item::Super).unwrap().count,
-                Placeable::PowerBomb => item_pool.iter().find(|elem| elem.item == Item::PowerBomb).unwrap().count,
-                Placeable::ETank => item_pool.iter().find(|elem| elem.item == Item::ETank).unwrap().count,
-                Placeable::ReserveTank => item_pool.iter().find(|elem| elem.item == Item::ReserveTank).unwrap().count,
+                Placeable::Missile => return None,
+                Placeable::SuperMissile => return None,
+                Placeable::PowerBomb => return None,
+                Placeable::ETank => 14,
+                Placeable::ReserveTank => 4,
                 _ => 0
             };
             let item = placeable.to_item().unwrap();
             if let Some(item_count) = self.randomizer_settings.item_progression_settings.starting_items.iter().find(|x| x.item == item) {
+                if count < item_count.count {
+                    return Some(0);
+                }
                 return Some(count - item_count.count);
             }
             return Some(count);

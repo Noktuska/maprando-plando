@@ -3542,7 +3542,7 @@ impl PlandoApp {
                 ui.end_row();
 
                 // Item progression
-                ui.label("Item Progression").on_hover_text("These presets are mostly visual (except for Desolate), as they affect item progression");
+                /*ui.label("Item Progression").on_hover_text("These presets are mostly visual (except for Desolate), as they affect item progression");
                 for preset in &self.plando.preset_data.item_progression_presets {
                     if ui.selectable_label(cur_settings.item_progression_settings == *preset, preset.preset.as_ref().unwrap()).clicked() {
                         cur_settings.item_progression_settings = preset.clone();
@@ -3551,7 +3551,7 @@ impl PlandoApp {
                 if ui.button("Custom").clicked() {
                     self.cur_customize_logic_window = CustomizeLogicWindow::ItemProgression;
                 }
-                ui.end_row();
+                ui.end_row();*/
 
                 // Quality of Life
                 ui.label("Quality-of-life options");
@@ -3685,7 +3685,7 @@ impl PlandoApp {
             CustomizeLogicWindow::SkillAssumption => {
                 layout::window_skill_assumptions(height, &mut self.is_customize_window_open, cur_settings, &self.plando.preset_data, ctx);
             }
-            CustomizeLogicWindow::ItemProgression => {
+            CustomizeLogicWindow::ItemProgression => { // TODO: Remove, unused
                 layout::window_item_progression(height, &mut self.is_customize_window_open, cur_settings, ctx);
             }
             CustomizeLogicWindow::Qol => {
