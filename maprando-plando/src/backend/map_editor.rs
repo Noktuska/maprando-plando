@@ -631,8 +631,8 @@ impl MapEditor {
         }
         if cross_rooms.len() == 2 {
             // Check for vanilla toilet intersection
-            let idx_aqueduct = game_data.room_idx_by_name["Aqueduct"];
-            let idx_botwoon_hallway = game_data.room_idx_by_name["Botwoon Hallway"];
+            let idx_aqueduct = game_data.room_idx_by_ptr[&513447];
+            let idx_botwoon_hallway = game_data.room_idx_by_ptr[&513559];
 
             if !cross_rooms.contains(&idx_aqueduct) || !cross_rooms.contains(&idx_botwoon_hallway) {
                 self.error_list.push(MapErrorType::ToiletMultipleRooms(cross_rooms[0], cross_rooms[1]));
@@ -699,8 +699,8 @@ impl MapEditor {
         }
 
         // Check Phantoon Map is connected to Phantoon through one room in a singular area
-        let phantoon_map_idx = game_data.room_idx_by_name["Wrecked Ship Map Room"];
-        let phantoon_room_idx = game_data.room_idx_by_name["Phantoon's Room"];
+        let phantoon_map_idx = game_data.room_idx_by_ptr[&511179];
+        let phantoon_room_idx = game_data.room_idx_by_ptr[&511251];
         let phantoon_map_door = &game_data.room_geometry[phantoon_map_idx].doors[0];
         let phantoon_room_door = &game_data.room_geometry[phantoon_room_idx].doors[0];
         let phantoon_map_ptr_pair = (phantoon_map_door.exit_ptr, phantoon_map_door.entrance_ptr);
@@ -728,7 +728,7 @@ impl MapEditor {
         }
 
         // Check if Phantoon's Save is in the same Area as Phantoon
-        let phantoon_save_idx = game_data.room_idx_by_name["Wrecked Ship Save Room"];
+        let phantoon_save_idx = game_data.room_idx_by_ptr[&511626];
         let area_save = self.map.area[phantoon_save_idx];
         if area_save != area_phantoon {
             self.error_list.push(MapErrorType::PhantoonSave);
