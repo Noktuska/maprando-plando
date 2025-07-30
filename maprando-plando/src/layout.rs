@@ -4,6 +4,7 @@ pub mod map_editor_ui;
 pub mod render_selection;
 
 pub mod settings_logic;
+pub mod settings_customize;
 
 mod settings_gen;
 
