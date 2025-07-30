@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::{anyhow, bail, Result};
 use hashbrown::{HashMap, HashSet};
 use maprando::{customize::{mosaic::MosaicTheme, samus_sprite::SamusSpriteCategory}, map_repository::MapRepository, preset::PresetData, randomize::{DebugData, DifficultyConfig, DoorState, FlagLocationState, ItemLocationState, LockedDoor, Randomization, RandomizationState, Randomizer, SaveLocationState, SpoilerDetails, SpoilerDoorDetails, SpoilerDoorSummary, SpoilerFlagDetails, SpoilerFlagSummary, SpoilerItemDetails, SpoilerItemSummary, SpoilerLocation, SpoilerLog, SpoilerSummary, StartLocationData}, settings::{Objective, RandomizerSettings, WallJump}, traverse::{apply_requirement, get_bireachable_idxs, get_spoiler_route, traverse, LockedDoorData}};
-use maprando_game::{BeamType, DoorPtrPair, DoorType, GameData, HubLocation, Item, ItemLocationId, LinksDataGroup, Map, NodeId, RoomId, StartLocation, VertexKey};
+use maprando_game::{BeamType, Capacity, DoorPtrPair, DoorType, GameData, HubLocation, Item, ItemLocationId, LinksDataGroup, Map, NodeId, Requirement, RoomId, StartLocation, VertexKey};
 use maprando_logic::{GlobalState, Inventory, LocalState};
 use rand::{rngs::StdRng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
@@ -164,9 +164,14 @@ pub struct SpoilerOverride {
     pub description: String
 }
 
+struct ImplicitPresetData {
+    difficulty_tiers: Vec<DifficultyConfig>,
+    implicit_tech: Vec<i32>,
+    implicit_notables: Vec<(usize, usize)>,
+}
+
 pub struct Plando {
     pub game_data: GameData,
-    pub preset_data: PresetData,
     pub samus_sprite_categories: Vec<SamusSpriteCategory>,
     pub mosaic_themes: Vec<MosaicTheme>,
     pub difficulty_tiers: Vec<DifficultyConfig>,
@@ -187,6 +192,7 @@ pub struct Plando {
     door_lock_loc: Vec<(usize, usize, usize)>,
     door_beam_loc: Vec<(usize, usize, usize)>,
     total_door_count: usize,
+    preset_data: ImplicitPresetData,
 
     pub randomization: Option<(Randomization, SpoilerLog)>,
 
@@ -196,9 +202,7 @@ pub struct Plando {
 }
 
 impl Plando {
-    pub fn new() -> Result<Self> {
-        let game_data = load_game_data()?;
-
+    pub fn new(game_data: GameData, randomizer_settings: RandomizerSettings, preset_data: &PresetData) -> Result<Self> {
         let samus_sprites_path = Path::new("../MapRandoSprites/samus_sprites/manifest.json");
         let samus_sprite_categories: Vec<SamusSpriteCategory> = serde_json::from_str(&std::fs::read_to_string(&samus_sprites_path).unwrap()).unwrap();
         let mosaic_themes = vec![
@@ -234,29 +238,15 @@ impl Plando {
             println!("WARN: Wild Map Repository not found");
         }
 
-        let preset_data = load_preset_data(&game_data)?;
-
         let map = roll_map(&maps_vanilla, &game_data)?;
         let map_editor = MapEditor::new(map);
-
-        let randomizer_settings = preset_data.default_preset.clone();
 
         let mut rng = rand::rngs::StdRng::from_entropy();
         let objectives = maprando::randomize::get_objectives(&randomizer_settings, &mut rng);
         let randomizable_door_connections = get_randomizable_door_connections(&game_data, map_editor.get_map(), &objectives);
 
-        let mut ship_start = StartLocation::default();
-        ship_start.name = "Ship".to_string();
-        ship_start.room_id = 8;
-        ship_start.node_id = 5;
-        ship_start.door_load_node_id = Some(2);
-        ship_start.x = 72.0;
-        ship_start.y = 69.5;
-
-        let mut ship_hub = HubLocation::default();
-        ship_hub.name = "Ship".to_string();
-        ship_hub.room_id = 8;
-        ship_hub.node_id = 5;
+        let ship_start = Self::get_ship_start();
+        let ship_hub = Self::get_ship_hub(&game_data);
 
         let start_location_data = StartLocationData {
             start_location: ship_start,
@@ -268,12 +258,16 @@ impl Plando {
         let mut placed_item_count = [0usize; Placeable::VALUES.len()];
         placed_item_count[0] = 1;
 
-
         let item_location_len = game_data.item_locations.len();
+
+        let impl_preset_data = ImplicitPresetData {
+            difficulty_tiers: preset_data.difficulty_tiers.clone(),
+            implicit_tech: preset_data.tech_by_difficulty["Implicit"].clone(),
+            implicit_notables: preset_data.notables_by_difficulty["Implicit"].clone()
+        };
 
         let mut plando = Plando {
             game_data,
-            preset_data,
             samus_sprite_categories,
             mosaic_themes,
             difficulty_tiers: Vec::new(),
@@ -294,6 +288,7 @@ impl Plando {
             door_lock_loc: Vec::new(),
             door_beam_loc: Vec::new(),
             total_door_count: 0,
+            preset_data: impl_preset_data,
             randomization: None,
 
             rng,
@@ -409,8 +404,8 @@ impl Plando {
             &self.randomizer_settings, 
             &self.preset_data.difficulty_tiers, 
             &self.game_data, 
-            &self.preset_data.tech_by_difficulty["Implicit"],
-            &self.preset_data.notables_by_difficulty["Implicit"]
+            &self.preset_data.implicit_tech,
+            &self.preset_data.implicit_notables
         );
     }
 
@@ -423,6 +418,18 @@ impl Plando {
         ship_start.x = 72.0;
         ship_start.y = 69.5;
         ship_start
+    }
+
+    pub fn get_ship_hub(game_data: &GameData) -> HubLocation {
+        HubLocation {
+            room_id: 8,
+            node_id: 5,
+            vertex_id: game_data.vertex_isv.index_by_key[&VertexKey {
+                room_id: 8,
+                node_id: 5,
+                ..Default::default()
+            }]
+        }
     }
 
     pub fn place_start_location(&mut self, start_loc: StartLocation) -> Result<()> {
@@ -443,10 +450,7 @@ impl Plando {
         let start_loc = &self.start_location_data.start_location;
         // Ship location
         if start_loc.room_id == 8 && start_loc.node_id == 5 && start_loc.x == 72.0 && start_loc.y == 69.5 {
-            let mut ship_hub = HubLocation::default();
-            ship_hub.name = "Ship".to_string();
-            ship_hub.room_id = 8;
-            ship_hub.node_id = 5;
+            let ship_hub = Self::get_ship_hub(&self.game_data);
             self.start_location_data.hub_location = ship_hub;
             self.start_location_data.hub_obtain_route = Vec::new();
             self.start_location_data.hub_return_route = Vec::new();
@@ -460,8 +464,8 @@ impl Plando {
         }
 
         let locked_door_data = self.get_locked_door_data();
-        let implicit_tech = &self.preset_data.tech_by_difficulty["Implicit"];
-        let implicit_notables = &self.preset_data.notables_by_difficulty["Implicit"];
+        let implicit_tech = &self.preset_data.implicit_tech;
+        let implicit_notables = &self.preset_data.implicit_notables;
         let difficulty = DifficultyConfig::new(
             &self.randomizer_settings.skill_assumption_settings,
             &self.game_data,
@@ -497,7 +501,7 @@ impl Plando {
         let local = apply_requirement(
             &self.start_location_data.start_location.requires_parsed.as_ref().unwrap(),
             &global,
-            LocalState::new(),
+            LocalState::full(),
             false,
             &self.randomizer_settings,
             &self.difficulty_tiers[0],
@@ -523,27 +527,12 @@ impl Plando {
             &locked_door_data,
             &self.objectives,
         );
-        let forward0 = traverse(
-            &randomizer.base_links_data,
-            &randomizer.seed_links_data,
-            None,
-            &global,
-            LocalState::new(),
-            num_vertices,
-            start_vertex_id,
-            false,
-            &self.randomizer_settings,
-            &self.difficulty_tiers[0],
-            &self.game_data,
-            &locked_door_data,
-            &self.objectives,
-        );
         let reverse = traverse(
             &randomizer.base_links_data,
             &randomizer.seed_links_data,
             None,
             &global,
-            LocalState::new(),
+            LocalState::full(),
             num_vertices,
             start_vertex_id,
             true,
@@ -554,50 +543,74 @@ impl Plando {
             &self.objectives,
         );
 
-        for hub in &self.game_data.hub_locations {
-            let hub_vertex_id = self.game_data.vertex_isv.index_by_key[&VertexKey {
-                room_id: hub.room_id,
-                node_id: hub.node_id,
-                obstacle_mask: 0,
-                actions: vec![]
-            }];
-            if !forward.cost[hub_vertex_id].iter().any(|&x| x.is_finite()) {
+        let mut best_hub_vertex_id = start_vertex_id;
+        let mut best_hub_cost = global.inventory.max_energy - 1;
+        for &(hub_vertex_id, ref hub_req) in [(start_vertex_id, Requirement::Free)].iter().chain(self.game_data.hub_farms.iter()) {
+            if get_bireachable_idxs(&global, hub_vertex_id, &forward, &reverse).is_none() {
                 continue;
             }
-            if let Some((forward_cost_idx, reverse_cost_idx)) = get_bireachable_idxs(&global, hub_vertex_id, &forward0, &reverse) {
-                let local = apply_requirement(
-                    &hub.requires_parsed.as_ref().unwrap(),
-                    &global,
-                    LocalState::new(),
-                    false,
-                    &self.randomizer_settings,
-                    &self.difficulty_tiers[0],
-                    &self.game_data,
-                    &locked_door_data,
-                    &self.objectives
-                );
-                if local.is_some() {
-                    let hub_obtain_link_idxs = get_spoiler_route(&forward, hub_vertex_id, forward_cost_idx);
-                    let hub_return_link_idxs = get_spoiler_route(&reverse, hub_vertex_id, reverse_cost_idx);
 
-                    let hub_obtain_route = randomizer.get_spoiler_route(&global, LocalState::new(), &hub_obtain_link_idxs, &difficulty, false);
-                    let hub_return_route = randomizer.get_spoiler_route(&global, LocalState::new(), &hub_return_link_idxs, &difficulty, true);
-                
-                    self.start_location_data.hub_location = hub.clone();
-                    self.start_location_data.hub_obtain_route = hub_obtain_route;
-                    self.start_location_data.hub_return_route = hub_return_route;
-                    self.dirty = true;
+            let new_local = apply_requirement(
+                hub_req,
+                &global,
+                LocalState::empty(&global),
+                false,
+                &self.randomizer_settings,
+                &self.difficulty_tiers[0],
+                &self.game_data,
+                &locked_door_data,
+                &self.objectives
+            );
 
-                    if self.auto_update_spoiler {
-                        self.update_spoiler_data()?;
-                    }
-
-                    return Ok(());
-                }
+            let hub_cost = match new_local {
+                Some(loc) => loc.energy_used,
+                None => Capacity::MAX
+            };
+            if hub_cost < best_hub_cost {
+                best_hub_cost = hub_cost;
+                best_hub_vertex_id = hub_vertex_id;
             }
         }
 
-        bail!("Could not find suitable hub location")
+        let Some((forward_cost_idx, reverse_cost_id)) = get_bireachable_idxs(&global, best_hub_vertex_id, &forward, &reverse)
+        else {
+            bail!("Inconsistent result from get_bireachable_idxs")
+        };
+
+        let vertex_key = self.game_data.vertex_isv.keys[best_hub_vertex_id].clone();
+        let hub_location = HubLocation {
+            room_id: vertex_key.room_id,
+            node_id: vertex_key.node_id,
+            vertex_id: best_hub_vertex_id
+        };
+
+        let hub_obtain_link_idxs = get_spoiler_route(&forward, best_hub_vertex_id, forward_cost_idx);
+        let hub_return_link_idxs = get_spoiler_route(&reverse, best_hub_vertex_id, reverse_cost_id);
+
+        let hub_obtain_route = randomizer.get_spoiler_route(
+            &global,
+            local.unwrap(),
+            &hub_obtain_link_idxs,
+            &self.difficulty_tiers[0],
+            false
+        );
+        let hub_return_route = randomizer.get_spoiler_route(
+            &global,
+            LocalState::full(),
+            &hub_return_link_idxs,
+            &self.difficulty_tiers[0],
+            true
+        );
+
+        self.start_location_data.hub_location = hub_location;
+        self.start_location_data.hub_obtain_route = hub_obtain_route;
+        self.start_location_data.hub_return_route = hub_return_route;
+        
+        if self.auto_update_spoiler {
+            self.update_spoiler_data();
+        }
+
+        Ok(())
     }
 
     pub fn place_item(&mut self, item_loc: usize, item: Item) {
@@ -889,8 +902,8 @@ impl Plando {
         self.update_overrides();
 
         let locked_door_data = self.get_locked_door_data();
-        let implicit_tech = &self.preset_data.tech_by_difficulty["Implicit"];
-        let implicit_notables = &self.preset_data.notables_by_difficulty["Implicit"];
+        let implicit_tech = &self.preset_data.implicit_tech;
+        let implicit_notables = &self.preset_data.implicit_notables;
         let difficulty = DifficultyConfig::new(
             &self.randomizer_settings.skill_assumption_settings,
             &self.game_data,
@@ -950,7 +963,8 @@ impl Plando {
             global_state: initial_global_state,
             debug_data: None,
             previous_debug_data: None,
-            key_visited_vertices: HashSet::new()
+            key_visited_vertices: HashSet::new(),
+            last_key_areas: Vec::new(),
         };
 
         randomizer.update_reachability(&mut state);
@@ -1074,8 +1088,10 @@ impl Plando {
             debug_data: None,
             previous_debug_data: None,
             key_visited_vertices: HashSet::new(),
+            last_key_areas: Vec::new()
         };
         new_state.previous_debug_data = state.debug_data.clone();
+        new_state.key_visited_vertices = state.key_visited_vertices.clone();
 
         for &item in &placed_uncollected_bireachable_items {
             new_state.global_state.collect(item, &self.game_data, self.randomizer_settings.item_progression_settings.ammo_collect_fraction, &self.difficulty_tiers[0].tech);
@@ -1108,7 +1124,7 @@ impl Plando {
             spoiler_door_details
         );
 
-        // Mark items as collected after getting spoiler data as they are not logicall bireachable
+        // Mark items as collected after getting spoiler data as they are not logically bireachable
         for item_override in overrides {
             let state = &mut new_state.item_location_state[item_override.item_idx];
             if state.collected {
@@ -1211,52 +1227,20 @@ impl Plando {
     }
 }
 
-fn load_game_data() -> Result<GameData> {
-    let sm_json_data_path = Path::new("../sm-json-data");
-    let room_geometry_path = Path::new("../room_geometry.json");
-    let escape_timings_path = Path::new("./data/escape_timings.json");
-    let start_locations_path = Path::new("./data/start_locations.json");
-    let hub_locations_path = Path::new("./data/hub_locations.json");
-    let title_screen_path = Path::new("../TitleScreen/Images");
-    let reduced_flashing_path = Path::new("./data/reduced_flashing.json");
-    let strat_videos_path = Path::new("./data/strat_videos.json");
-    let map_tiles_path = Path::new("./data/map_tiles.json");
-
-    let game_data = GameData::load(
-        sm_json_data_path,
-        room_geometry_path,
-        escape_timings_path,
-        start_locations_path,
-        hub_locations_path,
-        title_screen_path,
-        reduced_flashing_path,
-        strat_videos_path,
-        map_tiles_path,
-    );
-
-    game_data
-}
-
 pub fn load_preset(path: &Path) -> Result<RandomizerSettings> {
     let json_data = std::fs::read_to_string(path)?;
     let result = maprando::settings::parse_randomizer_settings(&json_data);
     result
 }
 
-fn load_preset_data(game_data: &GameData) -> Result<PresetData> {
-    let tech_path = Path::new("./data/tech_data.json");
-    let notable_path = Path::new("./data/notable_data.json");
-    let presets_path = Path::new("./data/presets/");
 
-    let preset_data = PresetData::load(tech_path, notable_path, presets_path, game_data);
-    preset_data
-}
 
 fn roll_map(repo: &MapRepository, game_data: &GameData) -> Result<Map> {
     let mut rng = rand::rngs::StdRng::from_entropy();
 
     let map_seed = (rng.next_u64() & 0xFFFFFFFF) as usize;
-    repo.get_map(1, map_seed, game_data)
+    let mut map_vec = repo.get_map_batch(map_seed, game_data)?;
+    map_vec.pop().ok_or(anyhow!("Map repository is empty"))
 }
 
 
