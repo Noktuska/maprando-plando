@@ -2036,6 +2036,7 @@ dependencies = [
  "serde_json",
  "sfml",
  "strum",
+ "strum_macros",
  "tar",
  "zip",
 ]
