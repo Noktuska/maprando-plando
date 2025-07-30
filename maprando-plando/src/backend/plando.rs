@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::{anyhow, bail, Result};
 use hashbrown::{HashMap, HashSet};
-use maprando::{customize::{mosaic::MosaicTheme, samus_sprite::SamusSpriteCategory}, map_repository::MapRepository, preset::PresetData, randomize::{DebugData, DifficultyConfig, DoorState, FlagLocationState, ItemLocationState, LockedDoor, Randomization, RandomizationState, Randomizer, SaveLocationState, SpoilerDetails, SpoilerDoorDetails, SpoilerDoorSummary, SpoilerFlagDetails, SpoilerFlagSummary, SpoilerItemDetails, SpoilerItemSummary, SpoilerLocation, SpoilerLog, SpoilerSummary, StartLocationData}, settings::{Objective, RandomizerSettings, WallJump}, traverse::{apply_requirement, get_bireachable_idxs, get_spoiler_route, traverse, LockedDoorData}};
+use maprando::{map_repository::MapRepository, preset::PresetData, randomize::{DebugData, DifficultyConfig, DoorState, FlagLocationState, ItemLocationState, LockedDoor, Randomization, RandomizationState, Randomizer, SaveLocationState, SpoilerDetails, SpoilerDoorDetails, SpoilerDoorSummary, SpoilerFlagDetails, SpoilerFlagSummary, SpoilerItemDetails, SpoilerItemSummary, SpoilerLocation, SpoilerLog, SpoilerSummary, StartLocationData}, settings::{Objective, RandomizerSettings, WallJump}, traverse::{apply_requirement, get_bireachable_idxs, get_spoiler_route, traverse, LockedDoorData}};
 use maprando_game::{BeamType, Capacity, DoorPtrPair, DoorType, GameData, HubLocation, Item, ItemLocationId, LinksDataGroup, Map, NodeId, Requirement, RoomId, StartLocation, VertexKey};
 use maprando_logic::{GlobalState, Inventory, LocalState};
 use rand::{rngs::StdRng, RngCore, SeedableRng};
@@ -172,8 +172,6 @@ struct ImplicitPresetData {
 
 pub struct Plando {
     pub game_data: GameData,
-    pub samus_sprite_categories: Vec<SamusSpriteCategory>,
-    pub mosaic_themes: Vec<MosaicTheme>,
     pub difficulty_tiers: Vec<DifficultyConfig>,
     pub maps_vanilla: MapRepository,
     pub maps_standard: Option<MapRepository>,
@@ -203,30 +201,6 @@ pub struct Plando {
 
 impl Plando {
     pub fn new(game_data: GameData, randomizer_settings: RandomizerSettings, preset_data: &PresetData) -> Result<Self> {
-        let samus_sprites_path = Path::new("../MapRandoSprites/samus_sprites/manifest.json");
-        let samus_sprite_categories: Vec<SamusSpriteCategory> = serde_json::from_str(&std::fs::read_to_string(&samus_sprites_path).unwrap()).unwrap();
-        let mosaic_themes = vec![
-            ("OuterCrateria", "Outer Crateria"),
-            ("InnerCrateria", "Inner Crateria"),
-            ("BlueBrinstar", "Blue Brinstar"),
-            ("GreenBrinstar", "Green Brinstar"),
-            ("PinkBrinstar", "Pink Brinstar"),
-            ("RedBrinstar", "Red Brinstar"),
-            ("UpperNorfair", "Upper Norfair"),
-            ("LowerNorfair", "Lower Norfair"),
-            ("WreckedShip", "Wrecked Ship"),
-            ("WestMaridia", "West Maridia"),
-            ("YellowMaridia", "Yellow Maridia"),
-            ("MechaTourian", "Mecha Tourian"),
-            ("MetroidHabitat", "Metroid Habitat"),
-        ]
-        .into_iter()
-        .map(|(x, y)| MosaicTheme {
-            name: x.to_string(),
-            display_name: y.to_string(),
-        })
-        .collect();
-    
         let maps_vanilla = Plando::load_map_repository(MapRepositoryType::Vanilla).ok_or(anyhow!("Vanilla Map Repository not found"))?;
         let maps_standard = Plando::load_map_repository(MapRepositoryType::Standard);
         let maps_wild = Plando::load_map_repository(MapRepositoryType::Wild);
@@ -268,8 +242,6 @@ impl Plando {
 
         let mut plando = Plando {
             game_data,
-            samus_sprite_categories,
-            mosaic_themes,
             difficulty_tiers: Vec::new(),
             maps_vanilla,
             maps_standard,
@@ -363,7 +335,7 @@ impl Plando {
     pub fn load_map_from_file(&mut self, path: &Path) -> Result<()> {
         let auto_update = self.auto_update_spoiler;
         self.auto_update_spoiler = false;
-        self.map_editor.load_map_from_file(&self.game_data, path);
+        self.map_editor.load_map_from_file(&self.game_data, path)?;
         self.clear_item_locations();
         self.clear_doors();
         self.start_location_data.start_location = Plando::get_ship_start();
@@ -607,7 +579,7 @@ impl Plando {
         self.start_location_data.hub_return_route = hub_return_route;
         
         if self.auto_update_spoiler {
-            self.update_spoiler_data();
+            self.update_spoiler_data()?;
         }
 
         Ok(())
@@ -1225,12 +1197,6 @@ impl Plando {
         }
         flag_vec
     }
-}
-
-pub fn load_preset(path: &Path) -> Result<RandomizerSettings> {
-    let json_data = std::fs::read_to_string(path)?;
-    let result = maprando::settings::parse_randomizer_settings(&json_data);
-    result
 }
 
 

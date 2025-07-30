@@ -1,15 +1,11 @@
-use crate::{backend::{map_editor::MapErrorType, plando::{get_double_item_offset, DoubleItemPlacement, MapRepositoryType, Placeable, Plando, SpoilerOverride, ITEM_VALUES}}, input_state::KeyState, layout::{hotkey_settings::Keybind, map_editor_ui::MapEditorUi, Layout, WindowType}};
+use crate::{backend::{map_editor::MapErrorType, plando::{get_double_item_offset, DoubleItemPlacement, MapRepositoryType, Placeable, Plando, SpoilerOverride, ITEM_VALUES}}, input_state::KeyState, layout::{hotkey_settings::Keybind, map_editor_ui::MapEditorUi, settings_customize::{Customization, SettingsCustomize, SettingsCustomizeResult}, settings_logic::LogicCustomization, Layout, WindowType}};
 use anyhow::{anyhow, bail, Result};
 use egui::{self, style::default_text_styles, Color32, Context, FontDefinitions, Id, Sense, TextureId, Ui, Vec2};
 use egui_sfml::{SfEgui, UserTexSource};
 use flate2::read::GzDecoder;
 use hashbrown::{HashMap, HashSet};
 use input_state::MouseState;
-use maprando::{
-        customize::{mosaic::MosaicTheme, ControllerButton, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, MusicSettings, PaletteTheme, ShakingSetting, TileTheme},
-        patch::Rom, randomize::SpoilerRouteEntry,
-        settings::{DoorLocksSize, DoorsMode, ItemDotChange, MapStationReveal, MapsRevealed, Objective, ObjectiveSetting, RandomizerSettings, SaveAnimals, WallJump}
-    };
+use maprando::{patch::Rom, preset::PresetData, randomize::SpoilerRouteEntry, settings::{DoorsMode, Objective, RandomizerSettings}};
 use maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType};
 use rand::RngCore;
 use rfd::FileDialog;
@@ -48,7 +44,7 @@ struct Settings {
     mouse_click_delay_tolerance: i32,
     rom_path: String,
     spoiler_auto_update: bool,
-    customization: Customization,
+    last_customization: Customization,
     last_logic_preset: Option<RandomizerSettings>,
     disable_logic: bool,
     auto_update: bool,
@@ -67,7 +63,7 @@ impl Default for Settings {
             mouse_click_delay_tolerance: 60,
             rom_path: String::new(),
             spoiler_auto_update: true,
-            customization: Customization::default(),
+            last_customization: Customization::default(),
             last_logic_preset: None,
             disable_logic: false,
             auto_update: true,
@@ -77,198 +73,6 @@ impl Default for Settings {
             hotkeys: HashMap::new(),
             fps_cap: 60,
             animation_speed: 1.0
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Copy)]
-pub enum CustomControllerButton {
-    Left,
-    Right,
-    Up,
-    Down,
-    X,
-    Y,
-    A,
-    B,
-    L,
-    R,
-    Select,
-    Start,
-}
-
-impl CustomControllerButton {
-    fn convert(&self) -> ControllerButton {
-        use ControllerButton::*;
-        match self {
-            CustomControllerButton::Left => Left,
-            CustomControllerButton::Right => Right,
-            CustomControllerButton::Up => Up,
-            CustomControllerButton::Down => Down,
-            CustomControllerButton::X => X,
-            CustomControllerButton::Y => Y,
-            CustomControllerButton::A => A,
-            CustomControllerButton::B => B,
-            CustomControllerButton::L => L,
-            CustomControllerButton::R => R,
-            CustomControllerButton::Select => Select,
-            CustomControllerButton::Start => Start,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-struct CustomControllerConfig {
-    pub shot: CustomControllerButton,
-    pub jump: CustomControllerButton,
-    pub dash: CustomControllerButton,
-    pub item_select: CustomControllerButton,
-    pub item_cancel: CustomControllerButton,
-    pub angle_up: CustomControllerButton,
-    pub angle_down: CustomControllerButton,
-    pub spin_lock_buttons: Vec<CustomControllerButton>,
-    pub quick_reload_buttons: Vec<CustomControllerButton>,
-    pub moonwalk: bool,
-}
-
-impl CustomControllerConfig {
-    fn default() -> Self {
-        use CustomControllerButton::*;
-        CustomControllerConfig {
-            shot: X,
-            jump: A,
-            dash: B,
-            item_select: Select,
-            item_cancel: Y,
-            angle_up: R,
-            angle_down: L,
-            spin_lock_buttons: vec![X, L, R, Up],
-            quick_reload_buttons: vec![L, R, Select, Start],
-            moonwalk: false
-        }
-    }
-
-    fn is_valid(&self) -> bool {
-        let mut vec = vec![];
-        vec.push(self.shot as usize);
-        vec.push(self.jump as usize);
-        vec.push(self.dash as usize);
-        vec.push(self.item_cancel as usize);
-        vec.push(self.item_select as usize);
-        vec.push(self.angle_down as usize);
-        vec.push(self.angle_up as usize);
-        vec.sort();
-        vec.dedup();
-        vec.len() == 7
-    }
-
-    fn to_controller_config(&self) -> ControllerConfig {
-        ControllerConfig {
-            shot: self.shot.convert(),
-            jump: self.jump.convert(),
-            dash: self.dash.convert(),
-            item_select: self.item_select.convert(),
-            item_cancel: self.item_cancel.convert(),
-            angle_up: self.angle_up.convert(),
-            angle_down: self.angle_down.convert(),
-            spin_lock_buttons: self.spin_lock_buttons.iter().map(|x| x.convert()).collect(),
-            quick_reload_buttons: self.quick_reload_buttons.iter().map(|x| x.convert()).collect(),
-            moonwalk: self.moonwalk
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-struct Customization {
-    pub samus_sprite: String,
-    pub etank_color: [f32; 3],
-    pub reserve_hud_style: bool,
-    pub vanilla_screw_attack_animation: bool,
-    pub palette_theme: usize,
-    pub tile_theme: usize,
-    pub door_theme: usize,
-    pub music: usize,
-    pub disable_beeping: bool,
-    pub shaking: usize,
-    pub flashing: usize,
-    pub controller_config: CustomControllerConfig,
-}
-
-impl Customization {
-    fn default() -> Self {
-        Customization {
-            samus_sprite: "samus_vanilla".to_string(),
-            etank_color: [0xDE as f32 / 255.0, 0x38 as f32 / 255.0, 0x94 as f32 / 255.0],
-            reserve_hud_style: true,
-            vanilla_screw_attack_animation: false,
-            palette_theme: 0,
-            tile_theme: 0,
-            door_theme: 0,
-            music: 0,
-            disable_beeping: false,
-            shaking: 1,
-            flashing: 1,
-            controller_config: CustomControllerConfig::default()
-        }
-    }
-    
-    fn to_settings(&self, themes: &[MosaicTheme]) -> CustomizeSettings {
-        let etank_color = Some((
-            (self.etank_color[0] * 31.0) as u8,
-            (self.etank_color[1] * 31.0) as u8,
-            (self.etank_color[2] * 31.0) as u8
-        ));
-
-        let palette_theme = match self.palette_theme {
-            1 => PaletteTheme::AreaThemed,
-            _ => PaletteTheme::Vanilla
-        };
-        let tile_theme = match self.tile_theme {
-            0 => TileTheme::Vanilla,
-            1 => TileTheme::AreaThemed,
-            2 => TileTheme::Scrambled,
-            i => {
-                let idx = i - 2;
-                if idx == themes.len() {
-                    TileTheme::Constant("Outline".to_string())
-                } else if idx > themes.len() {
-                    TileTheme::Constant("Invisible".to_string())
-                } else {
-                    TileTheme::Constant(themes[idx].name.clone())
-                }
-            }
-        };
-        let door_theme = match self.door_theme {
-            1 => DoorTheme::Alternate,
-            _ => DoorTheme::Vanilla
-        };
-        let music = match self.music {
-            1 => MusicSettings::Disabled,
-            _ => MusicSettings::AreaThemed
-        };
-        let shaking = match self.shaking {
-            1 => ShakingSetting::Reduced,
-            2 => ShakingSetting::Disabled,
-            _ => ShakingSetting::Vanilla
-        };
-        let flashing = match self.flashing {
-            1 => FlashingSetting::Reduced,
-            _ => FlashingSetting::Vanilla
-        };
-
-        CustomizeSettings {
-            samus_sprite: Some(self.samus_sprite.clone()),
-            etank_color,
-            reserve_hud_style: self.reserve_hud_style,
-            vanilla_screw_attack_animation: self.vanilla_screw_attack_animation,
-            palette_theme,
-            tile_theme,
-            door_theme,
-            music,
-            disable_beeping: self.disable_beeping,
-            shaking,
-            flashing,
-            controller_config: self.controller_config.to_controller_config()
         }
     }
 }
@@ -448,14 +252,13 @@ fn save_seed(plando: &mut Plando, path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn save_preset(preset: &RandomizerSettings) -> Result<()> {
-    let str = serde_json::to_string_pretty(preset)?;
-    let dir = Path::new("./data/presets/full-settings/");
-    let path = dir.join(preset.name.as_ref().unwrap());
-    let mut file = File::create(path)?;
-    file.write_all(str.as_bytes())?;
+fn load_preset_data(game_data: &GameData) -> Result<PresetData> {
+    let tech_path = Path::new("./data/tech_data.json");
+    let notable_path = Path::new("./data/notable_data.json");
+    let presets_path = Path::new("./data/presets/");
 
-    Ok(())
+    let preset_data = PresetData::load(tech_path, notable_path, presets_path, game_data);
+    preset_data
 }
 
 fn download_map_repos() -> Result<()> {
@@ -1111,10 +914,6 @@ enum UserTexId {
     FlagFirst,
 }
 
-enum CustomizeLogicWindow {
-    None, SkillAssumption, ItemProgression, Qol, Objectives
-}
-
 #[derive(PartialEq, Eq, Clone)]
 enum ModalType {
     None,
@@ -1213,11 +1012,12 @@ struct PlandoApp {
     spoiler_step: usize,
     spoiler_type: SpoilerType,
     modal_type: ModalType,
-    cur_customize_logic_window: CustomizeLogicWindow,
     is_customize_window_open: bool,
     override_window: Option<usize>,
 
     layout: Layout,
+    logic_customization: LogicCustomization,
+    settings_customization: SettingsCustomize,
     map_editor: MapEditorUi,
 
     global_timer: u64
@@ -1238,12 +1038,23 @@ impl PlandoApp {
             };
         }
 
-        let mut plando = Plando::new()?;
+        let game_data = GameData::load()?;
+        let preset_data = load_preset_data(&game_data)?;
+
+        let mut plando = Plando::new(game_data, preset_data.default_preset.clone(), &preset_data)?;
+
+        let preset = match &settings.last_logic_preset {
+            Some(preset) => preset.clone(),
+            None => preset_data.default_preset.clone()
+        };
 
         plando.auto_update_spoiler = settings.spoiler_auto_update;
-        if let Some(preset) = &settings.last_logic_preset {
-            plando.load_preset(preset.clone());
-        }
+        plando.load_preset(preset.clone());
+
+        let logic_customization = LogicCustomization::new(preset_data, preset);
+
+        let mut settings_customization = SettingsCustomize::new()?;
+        settings_customization.customization = settings.last_customization.clone();
 
         let rom_vanilla_path = Path::new(&settings.rom_path);
         let rom_vanilla = load_vanilla_rom(rom_vanilla_path).ok();
@@ -1322,11 +1133,12 @@ impl PlandoApp {
             spoiler_step: 0,
             spoiler_type: SpoilerType::None,
             modal_type: ModalType::None,
-            cur_customize_logic_window: CustomizeLogicWindow::None,
             is_customize_window_open: false,
             override_window: None,
 
             layout,
+            logic_customization,
+            settings_customization,
             map_editor: MapEditorUi::default(),
 
             global_timer: 0
@@ -1343,23 +1155,20 @@ impl PlandoApp {
 
     fn patch_rom(&self, save_path: &Path) -> Result<()> {
         let rom_vanilla = self.rom_vanilla.as_ref().ok_or(anyhow!("Provided no vanilla ROM to patch"))?;
-        let settings = self.settings.customization.to_settings(&self.plando.mosaic_themes);
+        let settings = self.settings_customization.get_settings();
 
         if self.plando.randomization.is_none() {
             bail!("No randomization generated");
         }
         let (r, _spoiler_log) = self.plando.randomization.as_ref().unwrap();
-        let mut new_rom = maprando::patch::make_rom(&rom_vanilla, &self.plando.randomizer_settings, r, &self.plando.game_data)?;
-        let map = self.plando.map().clone();
-
-        maprando::customize::customize_rom(
-            &mut new_rom,
+        let new_rom = maprando::patch::make_rom(
             rom_vanilla,
-            &Some(map),
+            &self.plando.randomizer_settings,
             &settings,
+            r,
             &self.plando.game_data,
-            &self.plando.samus_sprite_categories,
-            &self.plando.mosaic_themes
+            &self.settings_customization.samus_sprite_categories,
+            &self.settings_customization.mosaic_themes
         )?;
 
         let mut file = File::create(save_path)?;
@@ -1476,7 +1285,6 @@ impl PlandoApp {
         let mut cur_settings = self.plando.randomizer_settings.clone();
 
         let mut sidebar_width = 0.0;
-        let sidebar_height = 32.0;
 
         let mut sfegui = SfEgui::new(&window);
         sfegui.get_context().all_styles_mut(|style| {
@@ -1571,6 +1379,8 @@ impl PlandoApp {
                     _ => {}
                 }
             }
+
+            let window_size = window.size();
 
             if !self.layout.is_open(WindowType::HotkeySettings) {
                 for (idx, hotkey) in self.layout.hotkey_settings.get_hotkeys().iter().enumerate() {
@@ -1672,7 +1482,7 @@ impl PlandoApp {
             }
 
             // Draw Menu Bar
-            let gui = sfegui.run(&mut window, |rt, ctx| {
+            let gui = sfegui.run(&mut window, |_rt, ctx| {
                 egui::TopBottomPanel::top("menu_file_main").show(ctx, |ui| {
                     egui::menu::bar(ui, |ui| {
                         ui.menu_button("File", |ui| {
@@ -1854,64 +1664,6 @@ impl PlandoApp {
                                 self.layout.open(WindowType::HotkeySettings);
                             }
                         });
-                        /*ui.menu_button("Map Editor", |ui| {
-                            let map_editor_str = match map_editor_mode {
-                                true => "Discard Changes",
-                                false => "Open Map Editor"
-                            };
-                            if ui.button(map_editor_str).clicked() {
-                                self.map_editor.reset(self.plando.map.clone());
-                                map_editor_mode = !map_editor_mode;
-                                ui.close_menu();
-                            }
-                            if !map_editor_mode {
-                                return;
-                            }
-                            if ui.button("Apply Changes").clicked() {
-                                match self.map_editor.is_valid(&self.plando.game_data) {
-                                    Ok(_) => {
-                                        let auto_update = self.plando.auto_update_spoiler;
-                                        self.plando.auto_update_spoiler = false;
-                                        let item_locs = self.plando.item_locations.clone();
-                                        let door_locks = self.plando.locked_doors.clone();
-                                        let start_pos = self.plando.start_location_data.start_location.clone();
-                                        self.plando.load_map(self.map_editor.map.clone());
-                                        for (idx, &item) in item_locs.iter().enumerate() {
-                                            self.plando.place_item(idx, item);
-                                        }
-                                        let mut door_err = false;
-                                        for door in door_locks {
-                                            let (room_idx, door_idx) = self.plando.game_data.room_and_door_idxs_by_door_ptr_pair[&door.src_ptr_pair];
-                                            if self.plando.place_door(room_idx, door_idx, Some(door.door_type), false, true).is_err() {
-                                                door_err = true;
-                                            }
-                                        }
-                                        if self.plando.place_start_location(start_pos).is_err() {
-                                            self.modal_type = ModalType::Error(match door_err {
-                                                true => "Some doors have been removed as they became invalid. Start location was reset as the hub became unreachable",
-                                                false => "Start location was reset as the hub became unreachable"
-                                            }.to_string());
-                                        } else if door_err {
-                                            self.modal_type = ModalType::Error("Some doors have been removed as they became invalid".to_string());
-                                        }
-                                        self.plando.auto_update_spoiler = auto_update;
-                                        self.plando.update_spoiler_data();
-                                        self.plando.dirty = true;
-                                        map_editor_mode = false;
-                                    }
-                                    Err(err) => {
-                                        self.modal_type = ModalType::Error(format!("Invalid map: {}", err.to_string()));
-                                    }
-                                }
-                                ui.close_menu();
-                            }
-                            ui.separator();
-                            if ui.button("Remove all rooms").clicked() {
-                                for idx in 0..self.map_editor.map.rooms.len() {
-                                    self.map_editor.erase_room(idx, &self.plando.game_data);
-                                }
-                            }
-                        });*/
                         if ui.button("Github").clicked() {
                             if let Err(err) = open::that("https://github.com/Noktuska/maprando-plando/blob/main/README.md") {
                                 self.modal_type = ModalType::Error(err.to_string());
@@ -1923,8 +1675,9 @@ impl PlandoApp {
                 self.layout.render(ctx);
 
                 // Draw item selection sidebar
-                sidebar_width = egui::SidePanel::right("panel_item_select").resizable(false).show(ctx, |ui| {
-                    sidebar_selection = self.draw_sidebar_item_select(ui, sidebar_height, sidebar_selection);
+                let max_sidebar_width = (window_size.x / 2) as f32;
+                sidebar_width = egui::SidePanel::right("panel_item_select").width_range(128.0..=max_sidebar_width).show(ctx, |ui| {
+                    self.draw_sidebar(ui, &mut sidebar_selection);
                 }).response.rect.width();
 
                 // Draw Spoiler Details Window
@@ -1945,12 +1698,41 @@ impl PlandoApp {
                 }
 
                 if customize_open {
-                    customize_open = self.draw_customization_window(ctx);
+                    match self.settings_customization.draw_customization_window(ctx) {
+                        SettingsCustomizeResult::Idle => {},
+                        SettingsCustomizeResult::Cancel => customize_open = false,
+                        SettingsCustomizeResult::Apply => {
+                            self.settings.last_customization = self.settings_customization.customization.clone();
+                            if self.rom_vanilla.is_none() {
+                                if let Some(file) = FileDialog::new().set_title("Select vanilla ROM")
+                                .set_directory("/").add_filter("Snes ROM", &["sfc", "smc"]).pick_file() {
+                                    self.settings.rom_path = file.to_str().unwrap().to_string();
+                                    match load_vanilla_rom(&Path::new(&self.settings.rom_path)) {
+                                        Ok(rom) => self.rom_vanilla = Some(rom),
+                                        Err(err) => self.modal_type = ModalType::Error(err.to_string())
+                                    }
+                                }
+                            }
+                            if self.rom_vanilla.is_some() {
+                                if let Some(file_out) = FileDialog::new().set_title("Select output location")
+                                .set_directory("/")
+                                .add_filter("Snes ROM", &["sfc"])
+                                .save_file() {
+                                    if let Err(err) = self.patch_rom(&file_out) {
+                                        self.modal_type = ModalType::Error(err.to_string());
+                                    }
+                                    customize_open = false;
+                                }
+                            }
+                        },
+                        SettingsCustomizeResult::Error(err) => self.modal_type = ModalType::Error(err),
+                    }
+
                     if !customize_open && reset_after_patch {
                         let _ = self.plando.reroll_map(MapRepositoryType::Vanilla);
                         let preset = match self.settings.last_logic_preset.as_ref() {
                             Some(preset) => preset.clone(),
-                            None => self.plando.preset_data.default_preset.clone()
+                            None => self.logic_customization.preset_data.default_preset.clone()
                         };
                         self.plando.load_preset(preset);
                         reset_after_patch = false;
@@ -1958,7 +1740,14 @@ impl PlandoApp {
                 }
 
                 if customize_logic_open {
-                    customize_logic_open = self.draw_logic_customization_window(ctx, &mut cur_settings, rt.size().y as f32 * 0.9);
+                    match self.logic_customization.draw_window(ctx) {
+                        Ok(should_close) => if should_close {
+                            customize_logic_open = false;
+                            self.plando.load_preset(self.logic_customization.settings.clone());
+                            self.settings.last_logic_preset = Some(self.logic_customization.settings.clone());
+                        }
+                        Err(err) => self.modal_type = ModalType::Error(err.to_string())
+                    }
                 }
 
                 match self.modal_type.clone() {
@@ -2161,11 +1950,11 @@ impl PlandoApp {
                     vec![IntRect::new(x, y, width as i32, height as i32)]
                 }
                 MapErrorType::PhantoonMap => {
-                    let room_idx = self.plando.game_data.room_idx_by_name["Wrecked Ship Map Room"];
+                    let room_idx = self.plando.game_data.room_idx_by_ptr[&511179];
                     vec![self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data)]
                 },
                 MapErrorType::PhantoonSave => {
-                    let room_idx = self.plando.game_data.room_idx_by_name["Wrecked Ship Save Room"];
+                    let room_idx = self.plando.game_data.room_idx_by_ptr[&511626];
                     vec![self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data)]
                 },
                 MapErrorType::ToiletNoRoom => {
@@ -2615,12 +2404,47 @@ impl PlandoApp {
         }
     }
 
-    fn draw_sidebar_item_select(&mut self, ui: &mut Ui, sidebar_height: f32, sidebar_selection: Option<Placeable>) -> Option<Placeable> {
-        let mut sidebar_selection = sidebar_selection;
-        egui::scroll_area::ScrollArea::vertical().show(ui, |ui| {
+    fn draw_sidebar(&mut self, ui: &mut Ui, sidebar_selection: &mut Option<Placeable>) {
+        ui.scope(|ui| {
+            let tabs = ["Items", "Rooms", "Areas", "Errors"];
+            ui.style_mut().spacing.item_spacing = egui::Vec2::ZERO;
+
+            ui.horizontal(|ui| {
+                let sel_color = ui.style().visuals.panel_fill;
+
+                for tab in tabs {
+                    let mut bt = egui::Button::new(tab)
+                        .corner_radius(egui::CornerRadius { se: 0, sw: 0, ne: 4, nw: 4 });
+
+                    if tab != self.layout.sidebar_tab {
+                        bt = bt.fill(sel_color);
+                    }
+
+                    if ui.add(bt).clicked() {
+                        self.layout.sidebar_tab = tab.to_string();
+                    }
+                }
+            });
+
+            ui.add(egui::Separator::default().spacing(1.0));
+        });
+
+        match self.layout.sidebar_tab.as_str() {
+            "Items" => self.draw_sidebar_item_select(ui, sidebar_selection),
+            "Rooms" => self.draw_sidebar_room_select(ui),
+            "Areas" => self.draw_sidebar_area_select(ui),
+            _ => {}
+        }
+    }
+
+    fn draw_sidebar_item_select(&mut self, ui: &mut Ui, sidebar_selection: &mut Option<Placeable>) {
+        let sidebar_height = 32.0;
+        let cur_sidebar_selection = sidebar_selection.clone();
+
+        egui::scroll_area::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             egui::Grid::new("grid_item_select")
             .with_row_color(move |val, _style| {
-                if sidebar_selection.is_some_and(|x| x == Placeable::VALUES[val]) { Some(Color32::from_rgb(255, 0, 0)) } else { None }
+                if cur_sidebar_selection.is_some_and(|x| x == Placeable::VALUES[val]) { Some(Color32::from_rgb(255, 0, 0)) } else { None }
             }).min_row_height(sidebar_height).show(ui, |ui| {
                 for (row, placeable) in Placeable::VALUES.iter().enumerate() {
                     // If settigs don't allow ammo or beam doors, we don't allow their placement
@@ -2634,7 +2458,7 @@ impl PlandoApp {
                         .fit_to_exact_size(Vec2::new(sidebar_height, sidebar_height));
                     let img_resp = ui.add(img);
                     if img_resp.clicked() {
-                        sidebar_selection = Some(Placeable::VALUES[row]);
+                        *sidebar_selection = Some(Placeable::VALUES[row]);
                     }
 
                     let item_count = self.plando.placed_item_count[row];
@@ -2642,12 +2466,12 @@ impl PlandoApp {
 
                     let label_name = egui::Label::new(placeable.to_string());
                     if ui.add(label_name).clicked() {
-                        sidebar_selection = Some(Placeable::VALUES[row]);
+                        *sidebar_selection = Some(Placeable::VALUES[row]);
                     }
                     let label_count_str = if max_item_count.is_some() { format!("{item_count} / {}", max_item_count.unwrap()) } else { item_count.to_string() };
                     let label_count = egui::Label::new(label_count_str).sense(Sense::click());
                     if ui.add(label_count).clicked() {
-                        sidebar_selection = Some(Placeable::VALUES[row]);
+                        *sidebar_selection = Some(Placeable::VALUES[row]);
                     }
                     // So it doesn't create an empty row at the very end
                     if row + 1 < Placeable::VALUES.len() {
@@ -2656,107 +2480,92 @@ impl PlandoApp {
                 }
             });
         });
-        sidebar_selection
     }
 
-    /*fn draw_sidebar_room_select(&mut self, ui: &mut Ui, screen_size: Vector2f) -> Option<usize> {
-        let mode_text = match self.map_editor.sidebar_mode {
-            SidebarMode::Rooms => "Rooms",
-            SidebarMode::Areas => "Areas",
-        };
-        egui::ComboBox::new("combo_map_editor", "Mode").selected_text(mode_text).show_ui(ui, |ui| {
-            ui.selectable_value(&mut self.map_editor.sidebar_mode, SidebarMode::Rooms, "Rooms");
-            ui.selectable_value(&mut self.map_editor.sidebar_mode, SidebarMode::Areas, "Areas");
+    fn draw_sidebar_room_select(&mut self, ui: &mut Ui) {
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            /*let search_bar = ui.text_edit_singleline(&mut self.map_editor.search_str);
+            if ui.input_mut(|i| i.consume_shortcut(&egui::KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::F))) {
+                search_bar.request_focus();
+                ui.scroll_to_rect(search_bar.rect, Some(egui::Align::TOP));
+            }
+            let room_idxs: Vec<usize> = self.plando.game_data.room_geometry.iter().enumerate().filter_map(
+                |(idx, room_geometry)| {
+                    if room_geometry.name.to_lowercase().contains(&self.map_editor.search_str.to_lowercase()) {
+                        return Some(idx);
+                    }
+                    None
+                }
+            ).collect();
+
+            for room_idx in room_idxs {
+                let is_missing = self.map_editor.missing_rooms.contains(&room_idx);
+                let room_name = &self.plando.game_data.room_geometry[room_idx].name;
+                let mut btn = egui::Button::new(room_name).min_size(Vec2 { x: 256.0, y: 1.0 });
+                if is_missing {
+                    btn = btn.fill(Color32::RED);
+                }
+                if ui.add(btn).clicked() {
+                    if is_missing {
+                        self.map_editor.spawn_room(room_idx, &self.plando.game_data);
+                    }
+                    let (room_x, room_y) = self.map_editor.map.rooms[room_idx];
+                    let room_geometry = &self.plando.game_data.room_geometry[room_idx];
+                    let room_width = room_geometry.map[0].len() as f32 * 8.0;
+                    let room_height = room_geometry.map.len() as f32 * 8.0;
+                    let room_rect = FloatRect::new(room_x as f32 * 8.0, room_y as f32 * 8.0, room_width, room_height);
+                    self.view.focus_rect(room_rect);
+                }
+            }*/
         });
-        ui.separator();
-        
-        match self.map_editor.sidebar_mode {
-            SidebarMode::Rooms => {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    let search_bar = ui.text_edit_singleline(&mut self.map_editor.search_str);
-                    if ui.input_mut(|i| i.consume_shortcut(&egui::KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::F))) {
-                        search_bar.request_focus();
-                        ui.scroll_to_rect(search_bar.rect, Some(egui::Align::TOP));
-                    }
-                    let room_idxs: Vec<usize> = self.plando.game_data.room_geometry.iter().enumerate().filter_map(
-                        |(idx, room_geometry)| {
-                            if room_geometry.name.to_lowercase().contains(&self.map_editor.search_str.to_lowercase()) {
-                                return Some(idx);
-                            }
-                            None
-                        }
-                    ).collect();
+    }
 
-                    for room_idx in room_idxs {
-                        let is_missing = self.map_editor.missing_rooms.contains(&room_idx);
-                        let room_name = &self.plando.game_data.room_geometry[room_idx].name;
-                        let mut btn = egui::Button::new(room_name).min_size(Vec2 { x: 256.0, y: 1.0 });
-                        if is_missing {
-                            btn = btn.fill(Color32::RED);
-                        }
-                        if ui.add(btn).clicked() {
-                            if is_missing {
-                                self.map_editor.spawn_room(room_idx, &self.plando.game_data);
-                            }
-                            let (room_x, room_y) = self.map_editor.map.rooms[room_idx];
-                            let room_geometry = &self.plando.game_data.room_geometry[room_idx];
-                            let room_width = room_geometry.map[0].len() as f32 * 8.0;
-                            let room_height = room_geometry.map.len() as f32 * 8.0;
-                            let room_rect = FloatRect::new(room_x as f32 * 8.0, room_y as f32 * 8.0, room_width, room_height);
-                            self.view.focus_rect(room_rect, screen_size);
-                        }
+    fn draw_sidebar_area_select(&mut self, ui: &mut Ui) {
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            /*let areas = ["Crateria", "Brinstar", "Norfair", "Wrecked Ship", "Maridia", "Tourian"];
+            for (idx, &area_str) in areas.iter().enumerate() {
+                let col = map_editor::Area::from_tuple((idx, 0, 0)).to_color();
+                let col32 = Color32::from_rgb(col.r, col.g, col.b);
+                let btn = egui::Button::new(area_str).fill(col32).min_size(Vec2 { x: 256.0, y: 1.0 });
+                if ui.add(btn).clicked() && !self.map_editor.selected_room_idx.is_empty() {
+                    for i in 0..self.map_editor.selected_room_idx.len() {
+                        let room_idx = self.map_editor.selected_room_idx[i];
+                        let sub_area = self.map_editor.map.subarea[room_idx];
+                        let sub_sub_area = self.map_editor.map.subsubarea[room_idx];
+                        self.map_editor.apply_area(room_idx, map_editor::Area::from_tuple((idx, sub_area, sub_sub_area)));
                     }
-                });
+                }
             }
-            SidebarMode::Areas => {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    let areas = ["Crateria", "Brinstar", "Norfair", "Wrecked Ship", "Maridia", "Tourian"];
-                    for (idx, &area_str) in areas.iter().enumerate() {
-                        let col = map_editor::Area::from_tuple((idx, 0, 0)).to_color();
-                        let col32 = Color32::from_rgb(col.r, col.g, col.b);
-                        let btn = egui::Button::new(area_str).fill(col32).min_size(Vec2 { x: 256.0, y: 1.0 });
-                        if ui.add(btn).clicked() && !self.map_editor.selected_room_idx.is_empty() {
-                            for i in 0..self.map_editor.selected_room_idx.len() {
-                                let room_idx = self.map_editor.selected_room_idx[i];
-                                let sub_area = self.map_editor.map.subarea[room_idx];
-                                let sub_sub_area = self.map_editor.map.subsubarea[room_idx];
-                                self.map_editor.apply_area(room_idx, map_editor::Area::from_tuple((idx, sub_area, sub_sub_area)));
-                            }
-                        }
-                    }
-                    ui.separator();
+            ui.separator();
 
-                    for area_value in map_editor::Area::VALUES {
-                        let col = area_value.to_color();
-                        let col32 = Color32::from_rgb(col.r, col.g, col.b);
-                        let btn = egui::Button::new(area_value.to_string()).fill(col32).min_size(Vec2 { x: 256.0, y: 1.0 });
-                        if ui.add(btn).clicked() && !self.map_editor.selected_room_idx.is_empty() {
-                            for i in 0..self.map_editor.selected_room_idx.len() {
-                                self.map_editor.apply_area(self.map_editor.selected_room_idx[i], area_value);
-                            }
-                        }
+            for area_value in map_editor::Area::VALUES {
+                let col = area_value.to_color();
+                let col32 = Color32::from_rgb(col.r, col.g, col.b);
+                let btn = egui::Button::new(area_value.to_string()).fill(col32).min_size(Vec2 { x: 256.0, y: 1.0 });
+                if ui.add(btn).clicked() && !self.map_editor.selected_room_idx.is_empty() {
+                    for i in 0..self.map_editor.selected_room_idx.len() {
+                        self.map_editor.apply_area(self.map_editor.selected_room_idx[i], area_value);
                     }
-                    ui.separator();
-
-                    ui.label("Swap Areas:");
-                    egui::ComboBox::from_id_salt("combo_swap_area_first").selected_text(areas[self.map_editor.swap_first]).show_ui(ui, |ui| {
-                        for (idx, &area_str) in areas.iter().enumerate() {
-                            ui.selectable_value(&mut self.map_editor.swap_first, idx, area_str);
-                        }
-                    });
-                    if ui.button("Swap!").clicked() {
-                        self.map_editor.swap_areas(self.map_editor.swap_first, self.map_editor.swap_second);
-                    }
-                    egui::ComboBox::from_id_salt("combo_swap_area_second").selected_text(areas[self.map_editor.swap_second]).show_ui(ui, |ui| {
-                        for (idx, &area_str) in areas.iter().enumerate() {
-                            ui.selectable_value(&mut self.map_editor.swap_second, idx, area_str);
-                        }
-                    });
-                });
+                }
             }
-        }
-        None
-    }*/
+            ui.separator();
+
+            ui.label("Swap Areas:");
+            egui::ComboBox::from_id_salt("combo_swap_area_first").selected_text(areas[self.map_editor.swap_first]).show_ui(ui, |ui| {
+                for (idx, &area_str) in areas.iter().enumerate() {
+                    ui.selectable_value(&mut self.map_editor.swap_first, idx, area_str);
+                }
+            });
+            if ui.button("Swap!").clicked() {
+                self.map_editor.swap_areas(self.map_editor.swap_first, self.map_editor.swap_second);
+            }
+            egui::ComboBox::from_id_salt("combo_swap_area_second").selected_text(areas[self.map_editor.swap_second]).show_ui(ui, |ui| {
+                for (idx, &area_str) in areas.iter().enumerate() {
+                    ui.selectable_value(&mut self.map_editor.swap_second, idx, area_str);
+                }
+            });*/
+        });
+    }
 
     fn draw_spoiler_override(&mut self, ctx: &Context) -> bool {
         let mut hovered = false;
@@ -2999,8 +2808,10 @@ impl PlandoApp {
                             details_return_route = &flag_details.return_route;
                         }
                         _ => {
+                            let room_idx = self.plando.room_id_to_idx(self.plando.start_location_data.hub_location.room_id);
+
                             details_name = "Hub Route".to_string();
-                            details_location = self.plando.start_location_data.hub_location.name.clone();
+                            details_location = self.plando.game_data.room_geometry[room_idx].name.clone();
                             details_area = String::new();
                             details_obtain_route = &self.plando.start_location_data.hub_obtain_route;
                             details_return_route = &self.plando.start_location_data.hub_return_route;
@@ -3271,437 +3082,6 @@ impl PlandoApp {
         });
 
         settings_open
-    }
-
-    fn draw_customization_window(&mut self, ctx: &Context) -> bool {
-        let mut open = true;
-        egui::Window::new("Customize")
-        .resizable(false)
-        .title_bar(false)
-        .show(ctx, |ui| {
-            egui::Grid::new("grid_customize").num_columns(2).striped(true).show(ui, |ui| {
-                ui.label("Samus sprite");
-                egui::ComboBox::from_id_salt("combo_customize").selected_text(&self.settings.customization.samus_sprite).show_ui(ui, |ui| {
-                    for category in &self.plando.samus_sprite_categories {
-                        for sprite in &category.sprites {
-                            ui.selectable_value(&mut self.settings.customization.samus_sprite, sprite.name.clone(), sprite.display_name.clone());
-                        }
-                    }
-                });
-                ui.end_row();
-
-                ui.label("Energy tank color");
-                ui.color_edit_button_rgb(&mut self.settings.customization.etank_color);
-                ui.end_row();
-
-                ui.label("Door colors");
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.settings.customization.door_theme, 0, "Vanilla");
-                    ui.selectable_value(&mut self.settings.customization.door_theme, 1, "Alternate");
-                });
-                ui.end_row();
-
-                ui.label("Music");
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.settings.customization.music, 0, "On");
-                    ui.selectable_value(&mut self.settings.customization.music, 1, "Off");
-                });
-                ui.end_row();
-
-                ui.label("Screen shaking");
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.settings.customization.shaking, 0, "Vanilla");
-                    ui.selectable_value(&mut self.settings.customization.shaking, 1, "Reduced");
-                    ui.selectable_value(&mut self.settings.customization.shaking, 2, "Disabled");
-                });
-                ui.end_row();
-
-                ui.label("Screen flashing");
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.settings.customization.flashing, 0, "Vanilla");
-                    ui.selectable_value(&mut self.settings.customization.flashing, 1, "Reduced");
-                });
-                ui.end_row();
-
-                ui.label("Low-energy beeping");
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.settings.customization.disable_beeping, false, "Vanilla");
-                    ui.selectable_value(&mut self.settings.customization.disable_beeping, true, "Disabled");
-                });
-                ui.end_row();
-
-                ui.separator();
-                ui.end_row();
-
-                ui.label("Room palettes");
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.settings.customization.palette_theme, 0, "Vanilla");
-                    ui.selectable_value(&mut self.settings.customization.palette_theme, 1, "Area-themed");
-                });
-                ui.end_row();
-
-                ui.label("Tile theme");
-                let mut tile_theme_strs: Vec<String> = vec!["Vanilla", "Area-themed", "Scrambled"].iter().map(|x| x.to_string()).collect();
-                self.plando.mosaic_themes.iter().for_each(|x| tile_theme_strs.push(x.display_name.clone()));
-                tile_theme_strs.push("Practice Outlines".to_string());
-                tile_theme_strs.push("Invisible".to_string());
-                egui::ComboBox::from_id_salt("combo_customize_tile").selected_text(&tile_theme_strs[self.settings.customization.tile_theme]).show_ui(ui, |ui| {
-                    for (i, theme) in tile_theme_strs.iter().enumerate() {
-                        ui.selectable_value(&mut self.settings.customization.tile_theme, i, theme);
-                    }
-                });
-                ui.end_row();
-
-                ui.label("Reserve tank HUD style");
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.settings.customization.reserve_hud_style, false, "Vanilla");
-                    ui.selectable_value(&mut self.settings.customization.reserve_hud_style, true, "Revamped");
-                });
-                ui.end_row();
-
-                ui.label("Screw Attack animation");
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.settings.customization.vanilla_screw_attack_animation, true, "Vanilla");
-                    ui.selectable_value(&mut self.settings.customization.vanilla_screw_attack_animation, false, "Split");
-                });
-                ui.end_row();
-
-                use CustomControllerButton::*;
-                const VALUES: [CustomControllerButton; 12] = [X, Y, A, B, L, R, Select, Start, Up, Down, Left, Right];
-                const STRINGS: [&str; 12] = ["X", "Y", "A", "B", "L", "R", "Select", "Start", "Up", "Down", "Left", "Right"];
-                let config = &mut self.settings.customization.controller_config;
-
-                ui.label("Shot");
-                ui.horizontal(|ui| {
-                    for i in 0..7 {
-                        ui.selectable_value(&mut config.shot, VALUES[i], STRINGS[i]);
-                    }
-                });
-                ui.end_row();
-
-                ui.label("Jump");
-                ui.horizontal(|ui| {
-                    for i in 0..7 {
-                        ui.selectable_value(&mut config.jump, VALUES[i], STRINGS[i]);
-                    }
-                });
-                ui.end_row();
-
-                ui.label("Dash");
-                ui.horizontal(|ui| {
-                    for i in 0..7 {
-                        ui.selectable_value(&mut config.dash, VALUES[i], STRINGS[i]);
-                    }
-                });
-                ui.end_row();
-
-                ui.label("Item Select");
-                ui.horizontal(|ui| {
-                    for i in 0..7 {
-                        ui.selectable_value(&mut config.item_select, VALUES[i], STRINGS[i]);
-                    }
-                });
-                ui.end_row();
-
-                ui.label("Item Cancel");
-                ui.horizontal(|ui| {
-                    for i in 0..7 {
-                        ui.selectable_value(&mut config.item_cancel, VALUES[i], STRINGS[i]);
-                    }
-                });
-                ui.end_row();
-
-                ui.label("Angle Up");
-                ui.horizontal(|ui| {
-                    for i in 0..7 {
-                        ui.selectable_value(&mut config.angle_up, VALUES[i], STRINGS[i]);
-                    }
-                });
-                ui.end_row();
-
-                ui.label("Angle Down");
-                ui.horizontal(|ui| {
-                    for i in 0..7 {
-                        ui.selectable_value(&mut config.angle_down, VALUES[i], STRINGS[i]);
-                    }
-                });
-                ui.end_row();
-
-                ui.label("Quick reload");
-                ui.horizontal(|ui| {
-                    for i in 0..VALUES.len() {
-                        let resp = ui.selectable_label(config.quick_reload_buttons.contains(&VALUES[i]), STRINGS[i]);
-                        if resp.clicked() {
-                            if let Some(pos) = config.quick_reload_buttons.iter().position(|x| *x == VALUES[i]) {
-                                config.quick_reload_buttons.remove(pos);
-                            } else {
-                                config.quick_reload_buttons.push(VALUES[i]);
-                            }
-                        }
-                    }
-                });
-                ui.end_row();
-
-                ui.label("Spin lock");
-                ui.horizontal(|ui| {
-                    for i in 0..VALUES.len() {
-                        let resp = ui.selectable_label(config.spin_lock_buttons.contains(&VALUES[i]), STRINGS[i]);
-                        if resp.clicked() {
-                            if let Some(pos) = config.spin_lock_buttons.iter().position(|x| *x == VALUES[i]) {
-                                config.spin_lock_buttons.remove(pos);
-                            } else {
-                                config.spin_lock_buttons.push(VALUES[i]);
-                            }
-                        }
-                    }
-                });
-                ui.end_row();
-
-                ui.label("Moonwalk");
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.settings.customization.controller_config.moonwalk, false, "No");
-                    ui.selectable_value(&mut self.settings.customization.controller_config.moonwalk, true, "Yes");
-                });
-                ui.end_row();
-
-                ui.separator();
-                ui.end_row();
-
-                while ui.button("Patch ROM").clicked() {
-                    if !self.settings.customization.controller_config.is_valid() {
-                        self.modal_type = ModalType::Error("Controller config is invalid".to_string());
-                        break;
-                    }
-                    if self.rom_vanilla.is_none() {
-                        if let Some(file) = FileDialog::new().set_title("Select vanilla ROM")
-                        .set_directory("/").add_filter("Snes ROM", &["sfc", "smc"]).pick_file() {
-                            self.settings.rom_path = file.to_str().unwrap().to_string();
-                            match load_vanilla_rom(&Path::new(&self.settings.rom_path)) {
-                                Ok(rom) => self.rom_vanilla = Some(rom),
-                                Err(err) => self.modal_type = ModalType::Error(err.to_string())
-                            }
-                        }
-                    }
-                    if self.rom_vanilla.is_none() {
-                        break;
-                    }
-                    let rom = self.rom_vanilla.as_ref().unwrap();
-                    if let Some(file_out) = FileDialog::new().set_title("Select output location")
-                    .set_directory("/")
-                    .add_filter("Snes ROM", &["sfc"])
-                    .save_file() {
-                        if let Err(err) = self.patch_rom(&file_out) {
-                            self.modal_type = ModalType::Error(err.to_string());
-                        }
-                        open = false;
-                    }
-                    break;
-                }
-                if ui.button("Cancel").clicked() {
-                    open = false;
-                }
-            });
-        });
-
-        open
-    }
-
-    fn draw_logic_customization_window(&mut self, ctx: &Context, cur_settings: &mut RandomizerSettings, height: f32) -> bool {
-        let mut customize_logic_open = true;
-        egui::Window::new("Customize Logic").resizable(false).title_bar(false).show(ctx, |ui| {
-            // Settings preset
-            ui.horizontal(|ui| {
-                ui.label("Settings preset");
-                let combo_text = match &cur_settings.name {
-                    None => "Select a preset to automatically fill all settings".to_string(),
-                    Some(name) => name.clone()
-                };
-                egui::ComboBox::from_id_salt("combo_logic_preset").selected_text(combo_text).show_ui(ui, |ui| {
-                    if ui.selectable_label(cur_settings.name.is_none(), "Select a preset to automatically fill all settings").clicked() {
-                        cur_settings.name = None;
-                    }
-                    ui.separator();
-                    for preset in &self.plando.preset_data.full_presets {
-                        if ui.selectable_label(cur_settings.name.as_ref().is_some_and(|x| *x == *preset.name.as_ref().unwrap()), preset.name.as_ref().unwrap().clone()).clicked() {
-                            cur_settings.clone_from(preset);
-                        }
-                    }
-                });
-            });
-            egui::Grid::new("grid_customize_logic").num_columns(9).striped(true).show(ui, |ui| {
-                // Skill assumptions
-                ui.label("Skill assumptions");
-                for preset in &self.plando.preset_data.skill_presets {
-                    if ui.selectable_label(cur_settings.skill_assumption_settings == *preset, preset.preset.as_ref().unwrap()).clicked() {
-                        cur_settings.skill_assumption_settings = preset.clone();
-                    }
-                }
-                if ui.button("Custom").clicked() {
-                    self.cur_customize_logic_window = CustomizeLogicWindow::SkillAssumption;
-                }
-                ui.end_row();
-
-                // Item progression
-                /*ui.label("Item Progression").on_hover_text("These presets are mostly visual (except for Desolate), as they affect item progression");
-                for preset in &self.plando.preset_data.item_progression_presets {
-                    if ui.selectable_label(cur_settings.item_progression_settings == *preset, preset.preset.as_ref().unwrap()).clicked() {
-                        cur_settings.item_progression_settings = preset.clone();
-                    }
-                }
-                if ui.button("Custom").clicked() {
-                    self.cur_customize_logic_window = CustomizeLogicWindow::ItemProgression;
-                }
-                ui.end_row();*/
-
-                // Quality of Life
-                ui.label("Quality-of-life options");
-                for preset in &self.plando.preset_data.quality_of_life_presets {
-                    if ui.selectable_label(cur_settings.quality_of_life_settings == *preset, preset.preset.as_ref().unwrap()).clicked() {
-                        cur_settings.quality_of_life_settings = preset.clone();
-                    }
-                }
-                if ui.button("Custom").clicked() {
-                    self.cur_customize_logic_window = CustomizeLogicWindow::Qol;
-                }
-                ui.end_row();
-
-                // Objectives
-                ui.label("Objectives");
-                for preset in &self.plando.preset_data.objective_presets {
-                    if ui.selectable_label(cur_settings.objective_settings == *preset, preset.preset.as_ref().unwrap()).clicked() {
-                        cur_settings.objective_settings = preset.clone();
-                    }
-                }
-                if ui.button("Custom").clicked() {
-                    self.cur_customize_logic_window = CustomizeLogicWindow::Objectives;
-                }
-                ui.end_row();
-
-                // Update objective count
-                let num_obj = cur_settings.objective_settings.objective_options.iter().filter(
-                    |x| x.setting == ObjectiveSetting::Yes
-                ).count() as i32;
-                cur_settings.objective_settings.min_objectives = num_obj;
-                cur_settings.objective_settings.max_objectives = num_obj;
-
-                // Doors
-                ui.label("Doors");
-                ui.selectable_value(&mut cur_settings.doors_mode, DoorsMode::Blue, "Blue");
-                ui.selectable_value(&mut cur_settings.doors_mode, DoorsMode::Ammo, "Ammo");
-                ui.selectable_value(&mut cur_settings.doors_mode, DoorsMode::Beam, "Beam");
-                ui.end_row();
-
-                // Save the animals
-                ui.label("Save the animals");
-                ui.selectable_value(&mut cur_settings.save_animals, SaveAnimals::No, "No");
-                ui.selectable_value(&mut cur_settings.save_animals, SaveAnimals::Yes, "Yes");
-                ui.selectable_value(&mut cur_settings.save_animals, SaveAnimals::Optional, "Optional");
-                ui.end_row();
-
-                // Collectible Walljump
-                ui.label("Wall Jump");
-                ui.selectable_value(&mut cur_settings.other_settings.wall_jump, WallJump::Vanilla, "Vanilla");
-                ui.selectable_value(&mut cur_settings.other_settings.wall_jump, WallJump::Collectible, "Collectible");
-                ui.end_row();
-
-                // Item dots after collection
-                ui.label("Item dots after collection");
-                ui.selectable_value(&mut cur_settings.other_settings.item_dot_change, ItemDotChange::Fade, "Fade");
-                ui.selectable_value(&mut cur_settings.other_settings.item_dot_change, ItemDotChange::Disappear, "Disappear");
-                ui.end_row();
-
-                // Area transition markers
-                ui.label("Area transition markers on map");
-                ui.selectable_value(&mut cur_settings.other_settings.transition_letters, false, "Arrows");
-                ui.selectable_value(&mut cur_settings.other_settings.transition_letters, true, "Letters");
-                ui.end_row();
-
-                // Door locks size
-                ui.label("Door locks size on map");
-                ui.selectable_value(&mut cur_settings.other_settings.door_locks_size, DoorLocksSize::Small, "Small");
-                ui.selectable_value(&mut cur_settings.other_settings.door_locks_size, DoorLocksSize::Large, "Large");
-                ui.end_row();
-
-                // Maps revealed from start
-                ui.label("Maps revealed from start");
-                ui.selectable_value(&mut cur_settings.other_settings.maps_revealed, MapsRevealed::No, "No");
-                ui.selectable_value(&mut cur_settings.other_settings.maps_revealed, MapsRevealed::Partial, "Partial");
-                ui.selectable_value(&mut cur_settings.other_settings.maps_revealed, MapsRevealed::Full, "Full");
-                ui.end_row();
-
-                // Map station reveal
-                ui.label("Map station activation reveal");
-                ui.selectable_value(&mut cur_settings.other_settings.map_station_reveal, MapStationReveal::Partial, "Partial");
-                ui.selectable_value(&mut cur_settings.other_settings.map_station_reveal, MapStationReveal::Full, "Full");
-                ui.end_row();
-
-                // Energy free shinesparks
-                ui.label("Energy-free shinesparks");
-                ui.selectable_value(&mut cur_settings.other_settings.energy_free_shinesparks, false, "No");
-                ui.selectable_value(&mut cur_settings.other_settings.energy_free_shinesparks, true, "Yes");
-                ui.end_row();
-
-                // Ultra low qol
-                ui.label("Ultra-low quality of life");
-                ui.selectable_value(&mut cur_settings.other_settings.ultra_low_qol, false, "No");
-                if ui.selectable_label(cur_settings.other_settings.ultra_low_qol, "Yes").clicked() {
-                    cur_settings.other_settings.ultra_low_qol = true;
-                    cur_settings.quality_of_life_settings = self.plando.preset_data.quality_of_life_presets.iter().find(
-                        |x| x.preset.as_ref().is_some_and(|x| *x == "Off".to_string())
-                    ).unwrap().clone();
-                }
-            });
-            // Save preset
-            if cur_settings.name.is_none() {
-                cur_settings.name = Some(String::new());
-            }
-            ui.horizontal(|ui| {
-                ui.label("Save preset as");
-                ui.text_edit_singleline(cur_settings.name.as_mut().unwrap());
-            });
-            ui.end_row();
-
-            // Apply / Save / Cancel
-            ui.horizontal(|ui| {
-                if ui.button("Apply").clicked() {
-                    self.plando.load_preset(cur_settings.clone());
-                    self.settings.last_logic_preset = Some(cur_settings.clone());
-                    customize_logic_open = false;
-                }
-                if ui.button("Save to file").clicked() && cur_settings.name.as_ref().is_some_and(|x| !x.is_empty()) {
-                    if let Err(err) = save_preset(&cur_settings) {
-                        self.modal_type = ModalType::Error(err.to_string());
-                    }
-                }
-                if ui.button("Cancel").clicked() {
-                    cur_settings.clone_from(&self.plando.randomizer_settings);
-                    customize_logic_open = false;
-                }
-            });
-        });
-
-        match self.cur_customize_logic_window {
-            CustomizeLogicWindow::None => {}
-            CustomizeLogicWindow::SkillAssumption => {
-                layout::window_skill_assumptions(height, &mut self.is_customize_window_open, cur_settings, &self.plando.preset_data, ctx);
-            }
-            CustomizeLogicWindow::ItemProgression => { // TODO: Remove, unused
-                layout::window_item_progression(height, &mut self.is_customize_window_open, cur_settings, ctx);
-            }
-            CustomizeLogicWindow::Qol => {
-                layout::window_qol(height, &mut self.is_customize_window_open, cur_settings, ctx);
-            }
-            CustomizeLogicWindow::Objectives => {
-                layout::window_objectives(height, &mut self.is_customize_window_open, cur_settings, ctx);
-            }
-        };
-
-        if !self.is_customize_window_open {
-            self.cur_customize_logic_window = CustomizeLogicWindow::None;
-            self.is_customize_window_open = true;
-        }
-
-        customize_logic_open
     }
 
 }
