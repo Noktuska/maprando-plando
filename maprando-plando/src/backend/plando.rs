@@ -157,6 +157,20 @@ pub enum MapRepositoryType {
     Vanilla, Standard, Wild
 }
 
+struct MapRepositoryWrapper {
+    repo: MapRepository,
+    cache: Vec<Map>
+}
+
+impl From<MapRepository> for MapRepositoryWrapper {
+    fn from(value: MapRepository) -> Self {
+        MapRepositoryWrapper {
+            repo: value,
+            cache: Vec::new()
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct SpoilerOverride {
     pub step: usize,
@@ -173,9 +187,9 @@ struct ImplicitPresetData {
 pub struct Plando {
     pub game_data: GameData,
     pub difficulty_tiers: Vec<DifficultyConfig>,
-    pub maps_vanilla: MapRepository,
-    pub maps_standard: Option<MapRepository>,
-    pub maps_wild: Option<MapRepository>,
+    maps_vanilla: MapRepositoryWrapper,
+    maps_standard: Option<MapRepositoryWrapper>,
+    maps_wild: Option<MapRepositoryWrapper>,
     pub map_editor: MapEditor,
     pub randomizer_settings: RandomizerSettings,
     pub objectives: Vec<Objective>,
@@ -201,9 +215,9 @@ pub struct Plando {
 
 impl Plando {
     pub fn new(game_data: GameData, randomizer_settings: RandomizerSettings, preset_data: &PresetData) -> Result<Self> {
-        let maps_vanilla = Plando::load_map_repository(MapRepositoryType::Vanilla).ok_or(anyhow!("Vanilla Map Repository not found"))?;
-        let maps_standard = Plando::load_map_repository(MapRepositoryType::Standard);
-        let maps_wild = Plando::load_map_repository(MapRepositoryType::Wild);
+        let maps_vanilla: MapRepositoryWrapper = Plando::load_map_repository(MapRepositoryType::Vanilla).ok_or(anyhow!("Vanilla Map Repository not found"))?.into();
+        let maps_standard = Plando::load_map_repository(MapRepositoryType::Standard).map(|x| x.into());
+        let maps_wild = Plando::load_map_repository(MapRepositoryType::Wild).map(|x| x.into());
 
         if maps_standard.is_none() {
             println!("WARN: Standard Map Repository not found");
@@ -212,7 +226,7 @@ impl Plando {
             println!("WARN: Wild Map Repository not found");
         }
 
-        let map = roll_map(&maps_vanilla, &game_data)?;
+        let map = roll_map(&maps_vanilla.repo, &game_data)?;
         let map_editor = MapEditor::new(map);
 
         let mut rng = rand::rngs::StdRng::from_entropy();
@@ -308,8 +322,8 @@ impl Plando {
 
     pub fn load_map_repository(map_repo_type: MapRepositoryType) -> Option<MapRepository> {
         let vanilla_map_path = Path::new("../maps/vanilla");
-        let standard_maps_path = Path::new("../maps/v119c-standard-avro");
-        let wild_maps_path = Path::new("../maps/v119c-wild-avro");
+        let standard_maps_path = Path::new("../maps/v119-standard-avro");
+        let wild_maps_path = Path::new("../maps/v119-wild-avro");
 
         match map_repo_type {
             MapRepositoryType::Vanilla => MapRepository::new("Vanilla", vanilla_map_path).ok(),
@@ -346,13 +360,31 @@ impl Plando {
         Ok(())
     }
 
+    pub fn does_repo_exist(&self, repo_type: MapRepositoryType) -> bool {
+        match repo_type {
+            MapRepositoryType::Vanilla => true,
+            MapRepositoryType::Standard => self.maps_standard.is_some(),
+            MapRepositoryType::Wild => self.maps_wild.is_some()
+        }
+    }
+
     pub fn reroll_map(&mut self, map_repository: MapRepositoryType) -> Result<()> {
-        let map_repository = match map_repository {
-            MapRepositoryType::Vanilla => &self.maps_vanilla,
-            MapRepositoryType::Standard => self.maps_standard.as_ref().unwrap(),
-            MapRepositoryType::Wild => self.maps_wild.as_ref().unwrap()
+        let repo = match map_repository {
+            MapRepositoryType::Vanilla => &mut self.maps_vanilla,
+            MapRepositoryType::Standard => self.maps_standard.as_mut().unwrap(),
+            MapRepositoryType::Wild => self.maps_wild.as_mut().unwrap()
         };
-        let map = roll_map(&map_repository, &self.game_data)?;
+
+        if repo.cache.is_empty() {
+            let map_seed = (self.rng.next_u64() & 0xFFFFFFFF) as usize;
+            repo.cache = repo.repo.get_map_batch(map_seed, &self.game_data)?;
+        }
+
+        let map = match map_repository {
+            MapRepositoryType::Vanilla => repo.cache.last().cloned(),
+            _ => repo.cache.pop()
+        }.ok_or(anyhow!("Could not unpack maps from repository"))?;
+
         self.load_map(map)?;
         Ok(())
     }

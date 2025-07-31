@@ -286,16 +286,16 @@ fn load_preset_data(game_data: &GameData) -> Result<PresetData> {
 }
 
 fn download_map_repos() -> Result<()> {
-    for pool in ["v117c-standard", "v117c-wild"] {
-        let url = format!("https://map-rando-artifacts.s3.us-west-004.backblazeb2.com/maps/{pool}.tgz");
+    for pool in ["v119-standard-avro", "v119-wild-avro"] {
+        let url = format!("https://map-rando-artifacts.s3.us-west-004.backblazeb2.com/maps/{pool}.tar");
         let client = reqwest::blocking::Client::new();
         let resp = client.get(&url).send()?;
 
         println!("Attempting to download {url}");
         let bytes = resp.bytes()?;
         let cursor = std::io::Cursor::new(&bytes);
-        let decoder = GzDecoder::new(cursor);
-        let mut archive = tar::Archive::new(decoder);
+        //let decoder = GzDecoder::new(cursor);
+        let mut archive = tar::Archive::new(cursor);
         println!("Unpacking archive, this may take a while...");
         archive.unpack("../maps/")?;
     }
@@ -1355,7 +1355,7 @@ impl PlandoApp {
                 if download_thread_handle.is_finished() {
                     let res = download_thread_handle.join().unwrap();
                     match res {
-                        Ok(_) => {},
+                        Ok(_) => self.modal_type = ModalType::None,
                         Err(err) => self.modal_type = ModalType::Error(err.to_string())
                     }
                     download_thread_active = false;
@@ -1569,11 +1569,11 @@ impl PlandoApp {
                                 self.redraw_map();
                                 ui.close_menu();
                             }
-                            if ui.add_enabled(self.plando.maps_standard.is_some(), egui::Button::new("Reroll Map (Standard)")).clicked() {
+                            if ui.add_enabled(self.plando.does_repo_exist(MapRepositoryType::Standard), egui::Button::new("Reroll Map (Standard)")).clicked() {
                                 self.plando.reroll_map(MapRepositoryType::Standard).unwrap();
                                 self.redraw_map();
                             }
-                            if ui.add_enabled(self.plando.maps_wild.is_some(), egui::Button::new("Reroll Map (Wild)")).clicked() {
+                            if ui.add_enabled(self.plando.does_repo_exist(MapRepositoryType::Wild), egui::Button::new("Reroll Map (Wild)")).clicked() {
                                 self.plando.reroll_map(MapRepositoryType::Wild).unwrap();
                                 self.redraw_map();
                             }
