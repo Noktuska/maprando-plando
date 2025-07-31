@@ -679,7 +679,7 @@ impl MapEditor {
             (x - x_offset).abs() + (y - y_offset).abs()
         }).unwrap();
 
-        if min_dist_offset != (0, 0) {
+        if min_dist_offset != (x_offset, y_offset) {
             self.error_list.push(MapErrorType::ToiletNoPatch(cross_room_idx, x_offset, y_offset, Some(min_dist_offset)));
         }
     }
