@@ -162,6 +162,18 @@ struct MapRepositoryWrapper {
     cache: Vec<Map>
 }
 
+impl MapRepositoryWrapper {
+    fn roll_map(&mut self, rng: &mut StdRng, game_data: &GameData) -> Result<Map> {
+        if self.cache.is_empty() {
+            let map_seed = (rng.next_u64() & 0xFFFFFFFF) as usize;
+            self.cache = self.repo.get_map_batch(map_seed, game_data)?;
+        }
+
+        let map_idx = (rng.next_u64() % self.cache.len() as u64) as usize;
+        Ok(self.cache[map_idx].clone())
+    }
+}
+
 impl From<MapRepository> for MapRepositoryWrapper {
     fn from(value: MapRepository) -> Self {
         MapRepositoryWrapper {
@@ -215,7 +227,7 @@ pub struct Plando {
 
 impl Plando {
     pub fn new(game_data: GameData, randomizer_settings: RandomizerSettings, preset_data: &PresetData) -> Result<Self> {
-        let maps_vanilla: MapRepositoryWrapper = Plando::load_map_repository(MapRepositoryType::Vanilla).ok_or(anyhow!("Vanilla Map Repository not found"))?.into();
+        let mut maps_vanilla: MapRepositoryWrapper = Plando::load_map_repository(MapRepositoryType::Vanilla).ok_or(anyhow!("Vanilla Map Repository not found"))?.into();
         let maps_standard = Plando::load_map_repository(MapRepositoryType::Standard).map(|x| x.into());
         let maps_wild = Plando::load_map_repository(MapRepositoryType::Wild).map(|x| x.into());
 
@@ -225,11 +237,12 @@ impl Plando {
         if maps_wild.is_none() {
             println!("WARN: Wild Map Repository not found");
         }
+        
+        let mut rng = rand::rngs::StdRng::from_entropy();
 
-        let map = roll_map(&maps_vanilla.repo, &game_data)?;
+        let map = maps_vanilla.roll_map(&mut rng, &game_data)?;
         let map_editor = MapEditor::new(map);
 
-        let mut rng = rand::rngs::StdRng::from_entropy();
         let objectives = maprando::randomize::get_objectives(&randomizer_settings, &mut rng);
         let randomizable_door_connections = get_randomizable_door_connections(&game_data, map_editor.get_map(), &objectives);
 
@@ -375,17 +388,9 @@ impl Plando {
             MapRepositoryType::Wild => self.maps_wild.as_mut().unwrap()
         };
 
-        if repo.cache.is_empty() {
-            let map_seed = (self.rng.next_u64() & 0xFFFFFFFF) as usize;
-            repo.cache = repo.repo.get_map_batch(map_seed, &self.game_data)?;
-        }
-
-        let map = match map_repository {
-            MapRepositoryType::Vanilla => repo.cache.last().cloned(),
-            _ => repo.cache.pop()
-        }.ok_or(anyhow!("Could not unpack maps from repository"))?;
-
+        let map = repo.roll_map(&mut self.rng, &self.game_data)?;
         self.load_map(map)?;
+        
         Ok(())
     }
 
@@ -1230,17 +1235,6 @@ impl Plando {
         flag_vec
     }
 }
-
-
-
-fn roll_map(repo: &MapRepository, game_data: &GameData) -> Result<Map> {
-    let mut rng = rand::rngs::StdRng::from_entropy();
-
-    let map_seed = (rng.next_u64() & 0xFFFFFFFF) as usize;
-    let mut map_vec = repo.get_map_batch(map_seed, game_data)?;
-    map_vec.pop().ok_or(anyhow!("Map repository is empty"))
-}
-
 
 
 pub struct VertexInfo {
