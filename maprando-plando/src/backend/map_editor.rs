@@ -485,7 +485,7 @@ impl MapEditor {
 
         for &(other_room_idx, other_door_idx) in &self.invalid_doors {
             let other_door = &game_data.room_geometry[other_room_idx].doors[other_door_idx];
-            if other_door.direction != dir_opposite {
+            if other_door.direction != dir_opposite || other_door.subtype != door.subtype {
                 continue;
             }
             let (room_x, room_y) = self.map.rooms[other_room_idx];
