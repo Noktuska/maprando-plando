@@ -1,4 +1,4 @@
-use crate::{backend::{map_editor::MapErrorType, plando::{get_double_item_offset, DoubleItemPlacement, MapRepositoryType, Placeable, Plando, SpoilerOverride, ITEM_VALUES}}, input_state::KeyState, layout::{hotkey_settings::Keybind, map_editor_ui::MapEditorUi, settings_customize::{Customization, SettingsCustomize, SettingsCustomizeResult}, settings_logic::LogicCustomization, Layout, WindowType}};
+use crate::{backend::{map_editor::MapErrorType, plando::{get_double_item_offset, DoubleItemPlacement, MapRepositoryType, Placeable, Plando, SpoilerOverride, ITEM_VALUES}}, input_state::KeyState, layout::{hotkey_settings::Keybind, map_editor_ui::MapEditorUi, settings_customize::{Customization, SettingsCustomize, SettingsCustomizeResult}, settings_logic::LogicCustomization, Layout, SidebarPanel, WindowType}};
 use anyhow::{anyhow, bail, Result};
 use egui::{self, style::default_text_styles, Color32, Context, FontDefinitions, Id, Sense, TextureId, Ui, Vec2};
 use egui_sfml::{SfEgui, UserTexSource};
@@ -19,6 +19,7 @@ use sfml::{
             mouse, Event, Key, Style
         }
     };
+use strum::VariantArray;
 use std::{cmp::{max, min}, ffi::OsStr, fs::File, io::{Read, Write}, path::Path, thread::{self, JoinHandle}, time::Instant};
 
 mod backend;
@@ -2420,22 +2421,28 @@ impl PlandoApp {
 
     fn draw_sidebar(&mut self, ui: &mut Ui, sidebar_selection: &mut Option<Placeable>) {
         ui.scope(|ui| {
-            let tabs = ["Items", "Rooms", "Areas", "Errors"];
             ui.style_mut().spacing.item_spacing = egui::Vec2::ZERO;
 
             ui.horizontal(|ui| {
                 let sel_color = ui.style().visuals.panel_fill;
 
-                for tab in tabs {
-                    let mut bt = egui::Button::new(tab)
+                for tab in SidebarPanel::VARIANTS {
+                    let title = match tab {
+                        SidebarPanel::Items => "Items".to_string(),
+                        SidebarPanel::Rooms => "Rooms".to_string(),
+                        SidebarPanel::Areas => "Areas".to_string(),
+                        SidebarPanel::Errors => format!("Errors ({})", self.plando.map_editor.error_list.len()),
+                    };
+
+                    let mut bt = egui::Button::new(title)
                         .corner_radius(egui::CornerRadius { se: 0, sw: 0, ne: 4, nw: 4 });
 
-                    if tab != self.layout.sidebar_tab {
+                    if *tab != self.layout.sidebar_tab {
                         bt = bt.fill(sel_color);
                     }
 
                     if ui.add(bt).clicked() {
-                        self.layout.sidebar_tab = tab.to_string();
+                        self.layout.sidebar_tab = tab.clone();
                     }
                 }
             });
@@ -2443,10 +2450,10 @@ impl PlandoApp {
             ui.add(egui::Separator::default().spacing(1.0));
         });
 
-        match self.layout.sidebar_tab.as_str() {
-            "Items" => self.draw_sidebar_item_select(ui, sidebar_selection),
-            "Rooms" => self.draw_sidebar_room_select(ui),
-            "Areas" => self.draw_sidebar_area_select(ui),
+        match self.layout.sidebar_tab {
+            SidebarPanel::Items => self.draw_sidebar_item_select(ui, sidebar_selection),
+            SidebarPanel::Rooms => self.draw_sidebar_room_select(ui),
+            SidebarPanel::Areas => self.draw_sidebar_area_select(ui),
             _ => {}
         }
     }

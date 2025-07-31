@@ -10,6 +10,7 @@ mod settings_gen;
 
 use anyhow::Result;
 use egui::{Context, Ui};
+use strum_macros::VariantArray;
 
 use crate::layout::{hotkey_settings::HotkeySettingsWindow, info_overlay::InfoOverlayBuilder, render_selection::RenderSelection};
 
@@ -19,7 +20,7 @@ pub struct Layout {
     pub render_selection: RenderSelection,
     pub info_overlay_builder: InfoOverlayBuilder,
 
-    pub sidebar_tab: String,
+    pub sidebar_tab: SidebarPanel,
 
     window_stack: Vec<WindowType>
 }
@@ -29,7 +30,7 @@ pub enum WindowType {
     HotkeySettings
 }
 
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(PartialEq, Eq, Clone, Copy, VariantArray)]
 pub enum SidebarPanel {
     Items,
     Rooms,
@@ -43,7 +44,7 @@ impl Layout {
             hotkey_settings: HotkeySettingsWindow::new(),
             render_selection: RenderSelection::new()?,
             info_overlay_builder: InfoOverlayBuilder::new(),
-            sidebar_tab: String::new(),
+            sidebar_tab: SidebarPanel::Items,
             window_stack: Vec::new()
         })
     }
