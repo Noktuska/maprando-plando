@@ -308,8 +308,8 @@ impl Plando {
 
     pub fn load_map_repository(map_repo_type: MapRepositoryType) -> Option<MapRepository> {
         let vanilla_map_path = Path::new("../maps/vanilla");
-        let standard_maps_path = Path::new("../maps/v117c-standard");
-        let wild_maps_path = Path::new("../maps/v117c-wild");
+        let standard_maps_path = Path::new("../maps/v119c-standard-avro");
+        let wild_maps_path = Path::new("../maps/v119c-wild-avro");
 
         match map_repo_type {
             MapRepositoryType::Vanilla => MapRepository::new("Vanilla", vanilla_map_path).ok(),

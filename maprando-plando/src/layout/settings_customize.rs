@@ -121,8 +121,8 @@ pub struct Customization {
     pub controller_config: CustomControllerConfig,
 }
 
-impl Customization {
-    pub fn default() -> Self {
+impl Default for Customization {
+    fn default() -> Self {
         Customization {
             samus_sprite: "samus_vanilla".to_string(),
             etank_color: [0xDE as f32 / 255.0, 0x38 as f32 / 255.0, 0x94 as f32 / 255.0],
@@ -141,7 +141,9 @@ impl Customization {
             controller_config: CustomControllerConfig::default()
         }
     }
-    
+}
+
+impl Customization {
     fn to_settings(&self, themes: &[MosaicTheme]) -> CustomizeSettings {
         let etank_color = Some((
             (self.etank_color[0] * 31.0) as u8,

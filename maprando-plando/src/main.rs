@@ -10,7 +10,8 @@ use maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTil
 use rand::RngCore;
 use rfd::FileDialog;
 use self_update::cargo_crate_version;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
 use sfml::{
         cpp::FBox, graphics::{
             self, Color, FloatRect, IntRect, PrimitiveType, RenderStates, RenderTarget, RenderWindow, Shape, Transformable, Vertex
@@ -119,6 +120,7 @@ struct SeedData {
     start_location: usize,
     item_placements: Vec<Item>,
     door_locks: Vec<LockedDoorSerializable>,
+    //#[serde(deserialize_with = "ok_or_default")]
     settings: RandomizerSettings,
     #[serde(default = "Vec::new")]
     spoiler_overrides: Vec<SpoilerOverride>
@@ -131,11 +133,24 @@ fn save_settings(settings: &Settings, path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn load_settings(path: &Path) -> Result<Settings> {
+fn load_settings(path: &Path, preset_data: &PresetData) -> Result<Settings> {
     let mut file = File::open(path)?;
     let mut data_str = String::new();
     file.read_to_string(&mut data_str)?;
-    let result: Settings = serde_json::from_str(&data_str)?;
+
+    let mut v: Value = serde_json::from_str(&data_str)?;
+
+    let mut preset_opt = None;
+    if let Some(last_logic_preset) = v.get_mut("last_logic_preset") {
+        if !last_logic_preset.is_null() {
+            let preset_string = v.take().to_string();
+            preset_opt = Some(utils::try_upgrade_settings(preset_string, preset_data, true)?.1);
+        }
+    }
+
+    let mut result: Settings = serde_json::from_value(v)?;
+    result.last_logic_preset = preset_opt;
+
     Ok(result)
 }
 
@@ -181,13 +196,22 @@ fn get_seed_data(plando: &Plando) -> SeedData {
     }
 }
 
-fn load_seed(plando: &mut Plando, path: &Path) -> Result<()> {
+fn load_seed(plando: &mut Plando, path: &Path, preset_data: &PresetData) -> Result<()> {
     let mut file = File::open(path)?;
 
     let mut str = String::new();
     file.read_to_string(&mut str)?;
 
-    let seed_data: SeedData = serde_json::from_str(&str)?;
+    let mut v: Value = serde_json::from_str(&str)?;
+    if let Some(settings) = v.get_mut("settings") {
+        if !settings.is_null() {
+            let preset_string = settings.take().to_string();
+            let preset_string = utils::try_upgrade_settings(preset_string, preset_data, true)?.0;
+            let preset: Value = serde_json::from_str(&preset_string)?;
+            *settings = preset;
+        }
+    }
+    let seed_data: SeedData = serde_json::from_value(v)?;
 
     let auto_update = plando.auto_update_spoiler;
     plando.auto_update_spoiler = false;
@@ -1012,7 +1036,6 @@ struct PlandoApp {
     spoiler_step: usize,
     spoiler_type: SpoilerType,
     modal_type: ModalType,
-    is_customize_window_open: bool,
     override_window: Option<usize>,
 
     layout: Layout,
@@ -1027,8 +1050,17 @@ impl PlandoApp {
     const GRID_SIZE: usize = 72;
 
     fn new() -> Result<PlandoApp> {
+        let game_data = GameData::load()?;
+        let preset_data = load_preset_data(&game_data)?;
+
         let settings_path = Path::new("../plando_settings.json");
-        let settings = load_settings(settings_path).unwrap_or_default();
+        let settings = match load_settings(settings_path, &preset_data) {
+            Ok(settings) => settings,
+            Err(err) => {
+                println!("{}", err.to_string());
+                Settings::default()
+            }
+        };
         if settings.auto_update {
             match check_update() {
                 Ok(_) => {
@@ -1037,9 +1069,6 @@ impl PlandoApp {
                 Err(err) => println!("{}", err.to_string())
             };
         }
-
-        let game_data = GameData::load()?;
-        let preset_data = load_preset_data(&game_data)?;
 
         let mut plando = Plando::new(game_data, preset_data.default_preset.clone(), &preset_data)?;
 
@@ -1133,7 +1162,6 @@ impl PlandoApp {
             spoiler_step: 0,
             spoiler_type: SpoilerType::None,
             modal_type: ModalType::None,
-            is_customize_window_open: false,
             override_window: None,
 
             layout,
@@ -1507,7 +1535,7 @@ impl PlandoApp {
                                     .add_filter("JSON File", &["json"])
                                     .pick_file();
                                 if let Some(file) = file_opt {
-                                    match load_seed(&mut self.plando, file.as_path()) {
+                                    match load_seed(&mut self.plando, file.as_path(), &self.logic_customization.preset_data) {
                                         Ok(_) => cur_settings = self.plando.randomizer_settings.clone(),
                                         Err(err) => self.modal_type = ModalType::Error(err.to_string())
                                     }
@@ -1515,20 +1543,6 @@ impl PlandoApp {
                                 }
                                 ui.close_menu();
                             }
-                            /*if ui.button("Load Logic Preset from file").clicked() {
-                                let file_opt = FileDialog::new()
-                                    .set_title("Load logic preset from JSON file")
-                                    .set_directory("/")
-                                    .add_filter("JSON File", &["json"])
-                                    .pick_file();
-                                if let Some(file) = file_opt {
-                                    let res = self.plando.load_preset_from_file(&file);
-                                    if res.is_err() {
-                                        self.modal_type = ModalType::Error(res.unwrap_err().to_string());
-                                    }
-                                }
-                                ui.close_menu();
-                            }*/
                             ui.separator();
                             if ui.button("Patch ROM").clicked() {
                                 customize_open = true;
@@ -1538,7 +1552,7 @@ impl PlandoApp {
                                 if let Some(file) = FileDialog::new()
                                 .set_title("Select seed JSON file to load and patch")
                                 .set_directory("/").add_filter("JSON File", &["json"]).pick_file() {
-                                    match load_seed(&mut self.plando, &file) {
+                                    match load_seed(&mut self.plando, &file, &self.logic_customization.preset_data) {
                                         Ok(_) => {
                                             customize_open = true;
                                             reset_after_patch = true;
