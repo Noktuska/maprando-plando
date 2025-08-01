@@ -1204,7 +1204,7 @@ impl PlandoApp {
         file.write_all(&new_rom.data)?;
 
         Ok(())
-}
+    }
 
     fn redraw_map(&mut self) {
         let mut img_obj = graphics::Image::new_solid(8, 8, Color::TRANSPARENT).unwrap();

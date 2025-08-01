@@ -689,7 +689,7 @@ impl MapEditor {
         let map_room_idxs: Vec<usize> = game_data.room_geometry.iter().enumerate().filter_map(
             |(idx, room)| if room.name.contains(" Map Room") { Some(idx) } else { None }
         ).collect();
-        // Check every area has exaclty one map station
+        // Check every area has exactly one map station
         for room_idx in map_room_idxs {
             let area = self.map.area[room_idx];
             if area_maps[area] {
@@ -701,29 +701,34 @@ impl MapEditor {
         // Check Phantoon Map is connected to Phantoon through one room in a singular area
         let phantoon_map_idx = game_data.room_idx_by_ptr[&511179];
         let phantoon_room_idx = game_data.room_idx_by_ptr[&511251];
+        let area_phantoon = self.map.area[phantoon_room_idx];
+
         let phantoon_map_door = &game_data.room_geometry[phantoon_map_idx].doors[0];
         let phantoon_room_door = &game_data.room_geometry[phantoon_room_idx].doors[0];
         let phantoon_map_ptr_pair = (phantoon_map_door.exit_ptr, phantoon_map_door.entrance_ptr);
         let phantoon_room_ptr_pair = (phantoon_room_door.exit_ptr, phantoon_room_door.entrance_ptr);
 
-        let phantoon_map_conn_idx = self.get_door_conn_idx(phantoon_map_idx, 0, game_data).unwrap();
-        let phantoon_room_conn_idx = self.get_door_conn_idx(phantoon_room_idx, 0, game_data).unwrap();
-        let phantoon_map_conn = self.map.doors[phantoon_map_conn_idx];
-        let phantoon_room_conn = self.map.doors[phantoon_room_conn_idx];
+        let phantoon_map_conn_idx = self.get_door_conn_idx(phantoon_map_idx, 0, game_data);
+        let phantoon_room_conn_idx = self.get_door_conn_idx(phantoon_room_idx, 0, game_data);
+        if phantoon_map_conn_idx.is_some() && phantoon_room_conn_idx.is_some() {
+            let phantoon_map_conn = self.map.doors[phantoon_map_conn_idx.unwrap()];
+            let phantoon_room_conn = self.map.doors[phantoon_room_conn_idx.unwrap()];
 
-        let other_map_ptr_pair = if phantoon_map_conn.0 == phantoon_map_ptr_pair { phantoon_map_conn.1 } else { phantoon_map_conn.0 };
-        let other_room_ptr_pair = if phantoon_room_conn.0 == phantoon_room_ptr_pair { phantoon_room_conn.1 } else { phantoon_room_conn.0 };
+            let other_map_ptr_pair = if phantoon_map_conn.0 == phantoon_map_ptr_pair { phantoon_map_conn.1 } else { phantoon_map_conn.0 };
+            let other_room_ptr_pair = if phantoon_room_conn.0 == phantoon_room_ptr_pair { phantoon_room_conn.1 } else { phantoon_room_conn.0 };
 
-        let other_map_room = game_data.room_and_door_idxs_by_door_ptr_pair[&other_map_ptr_pair];
-        let other_room_room = game_data.room_and_door_idxs_by_door_ptr_pair[&other_room_ptr_pair];
+            let other_map_room = game_data.room_and_door_idxs_by_door_ptr_pair[&other_map_ptr_pair];
+            let other_room_room = game_data.room_and_door_idxs_by_door_ptr_pair[&other_room_ptr_pair];
 
-        if other_map_room.0 != other_room_room.0 {
-            self.error_list.push(MapErrorType::PhantoonMap);
-        }
-        let area_phantoon = self.map.area[phantoon_room_idx];
-        let area_map = self.map.area[phantoon_map_idx];
-        let area_other = self.map.area[other_map_room.0];
-        if area_phantoon != area_map || area_map != area_other {
+            if other_map_room.0 != other_room_room.0 {
+                self.error_list.push(MapErrorType::PhantoonMap);
+            }
+            let area_map = self.map.area[phantoon_map_idx];
+            let area_other = self.map.area[other_map_room.0];
+            if area_phantoon != area_map || area_map != area_other {
+                self.error_list.push(MapErrorType::PhantoonMap);
+            }
+        } else {
             self.error_list.push(MapErrorType::PhantoonMap);
         }
 
