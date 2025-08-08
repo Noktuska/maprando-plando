@@ -121,7 +121,10 @@ impl Area {
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub enum MapErrorType {
+    // Warnings
     DoorDisconnected(usize, usize), // (room_idx, door_idx) of door which is not connected
+
+    // Errors
     AreaBounds(usize, usize, usize), // Area idx which exceeds boundary limits followed by current (width, height)
     AreaTransitions(usize), // Number of area transition which exceeds limit
     MapPerArea(usize), // room_idx of a double map
@@ -166,6 +169,13 @@ impl MapErrorType {
                     None => format!("There is no mosaic patch for the toilet crossing {room_name}")
                 }
             }
+        }
+    }
+
+    pub fn is_severe(&self) -> bool {
+        match self {
+            MapErrorType::DoorDisconnected(_, _) => false,
+            _ => true
         }
     }
 }
@@ -574,10 +584,7 @@ impl MapEditor {
                 let door_ptr_pair = (door.exit_ptr, door.entrance_ptr);
                 let door_conn_idx = match self.get_door_conn_idx(room_idx, door_idx, game_data) {
                     Some(idx) => idx,
-                    None => {
-                        self.error_list.push(MapErrorType::DoorDisconnected(room_idx, door_idx));
-                        return;
-                    }
+                    None => continue
                 };
                 let door_conn = self.map.doors[door_conn_idx];
                 let other_door_ptr_pair = if door_conn.0 == door_ptr_pair { door_conn.1 } else { door_conn.0 };

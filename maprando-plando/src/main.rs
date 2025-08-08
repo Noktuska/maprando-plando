@@ -1894,6 +1894,57 @@ impl PlandoApp {
         }
     }
 
+    fn get_error_rects(&self, error: MapErrorType) -> Vec<IntRect> {
+        match error {
+            MapErrorType::DoorDisconnected(room_idx, door_idx) => {
+                let (room_x, room_y) = self.plando.map().rooms[room_idx];
+                let door = &self.plando.game_data.room_geometry[room_idx].doors[door_idx];
+                vec![IntRect::new((room_x + door.x) as i32, (room_y + door.y) as i32, 1, 1)]
+            },
+            MapErrorType::AreaBounds(area, w, h) => {
+                (0..self.plando.map().rooms.len()).filter(|&room_idx| {
+                    self.plando.map().area[room_idx] == area
+                }).map(|room_idx| {
+                    self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data)
+                }).collect()
+            },
+            MapErrorType::AreaTransitions(num) => {
+                vec![]
+            },
+            MapErrorType::MapPerArea(room_idx) => {
+                vec![self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data)]
+            },
+            MapErrorType::MapBounds(x, y, width, height) => {
+                vec![IntRect::new(x, y, width as i32, height as i32)]
+            }
+            MapErrorType::PhantoonMap => {
+                let room_idx = self.plando.game_data.room_idx_by_ptr[&511179];
+                vec![self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data)]
+            },
+            MapErrorType::PhantoonSave => {
+                let room_idx = self.plando.game_data.room_idx_by_ptr[&511626];
+                vec![self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data)]
+            },
+            MapErrorType::ToiletNoRoom => {
+                let room_idx = self.plando.game_data.toilet_room_idx;
+                vec![self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data)]
+            },
+            MapErrorType::ToiletMultipleRooms(room_idx1, room_idx2) => {
+                let room_idx = self.plando.game_data.toilet_room_idx;
+                vec![self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data),
+                self.plando.map_editor.get_room_bounds(room_idx1, &self.plando.game_data),
+                self.plando.map_editor.get_room_bounds(room_idx2, &self.plando.game_data)]
+            },
+            MapErrorType::ToiletArea(room_idx, _, _) => {
+                vec![self.plando.map_editor.get_room_bounds(self.plando.game_data.toilet_room_idx, &self.plando.game_data),
+                self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data)]
+            },
+            MapErrorType::ToiletNoPatch(_, _, _, _) => {
+                vec![self.plando.map_editor.get_room_bounds(self.plando.game_data.toilet_room_idx, &self.plando.game_data)]
+            },
+        }
+    }
+
     fn draw_map_error_overlay(&mut self, rt: &mut dyn RenderTarget, states: &RenderStates) {
         let mut res = None;
 
@@ -1901,61 +1952,15 @@ impl PlandoApp {
         let mouse_tile_y = (self.local_mouse_y / 8.0).floor() as i32;
 
         for i in 0..self.plando.map_editor.error_list.len() {
-            let rects = match self.plando.map_editor.error_list[i] {
-                MapErrorType::DoorDisconnected(room_idx, door_idx) => {
-                    let (room_x, room_y) = self.plando.map().rooms[room_idx];
-                    let door = &self.plando.game_data.room_geometry[room_idx].doors[door_idx];
-                    vec![IntRect::new((room_x + door.x) as i32, (room_y + door.y) as i32, 1, 1)]
-                },
-                MapErrorType::AreaBounds(area, w, h) => {
-                    (0..self.plando.map().rooms.len()).filter(|&room_idx| {
-                        self.plando.map().area[room_idx] == area
-                    }).map(|room_idx| {
-                        self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data)
-                    }).collect()
-                },
-                MapErrorType::AreaTransitions(num) => {
-                    vec![]
-                },
-                MapErrorType::MapPerArea(room_idx) => {
-                    vec![self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data)]
-                },
-                MapErrorType::MapBounds(x, y, width, height) => {
-                    vec![IntRect::new(x, y, width as i32, height as i32)]
-                }
-                MapErrorType::PhantoonMap => {
-                    let room_idx = self.plando.game_data.room_idx_by_ptr[&511179];
-                    vec![self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data)]
-                },
-                MapErrorType::PhantoonSave => {
-                    let room_idx = self.plando.game_data.room_idx_by_ptr[&511626];
-                    vec![self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data)]
-                },
-                MapErrorType::ToiletNoRoom => {
-                    let room_idx = self.plando.game_data.toilet_room_idx;
-                    vec![self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data)]
-                },
-                MapErrorType::ToiletMultipleRooms(room_idx1, room_idx2) => {
-                    let room_idx = self.plando.game_data.toilet_room_idx;
-                    vec![self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data),
-                    self.plando.map_editor.get_room_bounds(room_idx1, &self.plando.game_data),
-                    self.plando.map_editor.get_room_bounds(room_idx2, &self.plando.game_data)]
-                },
-                MapErrorType::ToiletArea(room_idx, _, _) => {
-                    vec![self.plando.map_editor.get_room_bounds(self.plando.game_data.toilet_room_idx, &self.plando.game_data),
-                    self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data)]
-                },
-                MapErrorType::ToiletNoPatch(_, _, _, _) => {
-                    vec![self.plando.map_editor.get_room_bounds(self.plando.game_data.toilet_room_idx, &self.plando.game_data)]
-                },
-            };
+            let rects = self.get_error_rects(self.plando.map_editor.error_list[i]);
 
             if rects.iter().any(|rect| rect.contains2(mouse_tile_x, mouse_tile_y)) {
                 res = Some(self.plando.map_editor.error_list[i].to_string(&self.plando.game_data));
             }
             
             if !rects.is_empty() {
-                self.layout.render_selection.render(rt, states, rects, Color::RED, self.global_seconds());
+                let color = if self.plando.map_editor.error_list[i].is_severe() { Color::RED } else { Color::YELLOW };
+                self.layout.render_selection.render(rt, states, rects, color, self.global_seconds());
             }
         }
 
@@ -2413,6 +2418,7 @@ impl PlandoApp {
             SidebarPanel::Items => self.draw_sidebar_item_select(ui, sidebar_selection),
             SidebarPanel::Rooms => self.draw_sidebar_room_select(ui),
             SidebarPanel::Areas => self.draw_sidebar_area_select(ui),
+            SidebarPanel::Errors => self.draw_sidebar_error_list(ui),
             _ => {}
         }
     }
@@ -2574,6 +2580,36 @@ impl PlandoApp {
                     ui.selectable_value(&mut self.map_editor.swap_second, idx, area_str);
                 }
             });*/
+        });
+    }
+
+    fn draw_sidebar_error_list(&mut self, ui: &mut Ui) {
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            for error in &self.plando.map_editor.error_list {
+                let bt = egui::Button::new(error.to_string(&self.plando.game_data)).fill(
+                    if error.is_severe() { Color32::from_rgb(110, 24, 24) } else { Color32::from_rgb(84, 80, 0) }
+                );
+                if ui.add(bt).clicked() {
+                    let rects = self.get_error_rects(error.clone());
+                    if !rects.is_empty() {
+                        let bbox = rects.into_iter().reduce(|acc, e| {
+                            let acc_right = acc.left + acc.width;
+                            let acc_bottom = acc.top + acc.height;
+                            let e_right = e.left + e.width;
+                            let e_bottom = e.top + e.height;
+
+                            let new_left = acc.left.min(e.left);
+                            let new_top = acc.top.min(e.top);
+                            let new_right = acc_right.max(e_right);
+                            let new_bottom = acc_bottom.max(e_bottom);
+                            IntRect::new(new_left, new_top, new_right - new_left, new_bottom - new_top)
+                        }).unwrap();
+                        let scaled_bbox = IntRect::new(bbox.left * 8, bbox.top * 8, bbox.width * 8, bbox.height * 8);
+
+                        self.view.focus_rect(scaled_bbox.as_other());
+                    }
+                }
+            }
         });
     }
 

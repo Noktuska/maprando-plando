@@ -58,7 +58,7 @@ impl MapEditorUi {
             let rect = utils::normalize_rect(rect);
 
             for (room_idx, &(room_x, room_y)) in map_editor.get_map().rooms.iter().enumerate() {
-                if map_editor.missing_rooms.contains(&room_idx) {
+                if !map_editor.get_map().room_mask[room_idx] {
                     continue;
                 }
 
