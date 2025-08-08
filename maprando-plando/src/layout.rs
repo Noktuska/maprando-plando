@@ -3,6 +3,8 @@ pub mod info_overlay;
 pub mod map_editor_ui;
 pub mod render_selection;
 
+pub mod room_search;
+
 pub mod settings_logic;
 pub mod settings_customize;
 
