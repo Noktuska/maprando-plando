@@ -243,7 +243,7 @@ impl Plando {
         let map = maps_vanilla.roll_map(&mut rng, &game_data)?;
         let map_editor = MapEditor::new(map);
 
-        let objectives = maprando::randomize::get_objectives(&randomizer_settings, &mut rng);
+        let objectives = maprando::randomize::get_objectives(&randomizer_settings, Some(map_editor.get_map()), &game_data, &mut rng);
         let randomizable_door_connections = get_randomizable_door_connections(&game_data, map_editor.get_map(), &objectives);
 
         let ship_start = Self::get_ship_start();
@@ -396,7 +396,7 @@ impl Plando {
 
     pub fn load_preset(&mut self, preset: RandomizerSettings) {
         self.randomizer_settings = preset;
-        self.objectives = maprando::randomize::get_objectives(&self.randomizer_settings, &mut self.rng);
+        self.objectives = maprando::randomize::get_objectives(&self.randomizer_settings, Some(self.map_editor.get_map()), &self.game_data, &mut self.rng);
         self.update_randomizable_door_connections();
         self.get_difficulty_tiers();
         if self.auto_update_spoiler {
@@ -515,6 +515,7 @@ impl Plando {
             &self.randomizer_settings,
             &self.difficulty_tiers[0],
             &self.game_data,
+            &randomizer.door_map,
             &locked_door_data,
             &self.objectives,
         );
@@ -533,6 +534,7 @@ impl Plando {
             &self.randomizer_settings,
             &self.difficulty_tiers[0],
             &self.game_data,
+            &randomizer.door_map,
             &locked_door_data,
             &self.objectives,
         );
@@ -548,6 +550,7 @@ impl Plando {
             &self.randomizer_settings,
             &self.difficulty_tiers[0],
             &self.game_data,
+            &randomizer.door_map,
             &locked_door_data,
             &self.objectives,
         );
@@ -567,6 +570,7 @@ impl Plando {
                 &self.randomizer_settings,
                 &self.difficulty_tiers[0],
                 &self.game_data,
+                &randomizer.door_map,
                 &locked_door_data,
                 &self.objectives
             );

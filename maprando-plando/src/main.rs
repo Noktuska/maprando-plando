@@ -1,12 +1,12 @@
-use crate::{backend::{map_editor::MapErrorType, plando::{get_double_item_offset, DoubleItemPlacement, MapRepositoryType, Placeable, Plando, SpoilerOverride, ITEM_VALUES}}, input_state::KeyState, layout::{hotkey_settings::Keybind, map_editor_ui::MapEditorUi, settings_customize::{Customization, SettingsCustomize, SettingsCustomizeResult}, settings_logic::LogicCustomization, Layout, SidebarPanel, WindowType}};
+use crate::{backend::{map_editor::MapErrorType, plando::{get_double_item_offset, DoubleItemPlacement, MapRepositoryType, Placeable, Plando, SpoilerOverride, ITEM_VALUES}}, input_state::KeyState, layout::{hotkey_settings::Keybind, map_editor_ui::MapEditorUi, room_search::{RoomSearch, SearchOpt}, settings_customize::{Customization, SettingsCustomize, SettingsCustomizeResult}, settings_logic::LogicCustomization, Layout, SidebarPanel, WindowType}};
 use anyhow::{anyhow, bail, Result};
 use egui::{self, style::default_text_styles, Color32, Context, FontDefinitions, Id, Sense, TextureId, Ui, Vec2};
 use egui_sfml::{SfEgui, UserTexSource};
 use flate2::read::GzDecoder;
 use hashbrown::{HashMap, HashSet};
 use input_state::MouseState;
-use maprando::{patch::Rom, preset::PresetData, randomize::SpoilerRouteEntry, settings::{DoorsMode, Objective, RandomizerSettings}};
-use maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType};
+use maprando::{patch::Rom, preset::PresetData, randomize::{LockedDoor, SpoilerRouteEntry}, settings::{DoorsMode, Objective, RandomizerSettings}};
+use maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType, StartLocation};
 use rand::RngCore;
 use rfd::FileDialog;
 use self_update::cargo_crate_version;
@@ -94,37 +94,29 @@ fn load_vanilla_rom(rom_path: &Path) -> Result<Rom> {
 }
 
 #[derive(Serialize, Deserialize)]
-struct StartLocationSerializable {
-    name: String,
-    room_id: usize,
-    node_id: usize,
-    door_load_id: Option<usize>,
-    x: f32,
-    y: f32,
-    requires: Option<Vec<serde_json::Value>>,
-    note: Option<Vec<String>>,
-    camera_offset_x: Option<f32>,
-    camera_offset_y: Option<f32>,
-}
-
-#[derive(Serialize, Deserialize)]
-struct LockedDoorSerializable {
-    room_id: usize,
-    node_id: usize,
-    door_type: usize,
-    direction: String,
-}
-
-#[derive(Serialize, Deserialize)]
 struct SeedData {
     map: Map,
-    start_location: usize,
+    start_location: (usize, usize), // RoomId, NodeId
     item_placements: Vec<Item>,
-    door_locks: Vec<LockedDoorSerializable>,
-    //#[serde(deserialize_with = "ok_or_default")]
+    door_locks: Vec<LockedDoor>,
     settings: RandomizerSettings,
     #[serde(default = "Vec::new")]
     spoiler_overrides: Vec<SpoilerOverride>
+}
+
+impl SeedData {
+    fn new(plando: &Plando) -> Self {
+        let start_loc = &plando.start_location_data.start_location;
+
+        SeedData {
+            map: plando.map().clone(),
+            start_location: (start_loc.room_id, start_loc.node_id),
+            item_placements: plando.item_locations.clone(),
+            door_locks: plando.locked_doors.clone(),
+            settings: plando.randomizer_settings.clone(),
+            spoiler_overrides: plando.spoiler_overrides.clone()
+        }
+    }
 }
 
 fn save_settings(settings: &Settings, path: &Path) -> Result<()> {
@@ -155,54 +147,14 @@ fn load_settings(path: &Path, preset_data: &PresetData) -> Result<Settings> {
     Ok(result)
 }
 
-fn get_seed_data(plando: &Plando) -> SeedData {
-    let mut door_locks = Vec::new();
-    for door_lock in &plando.locked_doors {
-        let (room_id, node_id) = plando.game_data.door_ptr_pair_map[&door_lock.src_ptr_pair];
-        let (room_idx, door_idx) = plando.game_data.room_and_door_idxs_by_door_ptr_pair[&door_lock.src_ptr_pair];
-        let direction = plando.game_data.room_geometry[room_idx].doors[door_idx].direction.clone();
-
-        let door_type = match door_lock.door_type {
-            DoorType::Beam(beam) => 5 + beam as usize,
-            DoorType::Blue => 0,
-            DoorType::Gray => 1,
-            DoorType::Red => 2,
-            DoorType::Green => 3,
-            DoorType::Yellow => 4
-        };
-
-        door_locks.push(LockedDoorSerializable {
-            room_id,
-            node_id,
-            door_type,
-            direction
-        });
-    }
-
-    let start_room_id = plando.start_location_data.start_location.room_id;
-    let start_node_id = plando.start_location_data.start_location.node_id;
-    let start_location_id = if start_room_id == 8 && start_node_id == 5 {
-        plando.game_data.start_locations.len()
-    } else {
-        plando.game_data.start_location_id_map[&(start_room_id, start_node_id)]
-    };
-
-    SeedData {
-        map: plando.map().clone(),
-        start_location: start_location_id,
-        item_placements: plando.item_locations.clone(),
-        door_locks,
-        settings: plando.randomizer_settings.clone(),
-        spoiler_overrides: plando.spoiler_overrides.clone()
-    }
-}
-
 fn load_seed(plando: &mut Plando, path: &Path, preset_data: &PresetData) -> Result<()> {
     let mut file = File::open(path)?;
 
     let mut str = String::new();
     file.read_to_string(&mut str)?;
 
+    // Keep seed data somewhat backwards compatible
+    // Upgrade randomizer settings
     let mut v: Value = serde_json::from_str(&str)?;
     if let Some(settings) = v.get_mut("settings") {
         if !settings.is_null() {
@@ -212,7 +164,30 @@ fn load_seed(plando: &mut Plando, path: &Path, preset_data: &PresetData) -> Resu
             *settings = preset;
         }
     }
-    let seed_data: SeedData = serde_json::from_value(v)?;
+    // Start Location was stored as the vec idx in previous editions
+    if let Some(start_loc_idx) = v.get_mut("start_location") {
+        if let Some(idx) = start_loc_idx.as_u64() {
+            let start_loc = &plando.game_data.start_locations[idx as usize];
+            *start_loc_idx = serde_json::to_value((start_loc.room_id, start_loc.node_id))?;
+        }
+    }
+    // Locked doors were put in a serializable wrapper. This is not really upgradeable without huge overhead so we clear all the doors
+    if let Some(v) = v.get_mut("door_locks") {
+        if let Some(vec) = v.as_array() {
+            if !vec.is_empty() {
+                if serde_json::from_value::<LockedDoor>(vec[0].clone()).is_err() {
+                    *v = Value::Array(Vec::new());
+                }
+            }
+        }
+    }
+
+    let mut seed_data: SeedData = serde_json::from_value(v)?;
+
+    // Upgrade map to include the room_mask
+    if seed_data.map.room_mask.is_empty() {
+        seed_data.map.room_mask = vec![true; seed_data.map.rooms.len()];
+    }
 
     let auto_update = plando.auto_update_spoiler;
     plando.auto_update_spoiler = false;
@@ -220,11 +195,6 @@ fn load_seed(plando: &mut Plando, path: &Path, preset_data: &PresetData) -> Resu
     plando.load_preset(seed_data.settings);
 
     plando.load_map(seed_data.map)?;
-    let start_location = if seed_data.start_location == plando.game_data.start_locations.len() {
-        Plando::get_ship_start()
-    } else {
-        plando.game_data.start_locations[seed_data.start_location].clone()
-    };
 
     plando.item_locations = seed_data.item_placements;
     for item in &plando.item_locations {
@@ -234,27 +204,13 @@ fn load_seed(plando: &mut Plando, path: &Path, preset_data: &PresetData) -> Resu
     }
     
     for door_data in seed_data.door_locks {
-        let door_type = match door_data.door_type {
-            1 => DoorType::Gray,
-            2 => DoorType::Red,
-            3 => DoorType::Green,
-            4 => DoorType::Yellow,
-            5 => DoorType::Beam(BeamType::Charge),
-            6 => DoorType::Beam(BeamType::Ice),
-            7 => DoorType::Beam(BeamType::Wave),
-            8 => DoorType::Beam(BeamType::Spazer),
-            9 => DoorType::Beam(BeamType::Plasma),
-            _ => DoorType::Blue
-        };
-        
-        let (tile_x, tile_y) = plando.game_data.node_coords[&(door_data.room_id, door_data.node_id)];
-        let room_idx = plando.room_id_to_idx(door_data.room_id);
-        
-        let door_idx = plando.get_door_idx(room_idx, tile_x, tile_y, door_data.direction).ok_or_else(|| anyhow!("Malformed Door Data"))?;
-        plando.place_door(room_idx, door_idx, Some(door_type), false, true)?;
+        let (room_idx, door_idx) = plando.game_data.room_and_door_idxs_by_door_ptr_pair[&door_data.src_ptr_pair];
+
+        plando.place_door(room_idx, door_idx, Some(door_data.door_type), false, true)?;
     }
 
-    plando.place_start_location(start_location)?;
+    let start_loc_idx = plando.game_data.start_location_id_map[&seed_data.start_location];
+    plando.place_start_location(plando.game_data.start_locations[start_loc_idx].clone())?;
 
     plando.spoiler_overrides = seed_data.spoiler_overrides;
 
@@ -267,7 +223,7 @@ fn load_seed(plando: &mut Plando, path: &Path, preset_data: &PresetData) -> Resu
 fn save_seed(plando: &mut Plando, path: &Path) -> Result<()> {
     let mut file = File::create(path)?;
 
-    let seed_data = get_seed_data(plando);
+    let seed_data = SeedData::new(plando);
 
     let out = serde_json::to_string(&seed_data)?;
 
@@ -950,7 +906,8 @@ enum ModalType {
 struct View {
     x_offset: f32,
     y_offset: f32,
-    zoom: f32
+    zoom: f32,
+    window_size: Vector2f
 }
 
 impl View {
@@ -958,7 +915,8 @@ impl View {
         View {
             x_offset: 0.0,
             y_offset: 0.0,
-            zoom: 1.0
+            zoom: 1.0,
+            window_size: Vector2f::default()
         }
     }
 
@@ -968,9 +926,9 @@ impl View {
         (new_x, new_y)
     }
 
-    fn focus_rect(&mut self, rect: FloatRect, window_size: Vector2f) {
+    fn focus_rect(&mut self, rect: FloatRect) {
         let center_rect = rect.position() + rect.size() / 2.0;
-        let center_screen = window_size / 2.0;
+        let center_screen = self.window_size / 2.0;
         self.x_offset = center_screen.x - center_rect.x * self.zoom;
         self.y_offset = center_screen.y - center_rect.y * self.zoom;
     }
@@ -1043,6 +1001,7 @@ struct PlandoApp {
     logic_customization: LogicCustomization,
     settings_customization: SettingsCustomize,
     map_editor: MapEditorUi,
+    room_search: RoomSearch,
 
     global_timer: u64
 }
@@ -1169,6 +1128,7 @@ impl PlandoApp {
             logic_customization,
             settings_customization,
             map_editor: MapEditorUi::default(),
+            room_search: RoomSearch::default(),
 
             global_timer: 0
         })
@@ -1296,6 +1256,7 @@ impl PlandoApp {
         let mut window = RenderWindow::new((1080, 720), &format!("Maprando Plando {version_number}"), Style::DEFAULT, &Default::default()).expect("Could not create Window");
         window.set_vertical_sync_enabled(false);
         window.set_key_repeat_enabled(false);
+        self.view.window_size = window.size().as_other();
 
         let font_default = {
             let font = FontDefinitions::default();
@@ -1335,8 +1296,6 @@ impl PlandoApp {
 
         let mut download_thread_active = false;
         let mut download_thread_handle: JoinHandle<Result<(), anyhow::Error>> = thread::spawn(|| { Ok(()) });
-
-        //let mut map_editor_mode = false;
 
         let mut frame_counter = 0;
         let mut start = Instant::now();
@@ -1404,6 +1363,7 @@ impl PlandoApp {
                     },
                     Event::Resized { width, height } => {
                         window.set_view(&graphics::View::from_rect(graphics::Rect::new(0.0, 0.0, width as f32, height as f32)).unwrap());
+                        self.view.window_size = window.size().as_other();
                     },
                     _ => {}
                 }
@@ -2504,40 +2464,70 @@ impl PlandoApp {
     }
 
     fn draw_sidebar_room_select(&mut self, ui: &mut Ui) {
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            /*let search_bar = ui.text_edit_singleline(&mut self.map_editor.search_str);
-            if ui.input_mut(|i| i.consume_shortcut(&egui::KeyboardShortcut::new(Modifiers::COMMAND, egui::Key::F))) {
-                search_bar.request_focus();
-                ui.scroll_to_rect(search_bar.rect, Some(egui::Align::TOP));
-            }
-            let room_idxs: Vec<usize> = self.plando.game_data.room_geometry.iter().enumerate().filter_map(
-                |(idx, room_geometry)| {
-                    if room_geometry.name.to_lowercase().contains(&self.map_editor.search_str.to_lowercase()) {
-                        return Some(idx);
-                    }
-                    None
-                }
-            ).collect();
+        ui.text_edit_singleline(&mut self.room_search.name);
+        ui.collapsing("Advanced Search", |ui| {
+            egui::ComboBox::from_label("Heated").selected_text(self.room_search.is_heated.to_string()).show_ui(ui, |ui| {
+                ui.selectable_value(&mut self.room_search.is_heated, SearchOpt::Any, "Any");
+                ui.selectable_value(&mut self.room_search.is_heated, SearchOpt::Yes, "Yes");
+                ui.selectable_value(&mut self.room_search.is_heated, SearchOpt::No, "No");
+            });
 
+            egui::Grid::new("grid_adv_search").striped(true).num_columns(3).show(ui, |ui| {
+                ui.label("");
+                ui.label("Min");
+                ui.label("Max");
+                ui.end_row();
+
+                ui.label("Width");
+                ui.add(egui::DragValue::new(&mut self.room_search.min_width).range(0..=self.room_search.max_width));
+                ui.add(egui::DragValue::new(&mut self.room_search.max_width).range(self.room_search.min_width..=99));
+                ui.end_row();
+                
+                ui.label("Height");
+                ui.add(egui::DragValue::new(&mut self.room_search.min_height).range(0..=self.room_search.max_height));
+                ui.add(egui::DragValue::new(&mut self.room_search.max_height).range(self.room_search.min_height..=99));
+                ui.end_row();
+
+                let door_order = ["Right", "Down", "Left", "Up"];
+                for i in 0..4 {
+                    ui.label(format!("{} Door", door_order[i]));
+                    ui.add(egui::DragValue::new(&mut self.room_search.min_door_count[i]).range(0..=self.room_search.max_door_count[i]));
+                    ui.add(egui::DragValue::new(&mut self.room_search.max_door_count[i]).range(self.room_search.min_door_count[i]..=9));
+                    ui.end_row();
+                }
+            });
+        });
+
+        if ui.button("Clear filters").clicked() {
+            self.room_search.reset();
+        }
+
+        ui.separator();
+
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            let room_idxs = self.room_search.filter(&self.plando.game_data);
             for room_idx in room_idxs {
-                let is_missing = self.map_editor.missing_rooms.contains(&room_idx);
-                let room_name = &self.plando.game_data.room_geometry[room_idx].name;
+                let is_missing = self.plando.map_editor.missing_rooms.contains(&room_idx);
+                let room_geometry = &self.plando.game_data.room_geometry[room_idx];
+                let room_name = &room_geometry.name;
                 let mut btn = egui::Button::new(room_name).min_size(Vec2 { x: 256.0, y: 1.0 });
                 if is_missing {
                     btn = btn.fill(Color32::RED);
                 }
                 if ui.add(btn).clicked() {
                     if is_missing {
-                        self.map_editor.spawn_room(room_idx, &self.plando.game_data);
+                        self.plando.map_editor.spawn_room(room_idx, &self.plando.game_data);
                     }
-                    let (room_x, room_y) = self.map_editor.map.rooms[room_idx];
-                    let room_geometry = &self.plando.game_data.room_geometry[room_idx];
+                    let (room_x, room_y) = self.plando.map().rooms[room_idx];
                     let room_width = room_geometry.map[0].len() as f32 * 8.0;
                     let room_height = room_geometry.map.len() as f32 * 8.0;
                     let room_rect = FloatRect::new(room_x as f32 * 8.0, room_y as f32 * 8.0, room_width, room_height);
                     self.view.focus_rect(room_rect);
+
+                    self.map_editor.selected_room_idx.clear();
+                    self.map_editor.selected_room_idx.push(room_idx);
                 }
-            }*/
+            }
         });
     }
 
