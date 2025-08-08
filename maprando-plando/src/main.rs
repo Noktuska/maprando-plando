@@ -2,15 +2,14 @@ use crate::{backend::{map_editor::MapErrorType, plando::{get_double_item_offset,
 use anyhow::{anyhow, bail, Result};
 use egui::{self, style::default_text_styles, Color32, Context, FontDefinitions, Id, Sense, TextureId, Ui, Vec2};
 use egui_sfml::{SfEgui, UserTexSource};
-use flate2::read::GzDecoder;
 use hashbrown::{HashMap, HashSet};
 use input_state::MouseState;
 use maprando::{patch::Rom, preset::PresetData, randomize::{LockedDoor, SpoilerRouteEntry}, settings::{DoorsMode, Objective, RandomizerSettings}};
-use maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType, StartLocation};
+use maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType};
 use rand::RngCore;
 use rfd::FileDialog;
 use self_update::cargo_crate_version;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sfml::{
         cpp::FBox, graphics::{
@@ -1183,7 +1182,7 @@ impl PlandoApp {
         for i in 0..self.room_data.len() {
             let data = &self.room_data[i];
 
-            if self.plando.map_editor.missing_rooms.contains(&data.room_idx) {
+            if !self.plando.map().room_mask[data.room_idx] {
                 continue;
             }
 
@@ -1546,7 +1545,7 @@ impl PlandoApp {
                                     .add_filter("JSON File", &["json"])
                                     .save_file();
                                 if let Some(file) = file_opt {
-                                    let res = self.plando.map_editor.save_map(&self.plando.game_data, file.as_path());
+                                    let res = self.plando.map_editor.save_map(file.as_path());
                                     if res.is_err() {
                                         self.modal_type = ModalType::Error(res.unwrap_err().to_string());
                                     }
@@ -2507,7 +2506,7 @@ impl PlandoApp {
         egui::ScrollArea::vertical().show(ui, |ui| {
             let room_idxs = self.room_search.filter(&self.plando.game_data);
             for room_idx in room_idxs {
-                let is_missing = self.plando.map_editor.missing_rooms.contains(&room_idx);
+                let is_missing = !self.plando.map().room_mask[room_idx];
                 let room_geometry = &self.plando.game_data.room_geometry[room_idx];
                 let room_name = &room_geometry.name;
                 let mut btn = egui::Button::new(room_name).min_size(Vec2 { x: 256.0, y: 1.0 });

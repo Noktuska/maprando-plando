@@ -178,7 +178,6 @@ pub struct MapEditor {
     pub room_overlaps: HashSet<(usize, usize)>,
     pub error_list: Vec<MapErrorType>,
     pub invalid_doors: HashSet<(usize, usize)>, // (room_idx, door_idx)
-    pub missing_rooms: HashSet<usize>,
 }
 
 impl MapEditor {
@@ -194,7 +193,6 @@ impl MapEditor {
             room_overlaps: HashSet::new(),
             error_list: Vec::new(),
             invalid_doors: HashSet::new(),
-            missing_rooms: HashSet::new(),
         }
     }
 
@@ -250,20 +248,10 @@ impl MapEditor {
         })
     }
 
-    pub fn save_map(&mut self, game_data: &GameData, path: &Path) -> Result<()> {
+    pub fn save_map(&mut self, path: &Path) -> Result<()> {
         let mut file = File::create(path)?;
-        if self.is_valid(game_data) {
-            let str = serde_json::to_string_pretty(&self.map)?;
-            file.write_all(str.as_bytes())?;
-            return Ok(());
-        }
-
-        let mut data = serde_json::to_value(&self.map)?;
-        let missing_rooms = serde_json::to_value(&self.missing_rooms)?;
-        data.as_object_mut().unwrap().insert("missing_rooms".to_string(), missing_rooms);
-        let str = serde_json::to_string_pretty(&data)?;
+        let str = serde_json::to_string_pretty(&self.map)?;
         file.write_all(str.as_bytes())?;
-
         Ok(())
     }
 
@@ -279,12 +267,18 @@ impl MapEditor {
         file.read_to_string(&mut data_str)?;
         let mut data: Value = serde_json::from_str(&data_str)?;
 
+        // Convert missing_rooms to room_mask to keep maps backwards compatible
         let missing_rooms = match data.as_object_mut().unwrap().remove("missing_rooms") {
             Some(value) => value.as_array().unwrap().iter().map(|x| x.as_u64().unwrap() as usize).collect(),
             None => Vec::new()
         };
 
         self.map = serde_json::from_value(data)?;
+        if self.map.room_mask.is_empty() {
+            self.map.room_mask = vec![true; self.map.rooms.len()];
+        }
+        missing_rooms.iter().for_each(|&idx| self.map.room_mask[idx] = true);
+
         self.reset();
 
         for room in missing_rooms {
@@ -311,7 +305,6 @@ impl MapEditor {
 
     pub fn reset(&mut self) {
         self.invalid_doors.clear();
-        self.missing_rooms.clear();
         self.error_list.clear();
     }
 
@@ -349,9 +342,10 @@ impl MapEditor {
     }*/
 
     pub fn erase_room(&mut self, room_idx: usize, game_data: &GameData) {
-        if !self.missing_rooms.insert(room_idx) {
+        if !self.map.room_mask[room_idx] {
             return;
         }
+        self.map.room_mask[room_idx] = false;
         let room_geometry = &game_data.room_geometry[room_idx];
         for (door_idx, door) in room_geometry.doors.iter().enumerate() {
             self.invalid_doors.remove(&(room_idx, door_idx));
@@ -367,8 +361,10 @@ impl MapEditor {
     }
 
     pub fn spawn_room(&mut self, room_idx: usize, game_data: &GameData) {
-        self.missing_rooms.remove(&room_idx);
-        self.snap_room(room_idx, game_data);
+        if !self.map.room_mask[room_idx] {
+            self.map.room_mask[room_idx] = true;
+            self.snap_room(room_idx, game_data);
+        }
     }
 
     pub fn get_room_bounds(&self, room_idx: usize, game_data: &GameData) -> IntRect {
@@ -382,12 +378,12 @@ impl MapEditor {
     fn update_overlaps(&mut self, room_idx: usize, game_data: &GameData) {
         // Remove all overlaps with this room_idx
         self.room_overlaps.retain(|&(l, r)| l != room_idx && r != room_idx);
-        if self.missing_rooms.contains(&room_idx) {
+        if !self.map.room_mask[room_idx] {
             return;
         }
 
         for other_idx in 0..self.map.rooms.len() {
-            if other_idx == room_idx || self.missing_rooms.contains(&other_idx) {
+            if other_idx == room_idx || !self.map.room_mask[other_idx] {
                 continue;
             }
             if self.check_overlap(room_idx, other_idx, game_data) {
