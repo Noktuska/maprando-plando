@@ -1039,6 +1039,8 @@ impl Plando {
         let mut spoiler_details_vec = vec![];
         let mut debug_data_vec: Vec<DebugData> = Vec::new();
 
+        let max_override_step = self.spoiler_overrides.iter().map(|x| x.step).reduce(|acc, e| acc.max(e)).unwrap_or_default();
+
         loop {
             let (spoiler_summary, spoiler_details) = self.update_step(&mut state, &randomizer);
             let any_progress = spoiler_summary.items.len() > 0 || spoiler_summary.flags.len() > 0;
@@ -1046,7 +1048,7 @@ impl Plando {
             spoiler_details_vec.push(spoiler_details);
             debug_data_vec.push(state.previous_debug_data.as_ref().unwrap().clone());
 
-            if !any_progress {
+            if !any_progress && state.step_num > max_override_step {
                 break;
             }
         }
