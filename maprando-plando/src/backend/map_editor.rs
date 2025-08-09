@@ -127,6 +127,7 @@ pub enum MapErrorType {
     // Errors
     AreaBounds(usize, usize, usize), // Area idx which exceeds boundary limits followed by current (width, height)
     AreaTransitions(usize), // Number of area transition which exceeds limit
+    RoomOverlap(usize, usize),
     MapPerArea(usize), // room_idx of a double map
     MapBounds(i32, i32, usize, usize), // Map exceeds boundary limits with current size (x, y, width, height)
     PhantoonMap, // Phantoon map is not connected to phantoon via exaclty one room inbetween
@@ -145,6 +146,8 @@ impl MapErrorType {
                 format!("Area exceeds maximum size: Currently ({w}, {h}), Maximum: ({}, {})", MapEditor::AREA_MAX_WIDTH, MapEditor::AREA_MAX_HEIGHT),
             MapErrorType::AreaTransitions(t) =>
                 format!("Number of maximum area transitions exceeded: Currently {t}, Maximum {}", MapEditor::AREA_MAX_TRANSITIONS),
+            MapErrorType::RoomOverlap(_, _) =>
+                format!("Two or more rooms are overlapping"),
             MapErrorType::MapPerArea(_) => 
                 format!("This map already has a Map Station"),
             MapErrorType::MapBounds(_, _, w, h) => 
@@ -185,7 +188,6 @@ pub struct MapEditor {
 
     toilet_patch_map: HashMap<usize, Vec<(i32, i32)>>,
 
-    pub room_overlaps: HashSet<(usize, usize)>,
     pub error_list: Vec<MapErrorType>,
     pub invalid_doors: HashSet<(usize, usize)>, // (room_idx, door_idx)
 }
@@ -200,7 +202,6 @@ impl MapEditor {
         MapEditor {
             map,
             toilet_patch_map: Self::generate_toilet_map().unwrap_or_default(),
-            room_overlaps: HashSet::new(),
             error_list: Vec::new(),
             invalid_doors: HashSet::new(),
         }
@@ -304,7 +305,7 @@ impl MapEditor {
     }
 
     pub fn is_valid(&mut self, game_data: &GameData) -> bool {
-        self.error_list.clear();
+        self.error_list.retain(|err| if let MapErrorType::RoomOverlap(_, _) = err { true } else { false });
         for &(room_idx, door_idx) in &self.invalid_doors {
             self.error_list.push(MapErrorType::DoorDisconnected(room_idx, door_idx));
         }
@@ -390,7 +391,12 @@ impl MapEditor {
 
     fn update_overlaps(&mut self, room_idx: usize, game_data: &GameData) {
         // Remove all overlaps with this room_idx
-        self.room_overlaps.retain(|&(l, r)| l != room_idx && r != room_idx);
+        self.error_list.retain(|&err| {
+            if let MapErrorType::RoomOverlap(l, r) = err {
+                return l != room_idx && r != room_idx;
+            }
+            true
+        });
         if !self.map.room_mask[room_idx] {
             return;
         }
@@ -402,7 +408,7 @@ impl MapEditor {
             if self.check_overlap(room_idx, other_idx, game_data) {
                 let smaller_idx = room_idx.min(other_idx);
                 let bigger_idx = room_idx.max(other_idx);
-                self.room_overlaps.insert((smaller_idx, bigger_idx));
+                self.error_list.push(MapErrorType::RoomOverlap(smaller_idx, bigger_idx));
                 continue;
             }
         }
@@ -745,17 +751,4 @@ impl MapEditor {
             self.error_list.push(MapErrorType::PhantoonSave);
         }
     }
-}
-
-
-
-fn index_to_area_name(idx: usize) -> String {
-    match idx {
-        0 => "Crateria",
-        1 => "Brinstar",
-        2 => "Norfair",
-        3 => "Wrecked Ship",
-        4 => "Maridia",
-        _ => "Tourian"
-    }.to_string()
 }

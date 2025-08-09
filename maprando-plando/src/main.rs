@@ -32,7 +32,6 @@ mod egui_sfml;
 struct RoomData {
     room_id: usize,
     room_idx: usize,
-    room_name: String,
     tile_width: u32,
     tile_height: u32,
     atlas_x_offset: u32,
@@ -681,7 +680,6 @@ fn load_room_sprites(game_data: &GameData) -> Result<(FBox<graphics::Image>, Vec
         image_mappings.push((RoomData {
             room_id: map_tile_data.room_id,
             room_idx: room_idx,
-            room_name: map_tile_data.room_name.clone(),
             tile_width: max_width as u32,
             tile_height: max_height as u32,
             atlas_x_offset: 0,
@@ -1911,15 +1909,23 @@ impl PlandoApp {
                 let door = &self.plando.game_data.room_geometry[room_idx].doors[door_idx];
                 vec![IntRect::new((room_x + door.x) as i32, (room_y + door.y) as i32, 1, 1)]
             },
-            MapErrorType::AreaBounds(area, w, h) => {
+            MapErrorType::AreaBounds(area, _, _) => {
                 (0..self.plando.map().rooms.len()).filter(|&room_idx| {
                     self.plando.map().area[room_idx] == area
                 }).map(|room_idx| {
                     self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data)
                 }).collect()
             },
-            MapErrorType::AreaTransitions(num) => {
+            MapErrorType::AreaTransitions(_) => { // TODO: Some way to visualize this?
                 vec![]
+            },
+            MapErrorType::RoomOverlap(idx1, idx2) => {
+                let bbox1 = self.plando.map_editor.get_room_bounds(idx1, &self.plando.game_data);
+                let bbox2 = self.plando.map_editor.get_room_bounds(idx2, &self.plando.game_data);
+                if let Some(overlap) = bbox1.intersection(&bbox2) {
+                    return vec![overlap];
+                }
+                vec![bbox1, bbox2]
             },
             MapErrorType::MapPerArea(room_idx) => {
                 vec![self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data)]
@@ -2441,8 +2447,7 @@ impl PlandoApp {
             SidebarPanel::Items => self.draw_sidebar_item_select(ui, sidebar_selection),
             SidebarPanel::Rooms => self.draw_sidebar_room_select(ui),
             SidebarPanel::Areas => self.draw_sidebar_area_select(ui),
-            SidebarPanel::Errors => self.draw_sidebar_error_list(ui),
-            _ => {}
+            SidebarPanel::Errors => self.draw_sidebar_error_list(ui)
         }
     }
 
