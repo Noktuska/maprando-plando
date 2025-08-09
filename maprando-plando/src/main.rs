@@ -1,6 +1,6 @@
-use crate::{backend::{map_editor::MapErrorType, plando::{get_double_item_offset, DoubleItemPlacement, MapRepositoryType, Placeable, Plando, SpoilerOverride, ITEM_VALUES}}, input_state::KeyState, layout::{hotkey_settings::Keybind, map_editor_ui::MapEditorUi, room_search::{RoomSearch, SearchOpt}, settings_customize::{Customization, SettingsCustomize, SettingsCustomizeResult}, settings_logic::LogicCustomization, Layout, SidebarPanel, WindowType}};
+use crate::{backend::{map_editor::{self, MapErrorType}, plando::{get_double_item_offset, DoubleItemPlacement, MapRepositoryType, Placeable, Plando, SpoilerOverride, ITEM_VALUES}}, input_state::KeyState, layout::{hotkey_settings::Keybind, map_editor_ui::MapEditorUi, room_search::{RoomSearch, SearchOpt}, settings_customize::{Customization, SettingsCustomize, SettingsCustomizeResult}, settings_logic::LogicCustomization, Layout, SidebarPanel, WindowType}};
 use anyhow::{anyhow, bail, Result};
-use egui::{self, style::default_text_styles, Color32, Context, FontDefinitions, Id, Sense, TextureId, Ui, Vec2};
+use egui::{self, style::default_text_styles, Color32, Context, FontDefinitions, Id, RichText, Sense, TextureId, Ui, Vec2};
 use egui_sfml::{SfEgui, UserTexSource};
 use hashbrown::{HashMap, HashSet};
 use input_state::MouseState;
@@ -1159,6 +1159,8 @@ impl PlandoApp {
     }
 
     fn redraw_map(&mut self) {
+        let draw_subareas = self.layout.sidebar_tab == SidebarPanel::Areas;
+
         let mut img_obj = graphics::Image::new_solid(8, 8, Color::TRANSPARENT).unwrap();
         let img_obj_mask = get_special_room_mask(SpecialRoom::Objective);
         for y in 0..8 {
@@ -1195,7 +1197,7 @@ impl PlandoApp {
                     }
 
                     let mut color_div = 1;
-                    if !self.settings.disable_logic {
+                    if !self.settings.disable_logic && !draw_subareas {
                         if let Some((_r, spoiler_log)) = &self.plando.randomization {
                             if spoiler_log.all_rooms[data.room_idx].map_bireachable_step[local_y][local_x] > self.spoiler_step as u8 {
                                 color_div *= 2;
@@ -1206,13 +1208,18 @@ impl PlandoApp {
                         }
                     }
 
-                    let cell_x = (local_x + x) * 8;
-                    let cell_y = (local_y + y) * 8;
-                    let color_value = if room_geometry.heated { 2 } else { 1 };
-                    let mut cell_color = get_explored_color(color_value, self.plando.map().area[data.room_idx]);
+                    let mut cell_color = if draw_subareas {
+                        self.plando.map_editor.get_area_value(data.room_idx).to_color()
+                    } else {
+                        let color_value = if room_geometry.heated { 2 } else { 1 };
+                        get_explored_color(color_value, self.plando.map().area[data.room_idx])
+                    };
                     cell_color.r /= color_div;
                     cell_color.g /= color_div;
                     cell_color.b /= color_div;
+                
+                    let cell_x = (local_x + x) * 8;
+                    let cell_y = (local_y + y) * 8;
 
                     let mut bg_rect = graphics::RectangleShape::with_size(Vector2f::new(8.0, 8.0));
                     bg_rect.set_position(Vector2f::new(cell_x as f32, cell_y as f32));
@@ -2422,6 +2429,7 @@ impl PlandoApp {
 
                     if ui.add(bt).clicked() {
                         self.layout.sidebar_tab = tab.clone();
+                        self.redraw_map();
                     }
                 }
             });
@@ -2554,30 +2562,47 @@ impl PlandoApp {
 
     fn draw_sidebar_area_select(&mut self, ui: &mut Ui) {
         egui::ScrollArea::vertical().show(ui, |ui| {
-            /*let areas = ["Crateria", "Brinstar", "Norfair", "Wrecked Ship", "Maridia", "Tourian"];
+            let text_color = ui.style().visuals.strong_text_color();
+            let inv_color = Color32::from_rgb(255 - text_color.r(), 255 - text_color.g(), 255 - text_color.b());
+            let should_inv = |col: Color32| {
+                utils::rgb_to_hsv(col.r(), col.g(), col.b()).2 >= 0.5
+            };
+
+            ui.label("Apply area to room selection");
+            ui.separator();
+            ui.label("Major Areas (retains subarea values)");
+
+            let areas = ["Crateria", "Brinstar", "Norfair", "Wrecked Ship", "Maridia", "Tourian"];
             for (idx, &area_str) in areas.iter().enumerate() {
                 let col = map_editor::Area::from_tuple((idx, 0, 0)).to_color();
                 let col32 = Color32::from_rgb(col.r, col.g, col.b);
-                let btn = egui::Button::new(area_str).fill(col32).min_size(Vec2 { x: 256.0, y: 1.0 });
+                let stroke_col = if should_inv(col32) { &inv_color } else { &text_color };
+
+                let btn = egui::Button::new(RichText::new(area_str).color(stroke_col.clone())).fill(col32).min_size(Vec2 { x: 256.0, y: 1.0 });
                 if ui.add(btn).clicked() && !self.map_editor.selected_room_idx.is_empty() {
                     for i in 0..self.map_editor.selected_room_idx.len() {
                         let room_idx = self.map_editor.selected_room_idx[i];
-                        let sub_area = self.map_editor.map.subarea[room_idx];
-                        let sub_sub_area = self.map_editor.map.subsubarea[room_idx];
-                        self.map_editor.apply_area(room_idx, map_editor::Area::from_tuple((idx, sub_area, sub_sub_area)));
+                        let sub_area = self.plando.map().subarea[room_idx];
+                        let sub_sub_area = self.plando.map().subsubarea[room_idx];
+                        self.plando.map_editor.apply_area(room_idx, map_editor::Area::from_tuple((idx, sub_area, sub_sub_area)));
                     }
+                    self.redraw_map();
                 }
             }
             ui.separator();
+            ui.label("Area and subareas (mainly affects music)");
 
             for area_value in map_editor::Area::VALUES {
                 let col = area_value.to_color();
                 let col32 = Color32::from_rgb(col.r, col.g, col.b);
-                let btn = egui::Button::new(area_value.to_string()).fill(col32).min_size(Vec2 { x: 256.0, y: 1.0 });
+                let stroke_col = if should_inv(col32) { &inv_color } else { &text_color };
+
+                let btn = egui::Button::new(RichText::new(area_value.to_string()).color(stroke_col.clone())).fill(col32).min_size(Vec2 { x: 256.0, y: 1.0 });
                 if ui.add(btn).clicked() && !self.map_editor.selected_room_idx.is_empty() {
                     for i in 0..self.map_editor.selected_room_idx.len() {
-                        self.map_editor.apply_area(self.map_editor.selected_room_idx[i], area_value);
+                        self.plando.map_editor.apply_area(self.map_editor.selected_room_idx[i], area_value);
                     }
+                    self.redraw_map();
                 }
             }
             ui.separator();
@@ -2589,13 +2614,14 @@ impl PlandoApp {
                 }
             });
             if ui.button("Swap!").clicked() {
-                self.map_editor.swap_areas(self.map_editor.swap_first, self.map_editor.swap_second);
+                self.plando.map_editor.swap_areas(self.map_editor.swap_first, self.map_editor.swap_second);
+                self.redraw_map();
             }
             egui::ComboBox::from_id_salt("combo_swap_area_second").selected_text(areas[self.map_editor.swap_second]).show_ui(ui, |ui| {
                 for (idx, &area_str) in areas.iter().enumerate() {
                     ui.selectable_value(&mut self.map_editor.swap_second, idx, area_str);
                 }
-            });*/
+            });
         });
     }
 

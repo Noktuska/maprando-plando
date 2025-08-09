@@ -10,6 +10,9 @@ pub struct MapEditorUi {
     pub dragged_room_idx: Vec<usize>,
     pub dragged_room_xoffset: usize,
     pub dragged_room_yoffset: usize,
+
+    pub swap_first: usize,
+    pub swap_second: usize
 }
 
 impl MapEditorUi {

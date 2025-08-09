@@ -321,7 +321,7 @@ impl MapEditor {
         self.error_list.clear();
     }
 
-    /*pub fn apply_area(&mut self, room_idx: usize, area_value: Area) {
+    pub fn apply_area(&mut self, room_idx: usize, area_value: Area) {
         let (area, sub_area, sub_sub_area) = area_value.to_tuple();
         self.map.area[room_idx] = area;
         self.map.subarea[room_idx] = sub_area;
@@ -352,7 +352,7 @@ impl MapEditor {
         let sub_area = self.map.subarea[room_idx];
         let sub_sub_area = self.map.subsubarea[room_idx];
         Area::from_tuple((area, sub_area, sub_sub_area))
-    }*/
+    }
 
     pub fn erase_room(&mut self, room_idx: usize, game_data: &GameData) {
         if !self.map.room_mask[room_idx] {
