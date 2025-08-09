@@ -90,6 +90,8 @@ impl LayoutWindow for HotkeySettingsWindow {
                 if ui.button("Apply").clicked() {
                     self.keybinds.clear();
                     self.keybinds.append(&mut self.keybinds_copy);
+                    // Sort descending by number of keys to trigger e.g. a CTRL+C bind before a C bind
+                    self.keybinds.sort_by(|l, r| r.bind.len().cmp(&l.bind.len()));
                     self.cur_rebind_idx = None;
                     close = true;
                 }

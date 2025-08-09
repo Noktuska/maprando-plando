@@ -19,6 +19,7 @@ use sfml::{
         }
     };
 use strum::VariantArray;
+use strum_macros::VariantArray;
 use std::{cmp::{max, min}, ffi::OsStr, fs::File, io::{Read, Write}, path::Path, thread::{self, JoinHandle}, time::Instant};
 
 mod backend;
@@ -933,28 +934,19 @@ impl View {
     }
 }
 
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(PartialEq, Eq, Clone, Copy, VariantArray)]
 enum Hotkeys {
     IncrementStep,
     DecrementStep,
     UpdateSpoiler,
     OpenSpoilerOverride,
     ToggleAutoSpoiler,
+    EraseSelection,
     //Undo,
     //Redo
 }
 
 impl Hotkeys {
-    const VARIANTS: &'static [Self] = &[
-        Hotkeys::IncrementStep,
-        Hotkeys::DecrementStep,
-        Hotkeys::UpdateSpoiler,
-        Hotkeys::OpenSpoilerOverride,
-        Hotkeys::ToggleAutoSpoiler,
-        //Hotkeys::Undo,
-        //Hotkeys::Redo
-    ];
-
     fn to_keybind(&self) -> Keybind {
         let id = *self as usize;
         match *self {
@@ -963,6 +955,7 @@ impl Hotkeys {
             Hotkeys::UpdateSpoiler => Keybind::new(id, "Update Spoiler Log", "Manually updates the spoiler log", vec![Key::F5]),
             Hotkeys::OpenSpoilerOverride => Keybind::new(id, "Open Spoiler Overrides", "Opens the Spoiler Overrides window for the current step", vec![Key::F6]),
             Hotkeys::ToggleAutoSpoiler => Keybind::new(id, "Toggle Auto-Spoiler", "Toggles the automatic spoiler update setting", vec![Key::F7]),
+            Hotkeys::EraseSelection => Keybind::new(id, "Erase selected rooms", "Erases the selected rooms from the map", vec![Key::Delete]),
             //Hotkeys::Undo => Keybind::new(id, "Undo", "Undoes the last action", vec![Key::LControl, Key::Z]),
             //Hotkeys::Redo => Keybind::new(id, "Redo", "Redoes the last action", vec![Key::LControl, Key::Y]),
         }
@@ -1386,9 +1379,15 @@ impl PlandoApp {
                                 self.plando.auto_update_spoiler ^= true;
                                 self.settings.spoiler_auto_update ^= true;
                             },
+                            Hotkeys::EraseSelection => {
+                                self.map_editor.selected_room_idx.iter().for_each(|&idx| self.plando.erase_room(idx));
+                                self.map_editor.selected_room_idx.clear();
+                                self.redraw_map();
+                            }
                             //Hotkeys::Undo => println!("Undo"),
                             //Hotkeys::Redo => println!("Redo"),
                         }
+                        break;
                     }
                 }
             }
@@ -1793,6 +1792,10 @@ impl PlandoApp {
         // Find hovered room for info overlay and possible selections
         let mut last_hovered_room_idx = None;
         for room_idx in 0..self.room_data.len() {
+            if !self.plando.map().room_mask[room_idx] {
+                continue;
+            }
+
             let room_bounds = self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data);
 
             if !room_bounds.contains2(mouse_tile_x as i32, mouse_tile_y as i32) {
@@ -2081,6 +2084,10 @@ impl PlandoApp {
     fn draw_gray_doors(&mut self, rt: &mut dyn RenderTarget, states: &RenderStates) {
         for door_ptr_pair in &self.plando.gray_doors {
             let (room_idx, door_idx) = self.plando.game_data.room_and_door_idxs_by_door_ptr_pair[door_ptr_pair];
+            if !self.plando.map().room_mask[room_idx] {
+                continue;
+            }
+
             let (room_x, room_y) = self.plando.map().rooms[room_idx];
             let room_geomtry = &self.plando.game_data.room_geometry[room_idx];
             let door = &room_geomtry.doors[door_idx];
@@ -2111,6 +2118,10 @@ impl PlandoApp {
                 let (room_id, node_id) = self.plando.game_data.item_locations[i];
                 let room_ptr = self.plando.game_data.room_ptr_by_id[&room_id];
                 let room_idx = self.plando.game_data.room_idx_by_ptr[&room_ptr];
+                if !self.plando.map().room_mask[room_idx] {
+                    continue;
+                }
+
                 let (room_x, room_y) = self.plando.map().rooms[room_idx];
                 let (tile_x, tile_y) = self.plando.game_data.node_coords[&(room_id, node_id)];
 
@@ -2175,6 +2186,10 @@ impl PlandoApp {
         for (i, &flag_id) in self.plando.game_data.flag_ids.iter().enumerate() {
             let vertex_info = &self.plando.get_vertex_info(self.plando.game_data.flag_vertex_ids[i][0]);
             let room_idx = self.plando.room_id_to_idx(vertex_info.room_id);
+            if !self.plando.map().room_mask[room_idx] {
+                continue;
+            }
+
             let (room_x, room_y) = self.plando.map().rooms[room_idx];
 
             let flag_str_short = &self.plando.game_data.flag_isv.keys[flag_id];
@@ -2531,6 +2546,7 @@ impl PlandoApp {
 
                     self.map_editor.selected_room_idx.clear();
                     self.map_editor.selected_room_idx.push(room_idx);
+                    self.redraw_map();
                 }
             }
         });

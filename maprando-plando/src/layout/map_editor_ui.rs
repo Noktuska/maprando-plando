@@ -14,7 +14,7 @@ pub struct MapEditorUi {
 
 impl MapEditorUi {
     pub fn start_drag(&mut self, map: &Map, room_idx_opt: Option<usize>, mouse_tile_x: usize, mouse_tile_y: usize, game_data: &GameData) {
-        if let Some(room_idx) = room_idx_opt {
+        if let Some(room_idx) = room_idx_opt && map.room_mask[room_idx] {
             if self.selected_room_idx.contains(&room_idx) {
                 // User starts dragging on one of the selected rooms, start dragging all of them
                 let bbox = self.get_selected_bbox(map, game_data).unwrap();

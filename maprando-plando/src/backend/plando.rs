@@ -441,6 +441,53 @@ impl Plando {
         }
     }
 
+    pub fn erase_room(&mut self, room_idx: usize) {
+        let room_id = self.game_data.room_geometry[room_idx].room_id;
+
+        // Ensure Landing Site and Motherbrain cannot be erased
+        if room_id == 8 || room_id == 238 {
+            return;
+        }
+
+        let auto_update = self.auto_update_spoiler;
+        self.auto_update_spoiler = false;
+
+        // Clear all items in the room so they can be placed again
+        for item_idx in 0..self.item_locations.len() {
+            if self.item_locations[item_idx] != Item::Nothing && self.game_data.item_locations[item_idx].0 == room_id {
+                self.place_item(item_idx, Item::Nothing);
+            }
+        }
+
+        // Clear all door locks
+        for door_idx in 0..self.game_data.room_geometry[room_idx].doors.len() {
+            // This should never error
+            let _ = self.place_door(room_idx, door_idx, None, true, true);
+        }
+
+        // Reset start location if its inside removed room
+        if self.start_location_data.start_location.room_id == room_id {
+            self.start_location_data.start_location = Self::get_ship_start();
+            self.start_location_data.hub_location = Self::get_ship_hub(&self.game_data);
+        }
+
+        // Reset the hub if its inside removed room
+        if self.start_location_data.hub_location.room_id == room_id {
+            if self.update_hub_location().is_err() {
+                self.start_location_data.start_location = Self::get_ship_start();
+                self.start_location_data.hub_location = Self::get_ship_hub(&self.game_data);
+            }
+        }
+
+        self.map_editor.erase_room(room_idx, &self.game_data);
+
+        if auto_update {
+            // TODO: This could error
+            let _ = self.update_spoiler_data();
+        }
+        self.auto_update_spoiler = auto_update;
+    }
+
     pub fn place_start_location(&mut self, start_loc: StartLocation) -> Result<()> {
         let old_start_loc = self.start_location_data.start_location.clone();
         self.start_location_data.start_location = start_loc;

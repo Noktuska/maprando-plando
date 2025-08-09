@@ -251,6 +251,9 @@ impl MapEditor {
 
     pub fn get_room_at(&self, x: usize, y: usize, game_data: &GameData) -> Option<usize> {
         self.map.rooms.iter().enumerate().position(|(room_idx, &(room_x, room_y))| {
+            if !self.map.room_mask[room_idx] {
+                return false;
+            }
             let room_geometry = &game_data.room_geometry[room_idx];
             let room_width = room_geometry.map[0].len();
             let room_height = room_geometry.map.len();
