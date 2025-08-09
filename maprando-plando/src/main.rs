@@ -135,7 +135,7 @@ fn load_settings(path: &Path, preset_data: &PresetData) -> Result<Settings> {
     let mut preset_opt = None;
     if let Some(last_logic_preset) = v.get_mut("last_logic_preset") {
         if !last_logic_preset.is_null() {
-            let preset_string = v.take().to_string();
+            let preset_string = last_logic_preset.take().to_string();
             preset_opt = Some(utils::try_upgrade_settings(preset_string, preset_data, true)?.1);
         }
     }
@@ -478,7 +478,7 @@ fn load_textures(game_data: &GameData) -> Result<(ImplUserTexSource, Vec<usize>)
     let tex_item_width = (tex_items.size().x / 24) as i32;
 
     let img_doors = generate_door_sprites()?;
-    let img_door_width = (img_doors.size().x / 8) as i32;
+    let img_door_width = (img_doors.size().x / 10) as i32;
 
     let tex_helm = graphics::Texture::from_file("../visualizer/helm.png")?;
     let tex_bosses = graphics::Texture::from_file("../visualizer/bosses.png")?;
@@ -497,7 +497,7 @@ fn load_textures(game_data: &GameData) -> Result<(ImplUserTexSource, Vec<usize>)
         user_tex_source.add_texture(Placeable::ETank as u64 + i as u64, tex);
     }
     // Add Door textures to egui
-    for i in 0..9 {
+    for i in 0..10 {
         let source_rect = IntRect::new(i * img_door_width, 0, img_door_width, img_doors.size().y as i32);
         let tex = graphics::Texture::from_image(&img_doors, source_rect)?;
         user_tex_source.add_texture(Placeable::DoorMissile as u64 + i as u64, tex);
@@ -776,14 +776,15 @@ fn load_room_sprites(game_data: &GameData) -> Result<(FBox<graphics::Image>, Vec
 
 // Generates 9 door sprites (Missile, Super, PB, Charge, Ice, Wave, Spazer, Plasma, Gray)
 fn generate_door_sprites() -> Result<FBox<graphics::Image>> {
-    let mut img_doors = graphics::Image::new_solid(3 * 9, 8, Color::TRANSPARENT).unwrap();
-    for x in 0..9 {
+    let mut img_doors = graphics::Image::new_solid(3 * 10, 8, Color::TRANSPARENT).unwrap();
+    for x in 0..10 {
         let door_color_index = match x {
-            0 | 4 => 7,
-            1 | 6 => 14,
-            2 | 3 => 6,
-            7 | 8 => 15,
-            5 => 8,
+            0 | 4 => 7, // Missile | Wave
+            1 | 6 => 14, // Super | Plasma
+            2 | 3 => 6, // PB | Spazer
+            7 | 9 => 15, // Charge | Gray
+            5 => 8, // Ice
+            8 => 3, // Wall Doors
             _ => 15
         };
         
@@ -795,7 +796,7 @@ fn generate_door_sprites() -> Result<FBox<graphics::Image>> {
         img_doors.set_pixel(3 * x, 4, get_explored_color(door_color_index, 0))?;
         img_doors.set_pixel(3 * x + 1, 4, get_explored_color(door_color_index, 0))?;
         
-        if x < 3 || x == 8 {
+        if x < 3 || x == 8 || x == 9 {
             img_doors.set_pixel(3 * x, 2, get_explored_color(12, 0))?;
             img_doors.set_pixel(3 * x + 1, 1, get_explored_color(12, 0))?;
             img_doors.set_pixel(3 * x + 2, 2, get_explored_color(12, 0))?;
@@ -843,7 +844,7 @@ fn draw_thick_line_strip(rt: &mut dyn RenderTarget, states: &RenderStates, strip
 }
 
 enum FlagType {
-    Bosses = Placeable::VALUES.len() as isize + 1,
+    Bosses = Placeable::VARIANTS.len() as isize + 1,
     Minibosses,
     Misc
 }
@@ -886,7 +887,7 @@ enum SpoilerType {
 
 #[repr(u64)]
 enum UserTexId {
-    DoorGray = Placeable::VALUES.len() as u64,
+    DoorGray = Placeable::VARIANTS.len() as u64,
     FlagTypeBosses,
     FlagTypeMinibosses,
     FlagTypeMisc,
@@ -1132,23 +1133,11 @@ impl PlandoApp {
         self.global_timer as f32 / self.settings.fps_cap as f32
     }
 
-    fn patch_rom(&self, save_path: &Path) -> Result<()> {
+    fn patch_rom(&mut self, save_path: &Path) -> Result<()> {
         let rom_vanilla = self.rom_vanilla.as_ref().ok_or(anyhow!("Provided no vanilla ROM to patch"))?;
         let settings = self.settings_customization.get_settings();
 
-        if self.plando.randomization.is_none() {
-            bail!("No randomization generated");
-        }
-        let (r, _spoiler_log) = self.plando.randomization.as_ref().unwrap();
-        let new_rom = maprando::patch::make_rom(
-            rom_vanilla,
-            &self.plando.randomizer_settings,
-            &settings,
-            r,
-            &self.plando.game_data,
-            &self.settings_customization.samus_sprite_categories,
-            &self.settings_customization.mosaic_themes
-        )?;
+        let new_rom = self.plando.patch_rom(rom_vanilla, settings, &self.settings_customization.samus_sprite_categories, &self.settings_customization.mosaic_themes)?;
 
         let mut file = File::create(save_path)?;
         file.write_all(&new_rom.data)?;
@@ -2076,6 +2065,7 @@ impl PlandoApp {
                         BeamType::Spazer => Placeable::DoorSpazer,
                         BeamType::Plasma => Placeable::DoorPlasma,
                     },
+                    DoorType::Wall => Placeable::DoorWall,
                     _ => Placeable::DoorMissile
                 } as u64;
                 let (_tex_w, _tex_h, door_tex) = self.user_tex_source.get_texture(door_tex_id);
@@ -2167,7 +2157,7 @@ impl PlandoApp {
                         if bt == mouse::Button::Left {
                             if sidebar_selection.is_some_and(|x| x.to_item().is_some()) {
                                 let item_to_place = sidebar_selection.unwrap().to_item().unwrap();
-                                let as_placeable = Placeable::VALUES[item_to_place as usize + Placeable::ETank as usize];
+                                let as_placeable = Placeable::VARIANTS[item_to_place as usize + Placeable::ETank as usize];
                                 if self.plando.placed_item_count[as_placeable as usize] < self.plando.get_max_placeable_count(as_placeable).unwrap() {
                                     self.plando.place_item(i, item_to_place);
                                     self.redraw_map();
@@ -2458,21 +2448,15 @@ impl PlandoApp {
         egui::scroll_area::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             egui::Grid::new("grid_item_select")
             .with_row_color(move |val, _style| {
-                if cur_sidebar_selection.is_some_and(|x| x == Placeable::VALUES[val]) { Some(Color32::from_rgb(255, 0, 0)) } else { None }
+                if cur_sidebar_selection.is_some_and(|x| x == Placeable::VARIANTS[val]) { Some(Color32::from_rgb(255, 0, 0)) } else { None }
             }).min_row_height(sidebar_height).show(ui, |ui| {
-                for (row, placeable) in Placeable::VALUES.iter().enumerate() {
-                    // If settigs don't allow ammo or beam doors, we don't allow their placement
-                    if (*placeable >= Placeable::DoorMissile && self.plando.randomizer_settings.doors_mode == DoorsMode::Blue)
-                        || (*placeable >= Placeable::DoorSpazer && self.plando.randomizer_settings.doors_mode == DoorsMode::Ammo) {
-                        break;
-                    }
-
+                for (row, placeable) in Placeable::VARIANTS.iter().enumerate() {
                     // Load image
                     let img = egui::Image::new(self.user_tex_source.get_image_source(*placeable as u64)).sense(Sense::click())
                         .fit_to_exact_size(Vec2::new(sidebar_height, sidebar_height));
                     let img_resp = ui.add(img);
                     if img_resp.clicked() {
-                        *sidebar_selection = Some(Placeable::VALUES[row]);
+                        *sidebar_selection = Some(Placeable::VARIANTS[row]);
                     }
 
                     let item_count = self.plando.placed_item_count[row];
@@ -2480,15 +2464,15 @@ impl PlandoApp {
 
                     let label_name = egui::Label::new(placeable.to_string());
                     if ui.add(label_name).clicked() {
-                        *sidebar_selection = Some(Placeable::VALUES[row]);
+                        *sidebar_selection = Some(Placeable::VARIANTS[row]);
                     }
                     let label_count_str = if max_item_count.is_some() { format!("{item_count} / {}", max_item_count.unwrap()) } else { item_count.to_string() };
                     let label_count = egui::Label::new(label_count_str).sense(Sense::click());
                     if ui.add(label_count).clicked() {
-                        *sidebar_selection = Some(Placeable::VALUES[row]);
+                        *sidebar_selection = Some(Placeable::VARIANTS[row]);
                     }
                     // So it doesn't create an empty row at the very end
-                    if row + 1 < Placeable::VALUES.len() {
+                    if row + 1 < Placeable::VARIANTS.len() {
                         ui.end_row();
                     }
                 }
