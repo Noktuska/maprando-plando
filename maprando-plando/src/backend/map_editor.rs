@@ -516,7 +516,12 @@ impl MapEditor {
             let src_ptr_pair = (door.exit_ptr, door.entrance_ptr);
             let dst_ptr_pair = (other_door.exit_ptr, other_door.entrance_ptr);
             let bidirectional = door.subtype != "sand" && other_door.subtype != "sand";
-            self.map.doors.push((src_ptr_pair, dst_ptr_pair, bidirectional));
+            // Make sure doors always point right or down
+            if door.direction == "right" || door.direction == "down" {
+                self.map.doors.push((src_ptr_pair, dst_ptr_pair, bidirectional));
+            } else {
+                self.map.doors.push((dst_ptr_pair, src_ptr_pair, bidirectional));
+            }
             return Some((other_room_idx, other_door_idx));
         }
 
