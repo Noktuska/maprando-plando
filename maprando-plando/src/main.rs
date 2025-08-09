@@ -1255,7 +1255,6 @@ impl PlandoApp {
         let mut window = RenderWindow::new((1080, 720), &format!("Maprando Plando {version_number}"), Style::DEFAULT, &Default::default()).expect("Could not create Window");
         window.set_vertical_sync_enabled(false);
         window.set_key_repeat_enabled(false);
-        self.view.window_size = window.size().as_other();
 
         let font_default = {
             let font = FontDefinitions::default();
@@ -1309,6 +1308,7 @@ impl PlandoApp {
             self.global_timer += 1;
             (self.local_mouse_x, self.local_mouse_y) = self.view.to_local_coords(self.mouse_state.mouse_x, self.mouse_state.mouse_y);
             self.click_consumed = false;
+            self.view.window_size = window.size().as_other() - Vector2f::new(sidebar_width, 0.0);
 
             if download_thread_active {
                 if download_thread_handle.is_finished() {
@@ -2627,10 +2627,12 @@ impl PlandoApp {
 
     fn draw_sidebar_error_list(&mut self, ui: &mut Ui) {
         egui::ScrollArea::vertical().show(ui, |ui| {
+            let w = ui.available_width();
+
             for error in &self.plando.map_editor.error_list {
                 let bt = egui::Button::new(error.to_string(&self.plando.game_data)).fill(
                     if error.is_severe() { Color32::from_rgb(110, 24, 24) } else { Color32::from_rgb(84, 80, 0) }
-                );
+                ).min_size(Vec2 { x: w, y: 1.0 });
                 if ui.add(bt).clicked() {
                     let rects = self.get_error_rects(error.clone());
                     if !rects.is_empty() {
