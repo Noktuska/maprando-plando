@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::{anyhow, Result};
-use egui::Context;
+use egui::{Color32, Context};
 use maprando::customize::{mosaic::MosaicTheme, samus_sprite::SamusSpriteCategory, ControllerButton, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, ItemDotChange, MusicSettings, PaletteTheme, ShakingSetting, TileTheme};
 use serde::{Deserialize, Serialize};
 
@@ -261,12 +261,44 @@ impl SettingsCustomize {
 
     pub fn draw_customization_window(&mut self, ctx: &Context) -> SettingsCustomizeResult {
         let mut result = SettingsCustomizeResult::Idle;
-        
+
         egui::Window::new("Customize")
         .resizable(false)
         .title_bar(false)
         .show(ctx, |ui| {
-            egui::Grid::new("grid_customize").num_columns(2).striped(true).show(ui, |ui| {
+            let clone = self.customization.clone();
+
+            egui::Grid::new("grid_customize").num_columns(2).striped(true).with_row_color(move |row, _| {
+                let diff = Color32::from_rgb(115, 36, 36);
+                let def = Customization::default();
+                if vec![
+                    false, false,
+                    clone.door_theme != def.door_theme,
+                    clone.music != def.music,
+                    clone.shaking != def.shaking,
+                    clone.flashing != def.flashing,
+                    clone.disable_beeping != def.disable_beeping,
+                    false,
+                    clone.palette_theme != def.palette_theme,
+                    clone.tile_theme != def.tile_theme,
+                    clone.reserve_hud_style != def.reserve_hud_style,
+                    clone.vanilla_screw_attack_animation != def.vanilla_screw_attack_animation,
+                    clone.controller_config.shot != def.controller_config.shot,
+                    clone.controller_config.jump != def.controller_config.jump,
+                    clone.controller_config.dash != def.controller_config.dash,
+                    clone.controller_config.item_select != def.controller_config.item_select,
+                    clone.controller_config.item_cancel != def.controller_config.item_cancel,
+                    clone.controller_config.angle_up != def.controller_config.angle_up,
+                    clone.controller_config.angle_down != def.controller_config.angle_down,
+                    clone.controller_config.quick_reload_buttons != def.controller_config.quick_reload_buttons,
+                    clone.controller_config.spin_lock_buttons != def.controller_config.spin_lock_buttons,
+                    clone.controller_config.moonwalk != def.controller_config.moonwalk,
+                    false, false, false
+                ][row] {
+                    return Some(diff);
+                }
+                None
+            }).show(ui, |ui| {
                 ui.label("Samus sprite");
                 egui::ComboBox::from_id_salt("combo_customize").selected_text(&self.customization.samus_sprite).show_ui(ui, |ui| {
                     for category in &self.samus_sprite_categories {
