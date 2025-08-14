@@ -2050,8 +2050,10 @@ impl PlandoApp {
             }
 
             let (room_src_idx, _door_src_idx) = self.plando.game_data.room_and_door_idxs_by_door_ptr_pair[&door.src_ptr_pair];
-            let (room_dst_idx, _door_dst_idx) = self.plando.game_data.room_and_door_idxs_by_door_ptr_pair[&door.dst_ptr_pair];
-            let room_idxs = vec![(room_src_idx, door.src_ptr_pair), (room_dst_idx, door.dst_ptr_pair)];
+            let mut room_idxs = vec![(room_src_idx, door.src_ptr_pair)];
+            if let Some(&(room_dst_idx, _door_dst_idx)) = self.plando.game_data.room_and_door_idxs_by_door_ptr_pair.get(&door.dst_ptr_pair) {
+                room_idxs.push((room_dst_idx, door.dst_ptr_pair));
+            }
             for (room_idx, ptr_pair) in room_idxs {
                 let (room_x, room_y) = self.plando.map().rooms[room_idx];
                 let room_geometry = &self.plando.game_data.room_geometry[room_idx];

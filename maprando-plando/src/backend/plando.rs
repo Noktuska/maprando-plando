@@ -691,10 +691,10 @@ impl Plando {
         let loc_dst = if dst_ptr_pair.0.is_none() && dst_ptr_pair.1.is_none() {
             None
         } else {
-            let (src_room_idx, src_door_idx) = self.game_data.room_and_door_idxs_by_door_ptr_pair[&src_ptr_pair];
-            let tile_src_x = self.game_data.room_geometry[src_room_idx].doors[src_door_idx].x;
-            let tile_src_y = self.game_data.room_geometry[src_room_idx].doors[src_door_idx].y;
-            Some((src_room_idx, tile_src_x, tile_src_y))
+            let (dst_room_idx, dst_door_idx) = self.game_data.room_and_door_idxs_by_door_ptr_pair[&dst_ptr_pair];
+            let tile_dst_x = self.game_data.room_geometry[dst_room_idx].doors[dst_door_idx].x;
+            let tile_dst_y = self.game_data.room_geometry[dst_room_idx].doors[dst_door_idx].y;
+            Some((dst_room_idx, tile_dst_x, tile_dst_y))
         };
 
         let prev_door_opt = self.locked_doors.iter().find(|door| door.src_ptr_pair == src_ptr_pair || door.dst_ptr_pair == src_ptr_pair);
@@ -721,6 +721,8 @@ impl Plando {
                 self.total_door_count -= 1;
             }
 
+            self.locked_doors.retain(|x| x.src_ptr_pair != src_ptr_pair || x.dst_ptr_pair != dst_ptr_pair);
+
             if !ignore_hub {
                 let _ = self.update_hub_location(); // This should never error
             }
@@ -745,16 +747,18 @@ impl Plando {
             return Ok(());
         }
 
-        // Check that there is not already a door on this tile
-        if self.door_lock_loc.contains(&loc_src) || loc_dst.is_none_or(|x| self.door_lock_loc.contains(&x)) {
-            bail!("There can only be one door lock per tile");
-        }
+        if door_type != DoorType::Wall {
+            // Check that there is not already a door on this tile
+            if self.door_lock_loc.contains(&loc_src) || loc_dst.is_some_and(|x| self.door_lock_loc.contains(&x)) {
+                bail!("There can only be one door lock per tile");
+            }
 
-        // Check that there is only one beam door per room
-        if let DoorType::Beam(_) = door_type && self.door_beam_loc.iter().any(|&x| {
-            x.0 == loc_src.0 || loc_dst.is_none_or(|y| x.0 == y.0)
-        }) {
-            bail!("There can only be one beam door per room");
+            // Check that there is only one beam door per room
+            if let DoorType::Beam(_) = door_type && self.door_beam_loc.iter().any(|&x| {
+                x.0 == loc_src.0 || loc_dst.is_some_and(|y| x.0 == y.0)
+            }) {
+                bail!("There can only be one beam door per room");
+            }
         }
 
         // Remove any previous door locks
