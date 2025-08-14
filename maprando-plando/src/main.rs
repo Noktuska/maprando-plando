@@ -1989,6 +1989,8 @@ impl PlandoApp {
         let mut sprite_helm = graphics::Sprite::with_texture(tex_helm);
         sprite_helm.set_color(Color::rgba(0xAF, 0xAF, 0xAF, 0x5F));
 
+        let mut should_redraw = false;
+
         if sidebar_selection.is_some_and(|sel| sel == Placeable::Helm) {
             for i in 0..self.plando.game_data.start_locations.len() {
                 let room_idx = self.plando.room_id_to_idx(self.plando.game_data.start_locations[i].room_id);
@@ -2013,6 +2015,7 @@ impl PlandoApp {
                                 self.modal_type = ModalType::Error(err.to_string());
                             }
                         }
+                        should_redraw = true;
                         self.click_consumed = true;
                         if let Err(err) = res {
                             self.modal_type = ModalType::Error(err.to_string());
@@ -2032,14 +2035,18 @@ impl PlandoApp {
         let start_tile_x = (self.plando.start_location_data.start_location.x / 16.0).floor();
         let start_tile_y = (self.plando.start_location_data.start_location.y / 16.0).floor();
         sprite_helm.set_position(Vector2f::new(room_x as f32 + start_tile_x, room_y as f32 + start_tile_y) * 8.0);
-        rt.draw_with_renderstates(&sprite_helm, &states);
-
         if sidebar_selection.is_none() && sprite_helm.global_bounds().contains2(self.local_mouse_x, self.local_mouse_y) {
             sprite_helm.scale(1.2);
             if self.mouse_state.button_clicked.is_some_and(|x| x == mouse::Button::Left) {
                 self.spoiler_type = SpoilerType::Hub;
                 self.click_consumed = true;
             }
+        }
+        rt.draw_with_renderstates(&sprite_helm, &states);
+        drop(sprite_helm);
+
+        if should_redraw {
+            self.redraw_map();
         }
     }
 
@@ -2258,6 +2265,8 @@ impl PlandoApp {
             Some(room_idx) => room_idx
         };
 
+        let mut should_redraw = false;
+
         if sidebar_selection.is_some_and(|x| x.to_door_type().is_some()) && self.is_mouse_public {
             let door_type = sidebar_selection.unwrap();
             let tr = (self.local_mouse_x / 8.0).fract() > (self.local_mouse_y / 8.0).fract();
@@ -2300,6 +2309,7 @@ impl PlandoApp {
                             self.modal_type = ModalType::Error(err.to_string());
                         }
                     }
+                    should_redraw = true;
                     self.click_consumed = true;
                     if let Err(err) = res {
                         self.modal_type = ModalType::Error(err.to_string());
@@ -2308,6 +2318,10 @@ impl PlandoApp {
 
                 rt.draw_with_renderstates(&spr_ghost, &states);
             }
+        }
+
+        if should_redraw {
+            self.redraw_map();
         }
     }
 
