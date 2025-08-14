@@ -2,14 +2,15 @@ use std::path::Path;
 
 use anyhow::{anyhow, bail, Result};
 use hashbrown::{HashMap, HashSet};
-use maprando::{map_repository::MapRepository, preset::PresetData, randomize::{DebugData, DifficultyConfig, DoorState, FlagLocationState, ItemLocationState, LockedDoor, Randomization, RandomizationState, Randomizer, SaveLocationState, SpoilerDetails, SpoilerDoorDetails, SpoilerDoorSummary, SpoilerFlagDetails, SpoilerFlagSummary, SpoilerItemDetails, SpoilerItemSummary, SpoilerLocation, SpoilerLog, SpoilerSummary, StartLocationData}, settings::{Objective, RandomizerSettings, WallJump}, traverse::{apply_requirement, get_bireachable_idxs, get_spoiler_route, traverse, LockedDoorData}};
+use maprando::{customize::{mosaic::MosaicTheme, samus_sprite::SamusSpriteCategory, CustomizeSettings}, map_repository::MapRepository, patch::Rom, preset::PresetData, randomize::{DebugData, DifficultyConfig, DoorState, FlagLocationState, ItemLocationState, LockedDoor, Randomization, RandomizationState, Randomizer, SaveLocationState, SpoilerDetails, SpoilerDoorDetails, SpoilerDoorSummary, SpoilerFlagDetails, SpoilerFlagSummary, SpoilerItemDetails, SpoilerItemSummary, SpoilerLocation, SpoilerLog, SpoilerSummary, StartLocationData}, settings::{Objective, RandomizerSettings, WallJump}, traverse::{apply_requirement, get_bireachable_idxs, get_spoiler_route, traverse, LockedDoorData}};
 use maprando_game::{BeamType, Capacity, DoorPtrPair, DoorType, GameData, HubLocation, Item, ItemLocationId, LinksDataGroup, Map, NodeId, Requirement, RoomId, StartLocation, VertexKey};
 use maprando_logic::{GlobalState, Inventory, LocalState};
 use rand::{rngs::StdRng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
-use strum::VariantNames;
+use strum::{VariantArray, VariantNames};
+use strum_macros::VariantArray;
 
-use crate::backend::map_editor::MapEditor;
+use crate::backend::map_editor::{MapEditor, MapErrorType};
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DoubleItemPlacement {
@@ -22,7 +23,7 @@ pub const ITEM_VALUES: [Item; 23] = [
     Item::SpaceJump, Item::ScrewAttack, Item::Morph, Item::ReserveTank, Item::WallJump, Item::Nothing
 ];
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, VariantArray)]
 pub enum Placeable {
     Helm = 0,
     ETank,
@@ -55,41 +56,10 @@ pub enum Placeable {
     DoorIce,
     DoorPlasma,
     DoorCharge,
+    DoorWall,
 }
 
 impl Placeable {
-    pub const VALUES: [Self; 31] = [Self::Helm,
-    Self::ETank,
-    Self::Missile,
-    Self::SuperMissile,
-    Self::PowerBomb,
-    Self::Bombs,
-    Self::Charge,
-    Self::Ice,
-    Self::HighJump,
-    Self::SpeedBooster,
-    Self::Wave,
-    Self::Spazer,
-    Self::Springball,
-    Self::Varia,
-    Self::Gravity,
-    Self::XRay,
-    Self::Plasma,
-    Self::Grapple,
-    Self::SpaceJump,
-    Self::ScrewAttack,
-    Self::Morph,
-    Self::ReserveTank,
-    Self::WalljumpBoots,
-    Self::DoorMissile,
-    Self::DoorSuper,
-    Self::DoorPowerBomb,
-    Self::DoorSpazer,
-    Self::DoorWave,
-    Self::DoorIce,
-    Self::DoorPlasma,
-    Self::DoorCharge];
-
     pub fn to_string(self) -> String {
         match self {
             Placeable::Helm => "Starting Position",
@@ -123,12 +93,13 @@ impl Placeable {
             Placeable::DoorIce => "Ice Door",
             Placeable::DoorPlasma => "Plasma Door",
             Placeable::DoorCharge => "Charge Door",
+            Placeable::DoorWall => "Wall Door"
         }.to_string()
     }
 
     pub fn from_item(item: Item) -> Placeable {
         let idx = Placeable::ETank as usize + item as usize;
-        Placeable::VALUES[idx]
+        Placeable::VARIANTS[idx]
     }
 
     pub fn to_item(self) -> Option<Item> {
@@ -148,6 +119,24 @@ impl Placeable {
             Placeable::DoorIce => Some(DoorType::Beam(BeamType::Ice)),
             Placeable::DoorPlasma => Some(DoorType::Beam(BeamType::Plasma)),
             Placeable::DoorCharge => Some(DoorType::Beam(BeamType::Charge)),
+            Placeable::DoorWall => Some(DoorType::Wall),
+            _ => None
+        }
+    }
+
+    pub fn from_door_type(door_type: DoorType) -> Option<Self> {
+        match door_type {
+            DoorType::Red => Some(Placeable::DoorMissile),
+            DoorType::Green => Some(Placeable::DoorSuper),
+            DoorType::Yellow => Some(Placeable::DoorPowerBomb),
+            DoorType::Wall => Some(Placeable::DoorWall),
+            DoorType::Beam(beam) => Some(match beam {
+                BeamType::Charge => Placeable::DoorCharge,
+                BeamType::Ice => Placeable::DoorIce,
+                BeamType::Plasma => Placeable::DoorPlasma,
+                BeamType::Spazer => Placeable::DoorSpazer,
+                BeamType::Wave => Placeable::DoorWave,
+            }),
             _ => None
         }
     }
@@ -207,8 +196,8 @@ pub struct Plando {
     pub objectives: Vec<Objective>,
     pub item_locations: Vec<Item>,
     pub start_location_data: StartLocationData,
-    pub placed_item_count: [usize; Placeable::VALUES.len()],
-    pub randomizable_door_connections: Vec<(DoorPtrPair, DoorPtrPair)>,
+    pub placed_item_count: [usize; Placeable::VARIANTS.len()],
+    pub randomizable_doors: HashSet<(Option<usize>, Option<usize>)>,
     pub locked_doors: Vec<LockedDoor>,
     pub gray_doors: HashSet<DoorPtrPair>,
     pub spoiler_overrides: Vec<SpoilerOverride>,
@@ -244,7 +233,7 @@ impl Plando {
         let map_editor = MapEditor::new(map);
 
         let objectives = maprando::randomize::get_objectives(&randomizer_settings, Some(map_editor.get_map()), &game_data, &mut rng);
-        let randomizable_door_connections = get_randomizable_door_connections(&game_data, map_editor.get_map(), &objectives);
+        let randomizable_doors = get_randomizable_doors(&game_data, &objectives);
 
         let ship_start = Self::get_ship_start();
         let ship_hub = Self::get_ship_hub(&game_data);
@@ -256,7 +245,7 @@ impl Plando {
             hub_return_route: Vec::new()
         };
 
-        let mut placed_item_count = [0usize; Placeable::VALUES.len()];
+        let mut placed_item_count = [0usize; Placeable::VARIANTS.len()];
         placed_item_count[0] = 1;
 
         let item_location_len = game_data.item_locations.len();
@@ -279,7 +268,7 @@ impl Plando {
             item_locations: vec![Item::Nothing; item_location_len],
             start_location_data,
             placed_item_count,
-            randomizable_door_connections,
+            randomizable_doors,
             locked_doors: Vec::new(),
             gray_doors: get_gray_doors(),
             spoiler_overrides: Vec::new(),
@@ -353,7 +342,7 @@ impl Plando {
         self.clear_doors();
         self.start_location_data.start_location = Plando::get_ship_start();
         self.update_hub_location()?;
-        self.update_randomizable_door_connections();
+        self.update_randomizable_doors();
         self.auto_update_spoiler = auto_update;
         self.update_spoiler_data()?;
         Ok(())
@@ -367,10 +356,43 @@ impl Plando {
         self.clear_doors();
         self.start_location_data.start_location = Plando::get_ship_start();
         self.update_hub_location()?;
-        self.update_randomizable_door_connections();
+        self.update_randomizable_doors();
         self.auto_update_spoiler = auto_update;
         self.update_spoiler_data()?;
         Ok(())
+    }
+
+    pub fn patch_rom(&mut self, rom_vanilla: &Rom, settings: CustomizeSettings, samus_sprite_categories: &[SamusSpriteCategory], mosaic_themes: &[MosaicTheme]) -> Result<Rom> {
+        if self.map_editor.error_list.iter().filter(|err| err.is_severe()).count() > 0 {
+            bail!("Map has errors that need to be fixed");
+        }
+
+        let auto_update = self.auto_update_spoiler;
+        self.auto_update_spoiler = false;
+        // Place any remaining wall doors
+        for door in self.map_editor.error_list.clone() {
+            if let MapErrorType::DoorDisconnected(room_idx, door_idx) = door {
+                let _ = self.place_door(room_idx, door_idx, Some(DoorType::Wall), false, true);
+            }
+        }
+        
+        self.update_spoiler_data()?;
+        if self.randomization.is_none() {
+            bail!("No randomization generated");
+        }
+        let (r, _spoiler_log) = self.randomization.as_ref().unwrap();
+
+        self.auto_update_spoiler = auto_update;
+
+        maprando::patch::make_rom(
+            rom_vanilla,
+            &self.randomizer_settings,
+            &settings,
+            r,
+            &self.game_data,
+            samus_sprite_categories,
+            mosaic_themes
+        )
     }
 
     pub fn does_repo_exist(&self, repo_type: MapRepositoryType) -> bool {
@@ -397,15 +419,15 @@ impl Plando {
     pub fn load_preset(&mut self, preset: RandomizerSettings) {
         self.randomizer_settings = preset;
         self.objectives = maprando::randomize::get_objectives(&self.randomizer_settings, Some(self.map_editor.get_map()), &self.game_data, &mut self.rng);
-        self.update_randomizable_door_connections();
+        self.update_randomizable_doors();
         self.get_difficulty_tiers();
         if self.auto_update_spoiler {
             let _ = self.update_spoiler_data();
         }
     }
 
-    pub fn update_randomizable_door_connections(&mut self) {
-        self.randomizable_door_connections = get_randomizable_door_connections(&self.game_data, self.map(), &self.objectives);
+    pub fn update_randomizable_doors(&mut self) {
+        self.randomizable_doors = get_randomizable_doors(&self.game_data, &self.objectives);
     }
 
     pub fn get_difficulty_tiers(&mut self) {
@@ -693,123 +715,126 @@ impl Plando {
         let door = &self.game_data.room_geometry[room_idx].doors[door_idx];
         let ptr_pair = (door.exit_ptr, door.entrance_ptr);
 
-        let door_connection = self.randomizable_door_connections.iter().find(|pair| {
-            pair.0 == ptr_pair || pair.1 == ptr_pair
-        }).ok_or(anyhow!("Door is not randomizable. Non-randomizable doors include Gray Doors (like bosses), Sandpits, doors on the same tile as an item and doors to Save/Map/Refill rooms"))?;
+        let door_conn_opt = self.map().doors.iter().find(|(src, dst, _)| *src == ptr_pair || *dst == ptr_pair).cloned();
+        let (src_ptr_pair, dst_ptr_pair) = if let Some(door_conn) = door_conn_opt {
+            (door_conn.0, door_conn.1)
+        } else {
+            (ptr_pair, (None, None))
+        };
 
-        let (room_src_idx, door_src_idx) = self.game_data.room_and_door_idxs_by_door_ptr_pair[&door_connection.0];
-        let (room_dst_idx, door_dst_idx) = self.game_data.room_and_door_idxs_by_door_ptr_pair[&door_connection.1];
-        let tile_src_x = self.game_data.room_geometry[room_src_idx].doors[door_src_idx].x;
-        let tile_src_y = self.game_data.room_geometry[room_src_idx].doors[door_src_idx].y;
-        let tile_dst_x = self.game_data.room_geometry[room_dst_idx].doors[door_dst_idx].x;
-        let tile_dst_y = self.game_data.room_geometry[room_dst_idx].doors[door_dst_idx].y;
+        // Door if unlinked, or Door connection if linked is not randomizable
+        if !(self.randomizable_doors.contains(&src_ptr_pair) && (door_conn_opt.is_none() || self.randomizable_doors.contains(&dst_ptr_pair))) {
+            bail!("Door is not randomizable. Non-randomizable doors include Gray Doors (like bosses), Sandpits, doors on the same tile as an item and doors to Save/Map/Refill rooms");
+        }
 
-        let loc_src = (room_src_idx, tile_src_x, tile_src_y);
-        let loc_dst = (room_dst_idx, tile_dst_x, tile_dst_y);
+        let (src_room_idx, src_door_idx) = self.game_data.room_and_door_idxs_by_door_ptr_pair[&src_ptr_pair];
+        let tile_src_x = self.game_data.room_geometry[src_room_idx].doors[src_door_idx].x;
+        let tile_src_y = self.game_data.room_geometry[src_room_idx].doors[src_door_idx].y;
+        let loc_src = (src_room_idx, tile_src_x, tile_src_y);
 
+        let loc_dst = if dst_ptr_pair.0.is_none() && dst_ptr_pair.1.is_none() {
+            None
+        } else {
+            let (src_room_idx, src_door_idx) = self.game_data.room_and_door_idxs_by_door_ptr_pair[&src_ptr_pair];
+            let tile_src_x = self.game_data.room_geometry[src_room_idx].doors[src_door_idx].x;
+            let tile_src_y = self.game_data.room_geometry[src_room_idx].doors[src_door_idx].y;
+            Some((src_room_idx, tile_src_x, tile_src_y))
+        };
+
+        let prev_door_opt = self.locked_doors.iter().find(|door| door.src_ptr_pair == src_ptr_pair || door.dst_ptr_pair == src_ptr_pair);
+
+        // We can always remove a door lock
         if door_type_opt.is_none() {
-            if self.door_lock_loc.contains(&loc_src) && self.door_lock_loc.contains(&loc_dst) {
-                self.door_lock_loc.retain(|&elem| elem != loc_src && elem != loc_dst);
-            }
-            if self.door_beam_loc.contains(&loc_src) && self.door_beam_loc.contains(&loc_dst) {
-                self.door_beam_loc.retain(|&elem| elem != loc_src && elem != loc_dst);
+            // This confirms that we remove the actually targetted door, not another door on the same tile
+            if prev_door_opt.is_none() {
+                return Ok(());
             }
 
-            let old_door_type_opt = self.locked_doors.iter().find_map(
-                |elem| if elem.src_ptr_pair == door_connection.0 && elem.dst_ptr_pair == door_connection.1 { Some(elem.door_type) } else { None });
+            let prev_door = prev_door_opt.unwrap();
+            let prev_placeable = Placeable::from_door_type(prev_door.door_type).unwrap();
 
-            if let Some(old_door_type) = old_door_type_opt {
-                let placeable = match old_door_type {
-                    DoorType::Red => Placeable::DoorMissile,
-                    DoorType::Green => Placeable::DoorSuper,
-                    DoorType::Yellow => Placeable::DoorPowerBomb,
-                    DoorType::Beam(beam_type) => match beam_type {
-                        maprando_game::BeamType::Charge => Placeable::DoorCharge,
-                        maprando_game::BeamType::Ice => Placeable::DoorIce,
-                        maprando_game::BeamType::Wave => Placeable::DoorWave,
-                        maprando_game::BeamType::Spazer => Placeable::DoorSpazer,
-                        maprando_game::BeamType::Plasma => Placeable::DoorPlasma,
-                    },
-                    _ => Placeable::DoorMissile
-                } as usize;
-                self.placed_item_count[placeable] -= 1;
+            self.door_lock_loc.retain(|&elem| {
+                elem != loc_src && loc_dst.is_none_or(|x| elem != x)
+            });
+            self.door_beam_loc.retain(|&elem| {
+                elem != loc_src && loc_dst.is_none_or(|x| elem != x)
+            });
+
+            self.placed_item_count[prev_placeable as usize] -= 1;
+            if prev_door.door_type != DoorType::Wall {
                 self.total_door_count -= 1;
-                self.locked_doors.retain(|elem| elem.src_ptr_pair != door_connection.0 || elem.dst_ptr_pair != door_connection.1);
-                
-                // This should never error
-                let _ = self.update_hub_location();
-                if self.auto_update_spoiler {
-                    self.update_spoiler_data()?;
-                }
-                self.dirty = true;
+            }
+
+            if !ignore_hub {
+                let _ = self.update_hub_location(); // This should never error
             }
 
             return Ok(());
         }
+        let door_type = door_type_opt.unwrap();
 
-        if self.total_door_count == 55 {
-            bail!("Cannot place more than 55 doors");
+        if self.total_door_count >= 55 && door_type != DoorType::Wall {
+            bail!("Cannot place more than 55 door locks (Wall doors don't count towards this total)");
         }
 
-        let door_type = door_type_opt.unwrap();
-        let locked_door = LockedDoor {
-            src_ptr_pair: door_connection.0,
-            dst_ptr_pair: door_connection.1,
-            door_type: door_type,
-            bidirectional: true
-        };
+        // At this point the door may still be unlinked. In this case we only allow placing Wall Doors
+        if door_conn_opt.is_none() && door_type != DoorType::Wall {
+            bail!("Cannot place door locks on unlinked doors except Wall doors");
+        }
 
-        let placeable = match door_type {
-            DoorType::Red => Placeable::DoorMissile,
-            DoorType::Green => Placeable::DoorSuper,
-            DoorType::Yellow => Placeable::DoorPowerBomb,
-            DoorType::Beam(beam_type) => match beam_type {
-                maprando_game::BeamType::Charge => Placeable::DoorCharge,
-                maprando_game::BeamType::Ice => Placeable::DoorIce,
-                maprando_game::BeamType::Wave => Placeable::DoorWave,
-                maprando_game::BeamType::Spazer => Placeable::DoorSpazer,
-                maprando_game::BeamType::Plasma => Placeable::DoorPlasma,
-            },
-            _ => Placeable::DoorMissile
-        } as usize;
+        let placeable = Placeable::from_door_type(door_type).unwrap();
 
-        if self.door_lock_loc.contains(&loc_src) || self.door_lock_loc.contains(&loc_dst) {
-            if replace {
-                todo!("Implement door replacing");
-            } else {
-                bail!("There can only be one locked door per tile");
-            }
+        // There is already a door lock where we try to place one. If replace is false we simply return and don't throw an error
+        if prev_door_opt.is_some() && !replace {
+            return Ok(());
+        }
+
+        // Check that there is not already a door on this tile
+        if self.door_lock_loc.contains(&loc_src) || loc_dst.is_none_or(|x| self.door_lock_loc.contains(&x)) {
+            bail!("There can only be one door lock per tile");
+        }
+
+        // Check that there is only one beam door per room
+        if let DoorType::Beam(_) = door_type && self.door_beam_loc.iter().any(|&x| {
+            x.0 == loc_src.0 || loc_dst.is_none_or(|y| x.0 == y.0)
+        }) {
+            bail!("There can only be one beam door per room");
+        }
+
+        // Remove any previous door locks
+        if prev_door_opt.is_some() {
+            self.place_door(room_idx, door_idx, None, false, true)?;
+        }
+
+        // Actually place the door
+        self.door_lock_loc.push(loc_src);
+        if let Some(dst) = loc_dst {
+            self.door_lock_loc.push(dst);
         }
 
         if let DoorType::Beam(_) = door_type {
-            if self.door_beam_loc.iter().any(|x| x.0 == loc_src.0 || x.0 == loc_dst.0) {
-                if replace {
-                    todo!("Implement door replacing");
-                } else {
-                    bail!("There can only be one beam door per room");
-                }
-            }
             self.door_beam_loc.push(loc_src);
-            self.door_beam_loc.push(loc_dst);
+            if let Some(dst) = loc_dst {
+                self.door_beam_loc.push(dst);
+            }
         }
-        self.door_lock_loc.push(loc_src);
-        self.door_lock_loc.push(loc_dst);
+
+        let locked_door = LockedDoor {
+            src_ptr_pair, dst_ptr_pair, door_type,
+            bidirectional: door_conn_opt.is_some()
+        };
 
         self.locked_doors.push(locked_door);
-        
-        self.placed_item_count[placeable] += 1;
-        self.total_door_count += 1;
 
-        // Door blocks current and all hub locations
+        self.placed_item_count[placeable as usize] += 1;
+        if door_type != DoorType::Wall {
+            self.total_door_count += 1;
+        }
+
         if !ignore_hub && self.update_hub_location().is_err() {
-            // Undo placement
-            let _ = self.place_door(room_idx, door_idx, None, true, true);
-            bail!("Placing door would block all logical hub locations");
+            self.place_door(room_idx, door_idx, None, false, true)?;
+            bail!("Placing door would block off any possible hub location");
         }
-        if self.auto_update_spoiler {
-            self.update_spoiler_data()?;
-        }
-        self.dirty = true;
 
         Ok(())
     }
@@ -820,7 +845,7 @@ impl Plando {
         self.locked_doors.clear();
         self.total_door_count = 0;
 
-        for i in Placeable::DoorMissile as usize..Placeable::DoorPlasma as usize {
+        for i in Placeable::DoorMissile as usize..Placeable::DoorWall as usize {
             self.placed_item_count[i] = 0;
         }
 
@@ -1487,21 +1512,6 @@ fn get_randomizable_doors(game_data: &GameData, objectives: &[Objective]) -> Has
         }
     }
     out.into_iter().collect()
-}
-
-fn get_randomizable_door_connections(
-    game_data: &GameData,
-    map: &Map,
-    objectives: &[Objective],
-) -> Vec<(DoorPtrPair, DoorPtrPair)> {
-    let doors = get_randomizable_doors(game_data, objectives);
-    let mut out: Vec<(DoorPtrPair, DoorPtrPair)> = vec![];
-    for (src_door_ptr_pair, dst_door_ptr_pair, _bidirectional) in &map.doors {
-        if doors.contains(src_door_ptr_pair) && doors.contains(dst_door_ptr_pair) {
-            out.push((*src_door_ptr_pair, *dst_door_ptr_pair));
-        }
-    }
-    out
 }
 
 pub fn get_double_item_offset(room_id: usize, node_id: usize) -> DoubleItemPlacement {

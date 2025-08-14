@@ -1861,7 +1861,7 @@ impl PlandoApp {
                 let update = self.plando.auto_update_spoiler;
                 self.plando.auto_update_spoiler = false;
 
-                self.plando.update_randomizable_door_connections();
+                self.plando.update_randomizable_doors();
 
                 let door_locks = self.plando.locked_doors.clone();
                 self.plando.clear_doors();
