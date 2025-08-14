@@ -1715,6 +1715,7 @@ impl PlandoApp {
                             customize_logic_open = false;
                             self.plando.load_preset(self.logic_customization.settings.clone());
                             self.settings.last_logic_preset = Some(self.logic_customization.settings.clone());
+                            self.redraw_map();
                         }
                         Err(err) => self.modal_type = ModalType::Error(err.to_string())
                     }
@@ -2163,8 +2164,9 @@ impl PlandoApp {
                         if bt == mouse::Button::Left {
                             if sidebar_selection.is_some_and(|x| x.to_item().is_some()) {
                                 let item_to_place = sidebar_selection.unwrap().to_item().unwrap();
-                                let as_placeable = Placeable::VARIANTS[item_to_place as usize + Placeable::ETank as usize];
-                                if self.plando.placed_item_count[as_placeable as usize] < self.plando.get_max_placeable_count(as_placeable).unwrap() {
+                                let as_placeable = Placeable::from_item(item_to_place);
+                                let max_count = self.plando.get_max_placeable_count(as_placeable).unwrap_or(999);
+                                if self.plando.placed_item_count[as_placeable as usize] < max_count {
                                     self.plando.place_item(i, item_to_place);
                                     if self.settings.spoiler_auto_update {
                                         if let Err(err) = self.plando.update_spoiler_data() {
