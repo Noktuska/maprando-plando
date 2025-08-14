@@ -209,9 +209,7 @@ pub struct Plando {
 
     pub randomization: Option<(Randomization, SpoilerLog)>,
 
-    pub rng: StdRng,
-    pub auto_update_spoiler: bool,
-    pub dirty: bool
+    pub rng: StdRng
 }
 
 impl Plando {
@@ -279,9 +277,7 @@ impl Plando {
             preset_data: impl_preset_data,
             randomization: None,
 
-            rng,
-            auto_update_spoiler: true,
-            dirty: false
+            rng
         };
         
         plando.get_difficulty_tiers();
@@ -301,10 +297,6 @@ impl Plando {
             self.placed_item_count[i] = 0;
         }
         self.spoiler_overrides.clear();
-
-        if self.auto_update_spoiler {
-            let _ = self.update_spoiler_data();
-        }
     }
 
     pub fn room_id_to_idx(&self, id: usize) -> usize {
@@ -335,29 +327,23 @@ impl Plando {
     }
 
     pub fn load_map(&mut self, map: Map) -> Result<()> {
-        let auto_update = self.auto_update_spoiler;
-        self.auto_update_spoiler = false;
         self.map_editor.load_map(map, &self.game_data);
         self.clear_item_locations();
         self.clear_doors();
         self.start_location_data.start_location = Plando::get_ship_start();
         self.update_hub_location()?;
         self.update_randomizable_doors();
-        self.auto_update_spoiler = auto_update;
         self.update_spoiler_data()?;
         Ok(())
     }
 
     pub fn load_map_from_file(&mut self, path: &Path) -> Result<()> {
-        let auto_update = self.auto_update_spoiler;
-        self.auto_update_spoiler = false;
         self.map_editor.load_map_from_file(&self.game_data, path)?;
         self.clear_item_locations();
         self.clear_doors();
         self.start_location_data.start_location = Plando::get_ship_start();
         self.update_hub_location()?;
         self.update_randomizable_doors();
-        self.auto_update_spoiler = auto_update;
         self.update_spoiler_data()?;
         Ok(())
     }
@@ -367,8 +353,6 @@ impl Plando {
             bail!("Map has errors that need to be fixed");
         }
 
-        let auto_update = self.auto_update_spoiler;
-        self.auto_update_spoiler = false;
         // Place any remaining wall doors
         for door in self.map_editor.error_list.clone() {
             if let MapErrorType::DoorDisconnected(room_idx, door_idx) = door {
@@ -381,8 +365,6 @@ impl Plando {
             bail!("No randomization generated");
         }
         let (r, _spoiler_log) = self.randomization.as_ref().unwrap();
-
-        self.auto_update_spoiler = auto_update;
 
         maprando::patch::make_rom(
             rom_vanilla,
@@ -421,9 +403,7 @@ impl Plando {
         self.objectives = maprando::randomize::get_objectives(&self.randomizer_settings, Some(self.map_editor.get_map()), &self.game_data, &mut self.rng);
         self.update_randomizable_doors();
         self.get_difficulty_tiers();
-        if self.auto_update_spoiler {
-            let _ = self.update_spoiler_data();
-        }
+        let _ = self.update_spoiler_data();
     }
 
     pub fn update_randomizable_doors(&mut self) {
@@ -471,9 +451,6 @@ impl Plando {
             return;
         }
 
-        let auto_update = self.auto_update_spoiler;
-        self.auto_update_spoiler = false;
-
         // Clear all items in the room so they can be placed again
         for item_idx in 0..self.item_locations.len() {
             if self.item_locations[item_idx] != Item::Nothing && self.game_data.item_locations[item_idx].0 == room_id {
@@ -502,12 +479,6 @@ impl Plando {
         }
 
         self.map_editor.erase_room(room_idx, &self.game_data);
-
-        if auto_update {
-            // TODO: This could error
-            let _ = self.update_spoiler_data();
-        }
-        self.auto_update_spoiler = auto_update;
     }
 
     pub fn place_start_location(&mut self, start_loc: StartLocation) -> Result<()> {
@@ -518,8 +489,6 @@ impl Plando {
             self.start_location_data.start_location = old_start_loc;
             bail!(err)
         }
-
-        self.dirty = true;
 
         Ok(())
     }
@@ -532,11 +501,6 @@ impl Plando {
             self.start_location_data.hub_location = ship_hub;
             self.start_location_data.hub_obtain_route = Vec::new();
             self.start_location_data.hub_return_route = Vec::new();
-            self.dirty = true;
-
-            if self.auto_update_spoiler {
-                self.update_spoiler_data()?;
-            }
 
             return Ok(());
         }
@@ -687,10 +651,6 @@ impl Plando {
         self.start_location_data.hub_location = hub_location;
         self.start_location_data.hub_obtain_route = hub_obtain_route;
         self.start_location_data.hub_return_route = hub_return_route;
-        
-        if self.auto_update_spoiler {
-            self.update_spoiler_data()?;
-        }
 
         Ok(())
     }
@@ -705,10 +665,6 @@ impl Plando {
             self.placed_item_count[Placeable::ETank as usize + item as usize] += 1;
         }
         self.item_locations[item_loc] = item;
-        if self.auto_update_spoiler {
-            let _ = self.update_spoiler_data();
-        }
-        self.dirty = true;
     }
 
     pub fn place_door(&mut self, room_idx: usize, door_idx: usize, door_type_opt: Option<DoorType>, replace: bool, ignore_hub: bool) -> Result<()> {
@@ -847,10 +803,6 @@ impl Plando {
 
         for i in Placeable::DoorMissile as usize..Placeable::DoorWall as usize {
             self.placed_item_count[i] = 0;
-        }
-
-        if self.auto_update_spoiler {
-            let _ = self.update_spoiler_data();
         }
     }
 

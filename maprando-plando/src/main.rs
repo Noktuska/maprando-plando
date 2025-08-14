@@ -188,9 +188,6 @@ fn load_seed(plando: &mut Plando, path: &Path, preset_data: &PresetData) -> Resu
         seed_data.map.room_mask = vec![true; seed_data.map.rooms.len()];
     }
 
-    let auto_update = plando.auto_update_spoiler;
-    plando.auto_update_spoiler = false;
-
     plando.load_preset(seed_data.settings);
 
     plando.load_map(seed_data.map)?;
@@ -214,7 +211,6 @@ fn load_seed(plando: &mut Plando, path: &Path, preset_data: &PresetData) -> Resu
     plando.spoiler_overrides = seed_data.spoiler_overrides;
 
     plando.update_spoiler_data()?;
-    plando.auto_update_spoiler = auto_update;
 
     Ok(())
 }
@@ -228,7 +224,6 @@ fn save_seed(plando: &mut Plando, path: &Path) -> Result<()> {
 
     file.write_all(out.as_bytes())?;
 
-    plando.dirty = false;
     Ok(())
 }
 
@@ -1028,7 +1023,6 @@ impl PlandoApp {
             None => preset_data.default_preset.clone()
         };
 
-        plando.auto_update_spoiler = settings.spoiler_auto_update;
         plando.load_preset(preset.clone());
 
         let logic_customization = LogicCustomization::new(preset_data, preset);
@@ -1370,7 +1364,6 @@ impl PlandoApp {
                             },
                             Hotkeys::OpenSpoilerOverride => self.override_window = Some(self.spoiler_step + 1),
                             Hotkeys::ToggleAutoSpoiler => {
-                                self.plando.auto_update_spoiler ^= true;
                                 self.settings.spoiler_auto_update ^= true;
                             },
                             Hotkeys::EraseSelection => {
@@ -1570,26 +1563,35 @@ impl PlandoApp {
                         ui.menu_button("Items", |ui| {
                             if ui.button("Clear all Items").clicked() {
                                 self.plando.clear_item_locations();
+                                if self.settings.spoiler_auto_update {
+                                    if let Err(err) = self.plando.update_spoiler_data() {
+                                        self.modal_type = ModalType::Error(err.to_string());
+                                    }
+                                }
                             }
                             if ui.button("Clear all Doors").clicked() {
                                 self.plando.clear_doors();
+                                if self.settings.spoiler_auto_update {
+                                    if let Err(err) = self.plando.update_spoiler_data() {
+                                        self.modal_type = ModalType::Error(err.to_string());
+                                    }
+                                }
                             }
                             ui.separator();
                             if ui.button("Replace Nothings with Missiles").clicked() {
-                                let auto_update = self.plando.auto_update_spoiler;
-                                self.plando.auto_update_spoiler = false;
                                 for i in 0..self.plando.item_locations.len() {
                                     if self.plando.item_locations[i] == Item::Nothing {
                                         let _ = self.plando.place_item(i, Item::Missile);
                                     }
                                 }
-                                self.plando.auto_update_spoiler = auto_update;
-                                let _ = self.plando.update_spoiler_data();
+                                if self.settings.spoiler_auto_update {
+                                    if let Err(err) = self.plando.update_spoiler_data() {
+                                        self.modal_type = ModalType::Error(err.to_string());
+                                    }
+                                }
                                 ui.close_menu();
                             }
                             if ui.button("Randomize Doors").clicked() {
-                                let update = self.plando.auto_update_spoiler;
-                                self.plando.auto_update_spoiler = false;
                                 self.plando.clear_doors();
 
                                 let seed = (self.plando.rng.next_u64() & 0xFFFFFFFF) as usize;
@@ -1604,16 +1606,17 @@ impl PlandoApp {
                                     self.modal_type = ModalType::Error("The logical hub was blocked. Start location is defaulted to ship".to_string());
                                 }
 
-                                self.plando.auto_update_spoiler = update;
-                                if update {
-                                    let _ = self.plando.update_spoiler_data();
+                                if self.settings.spoiler_auto_update {
+                                    if let Err(err) = self.plando.update_spoiler_data() {
+                                        self.modal_type = ModalType::Error(err.to_string());
+                                    }
                                 }
                             }
 
                             ui.separator();
                             if ui.button("Reset all Spoiler Overrides").clicked() {
                                 self.plando.spoiler_overrides.clear();
-                                if self.plando.auto_update_spoiler {
+                                if self.settings.spoiler_auto_update {
                                     let _ = self.plando.update_spoiler_data();
                                 }
                             }
@@ -1858,9 +1861,6 @@ impl PlandoApp {
 
             if should_redraw {
                 // Fix any potential issues that may come up such as syncing up door locks
-                let update = self.plando.auto_update_spoiler;
-                self.plando.auto_update_spoiler = false;
-
                 self.plando.update_randomizable_doors();
 
                 let door_locks = self.plando.locked_doors.clone();
@@ -1872,9 +1872,10 @@ impl PlandoApp {
                     }
                 }
 
-                self.plando.auto_update_spoiler = update;
-                if self.plando.auto_update_spoiler {
-                    self.plando.update_spoiler_data();
+                if self.settings.spoiler_auto_update {
+                    if let Err(err) = self.plando.update_spoiler_data() {
+                        self.modal_type = ModalType::Error(err.to_string());
+                    }
                 }
             }
         }
@@ -2005,6 +2006,11 @@ impl PlandoApp {
                             res = self.plando.place_start_location(self.plando.game_data.start_locations[i].clone());
                         } else if bt == mouse::Button::Right {
                             res = self.plando.place_start_location(Plando::get_ship_start());
+                        }
+                        if self.settings.spoiler_auto_update {
+                            if let Err(err) = self.plando.update_spoiler_data() {
+                                self.modal_type = ModalType::Error(err.to_string());
+                            }
                         }
                         self.click_consumed = true;
                         if let Err(err) = res {
@@ -2160,6 +2166,11 @@ impl PlandoApp {
                                 let as_placeable = Placeable::VARIANTS[item_to_place as usize + Placeable::ETank as usize];
                                 if self.plando.placed_item_count[as_placeable as usize] < self.plando.get_max_placeable_count(as_placeable).unwrap() {
                                     self.plando.place_item(i, item_to_place);
+                                    if self.settings.spoiler_auto_update {
+                                        if let Err(err) = self.plando.update_spoiler_data() {
+                                            self.modal_type = ModalType::Error(err.to_string());
+                                        }
+                                    }
                                     self.redraw_map();
                                 }
                             } else {
@@ -2167,6 +2178,11 @@ impl PlandoApp {
                             }
                         } else if bt == mouse::Button::Right {
                             self.plando.place_item(i, Item::Nothing);
+                            if self.settings.spoiler_auto_update {
+                                if let Err(err) = self.plando.update_spoiler_data() {
+                                    self.modal_type = ModalType::Error(err.to_string());
+                                }
+                            }
                             self.redraw_map();
                         }
                         self.click_consumed = true;
@@ -2274,6 +2290,11 @@ impl PlandoApp {
                         res = self.plando.place_door(room_idx, door_idx, door_type.to_door_type(), false, false);
                     } else if bt == mouse::Button::Right {
                         res = self.plando.place_door(room_idx, door_idx, None, true, false);
+                    }
+                    if self.settings.spoiler_auto_update {
+                        if let Err(err) = self.plando.update_spoiler_data() {
+                            self.modal_type = ModalType::Error(err.to_string());
+                        }
                     }
                     self.click_consumed = true;
                     if let Err(err) = res {
@@ -2717,7 +2738,7 @@ impl PlandoApp {
                 }
                 if ui.button("Apply").clicked() {
                     self.override_window = None;
-                    if self.plando.auto_update_spoiler {
+                    if self.settings.spoiler_auto_update {
                         self.plando.update_spoiler_data();
                     }
                 }
@@ -3090,7 +3111,6 @@ impl PlandoApp {
                 if ui.add_enabled(self.settings.spoiler_auto_update != default.spoiler_auto_update, egui::Button::new("Reset")).clicked() {
                     self.settings.spoiler_auto_update = default.spoiler_auto_update;
                 }
-                self.plando.auto_update_spoiler = self.settings.spoiler_auto_update;
                 ui.end_row();
 
                 ui.label("Disable logic").on_hover_text("Does not gray out unreachable locations. Useful for modelling out-of-logic");
