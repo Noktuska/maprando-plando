@@ -121,6 +121,7 @@ impl Area {
 pub enum MapErrorType {
     // Warnings
     DoorDisconnected(usize, usize), // (room_idx, door_idx) of door which is not connected
+    EscapeNotLogical,
 
     // Errors
     AreaBounds(usize, usize, usize), // Area idx which exceeds boundary limits followed by current (width, height)
@@ -140,6 +141,7 @@ impl MapErrorType {
     pub fn to_string(&self, game_data: &GameData) -> String {
         match self {
             MapErrorType::DoorDisconnected(_, _) => format!("Door is not connected"),
+            MapErrorType::EscapeNotLogical => format!("Escape is not logically clearable. Consider settings a custom escape timer in the logic settings"),
             MapErrorType::AreaBounds(_, w, h) =>
                 format!("Area exceeds maximum size: Currently ({w}, {h}), Maximum: ({}, {})", MapEditor::AREA_MAX_WIDTH, MapEditor::AREA_MAX_HEIGHT),
             MapErrorType::AreaTransitions(t) =>
@@ -176,6 +178,7 @@ impl MapErrorType {
     pub fn is_severe(&self) -> bool {
         match self {
             MapErrorType::DoorDisconnected(_, _) => false,
+            MapErrorType::EscapeNotLogical => false,
             _ => true
         }
     }
@@ -489,7 +492,7 @@ impl MapEditor {
         let (room_x, room_y) = self.map.rooms[room_idx];
         let target_x = door.x as i32 + room_x as i32 + dx;
         let target_y = door.y as i32 + room_y as i32 + dy;
-        if target_x < 0 || target_x >= Self::MAP_MAX_SIZE as i32 || target_y < 0 || target_y >= Self::MAP_MAX_SIZE as i32 {
+        if target_x < 0 || target_y < 0 {
             self.invalid_doors.insert((room_idx, door_idx));
             return None;
         }

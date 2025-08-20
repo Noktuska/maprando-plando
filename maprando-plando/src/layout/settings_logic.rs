@@ -20,6 +20,9 @@ pub struct LogicCustomization {
     customize_window_open: bool,
 
     pub settings: RandomizerSettings, // Applied logic settings
+
+    pub use_custom_escape_time: bool,
+    pub custom_escape_time: usize,
 }
 
 impl LogicCustomization {
@@ -30,7 +33,9 @@ impl LogicCustomization {
             cur_settings: settings.clone(),
             cur_customize_logic_window: CustomizeLogicWindow::None,
             customize_window_open: false,
-            settings
+            settings,
+            use_custom_escape_time: false,
+            custom_escape_time: 0
         }
     }
 
@@ -295,6 +300,10 @@ impl LogicCustomization {
 
                 ui.label("Escape time multiplier");
                 ui.add(egui::DragValue::new(&mut self.cur_settings.skill_assumption_settings.escape_timer_multiplier).speed(0.05).max_decimals(2).range(0.0..=1000.0));
+                ui.end_row();
+
+                ui.checkbox(&mut self.use_custom_escape_time, "Use custom escape timer (in seconds)");
+                ui.add_enabled(self.use_custom_escape_time, egui::DragValue::new(&mut self.custom_escape_time).range(0..=5995));
                 ui.end_row();
 
                 ui.label("Gate glitch leniency");

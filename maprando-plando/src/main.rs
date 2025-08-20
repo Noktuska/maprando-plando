@@ -1,4 +1,4 @@
-use crate::{backend::{map_editor::{self, MapEditor, MapErrorType}, plando::{get_double_item_offset, DoubleItemPlacement, MapRepositoryType, Placeable, Plando, SpoilerOverride, ITEM_VALUES}}, input_state::KeyState, layout::{hotkey_settings::Keybind, map_editor_ui::MapEditorUi, room_search::{RoomSearch, SearchOpt}, settings_customize::{Customization, SettingsCustomize, SettingsCustomizeResult}, settings_logic::LogicCustomization, Layout, SidebarPanel, WindowType}};
+use crate::{backend::{map_editor::{self, MapEditor, MapErrorType}, plando::{get_double_item_offset, DoubleItemPlacement, MapRepositoryType, Placeable, Plando, SpoilerOverride, ITEM_VALUES}, randomize::get_vertex_info}, input_state::KeyState, layout::{hotkey_settings::Keybind, map_editor_ui::MapEditorUi, room_search::{RoomSearch, SearchOpt}, settings_customize::{Customization, SettingsCustomize, SettingsCustomizeResult}, settings_logic::LogicCustomization, Layout, SidebarPanel, WindowType}};
 use anyhow::{anyhow, bail, Result};
 use egui::{self, style::default_text_styles, Color32, Context, FontDefinitions, Id, RichText, Sense, TextureId, Ui, Vec2};
 use egui_sfml::{SfEgui, UserTexSource};
@@ -936,6 +936,7 @@ enum Hotkeys {
     OpenSpoilerOverride,
     ToggleAutoSpoiler,
     EraseSelection,
+    SelectAll,
     //Undo,
     //Redo
 }
@@ -950,6 +951,7 @@ impl Hotkeys {
             Hotkeys::OpenSpoilerOverride => Keybind::new(id, "Open Spoiler Overrides", "Opens the Spoiler Overrides window for the current step", vec![Key::F6]),
             Hotkeys::ToggleAutoSpoiler => Keybind::new(id, "Toggle Auto-Spoiler", "Toggles the automatic spoiler update setting", vec![Key::F7]),
             Hotkeys::EraseSelection => Keybind::new(id, "Erase selected rooms", "Erases the selected rooms from the map", vec![Key::Delete]),
+            Hotkeys::SelectAll => Keybind::new(id, "Select all rooms", "Adds all placed rooms to the selection", vec![Key::LControl, Key::A])
             //Hotkeys::Undo => Keybind::new(id, "Undo", "Undoes the last action", vec![Key::LControl, Key::Z]),
             //Hotkeys::Redo => Keybind::new(id, "Redo", "Redoes the last action", vec![Key::LControl, Key::Y]),
         }
@@ -988,6 +990,8 @@ struct PlandoApp {
     settings_customization: SettingsCustomize,
     map_editor: MapEditorUi,
     room_search: RoomSearch,
+    hide_warnings: bool,
+    hide_errors: bool,
 
     global_timer: u64
 }
@@ -1060,7 +1064,7 @@ impl PlandoApp {
                 let flag_id = plando.game_data.flag_isv.index_by_key[obj.get_flag_name()];
                 let flag_idx = plando.game_data.flag_ids.iter().position(|x| *x == flag_id).unwrap();
                 let vertex = plando.game_data.flag_vertex_ids[flag_idx][0];
-                let vertex_info = plando.get_vertex_info(vertex);
+                let vertex_info = get_vertex_info(vertex, &plando.game_data, plando.map());
                 (vertex_info.room_id, obj)
             }
         ).collect();
@@ -1114,6 +1118,8 @@ impl PlandoApp {
             settings_customization,
             map_editor: MapEditorUi::default(),
             room_search: RoomSearch::default(),
+            hide_warnings: false,
+            hide_errors: false,
 
             global_timer: 0
         })
@@ -1385,6 +1391,14 @@ impl PlandoApp {
                                 self.map_editor.selected_room_idx.iter().for_each(|&idx| self.plando.erase_room(idx));
                                 self.map_editor.selected_room_idx.clear();
                                 self.redraw_map();
+                            },
+                            Hotkeys::SelectAll => {
+                                self.map_editor.selected_room_idx.clear();
+                                for room_idx in 0..self.plando.map().rooms.len() {
+                                    if self.plando.map().room_mask[room_idx] {
+                                        self.map_editor.selected_room_idx.push(room_idx);
+                                    }
+                                }
                             }
                             //Hotkeys::Undo => println!("Undo"),
                             //Hotkeys::Redo => println!("Redo"),
@@ -1729,6 +1743,10 @@ impl PlandoApp {
                     match self.logic_customization.draw_window(ctx) {
                         Ok(should_close) => if should_close {
                             customize_logic_open = false;
+                            self.plando.custom_escape_time = match self.logic_customization.use_custom_escape_time {
+                                true => Some(self.logic_customization.custom_escape_time),
+                                false => None
+                            };
                             self.plando.load_preset(self.logic_customization.settings.clone());
                             self.settings.last_logic_preset = Some(self.logic_customization.settings.clone());
                             self.redraw_map();
@@ -1916,6 +1934,9 @@ impl PlandoApp {
                 let door = &self.plando.game_data.room_geometry[room_idx].doors[door_idx];
                 vec![IntRect::new((room_x + door.x) as i32, (room_y + door.y) as i32, 1, 1)]
             },
+            MapErrorType::EscapeNotLogical => {
+                vec![]
+            }
             MapErrorType::AreaBounds(area, _, _) => {
                 (0..self.plando.map().rooms.len()).filter(|&room_idx| {
                     self.plando.map().area[room_idx] == area
@@ -2013,6 +2034,10 @@ impl PlandoApp {
         let mouse_tile_y = (self.local_mouse_y / 8.0).floor() as i32;
 
         for i in 0..self.plando.map_editor.error_list.len() {
+            if (self.plando.map_editor.error_list[i].is_severe() && self.hide_errors) || (!self.plando.map_editor.error_list[i].is_severe() && self.hide_warnings) {
+                continue;
+            }
+
             let rects = self.get_error_rects(self.plando.map_editor.error_list[i]);
 
             if rects.iter().any(|rect| rect.contains2(mouse_tile_x, mouse_tile_y)) {
@@ -2268,7 +2293,7 @@ impl PlandoApp {
     fn draw_flags(&mut self, rt: &mut dyn RenderTarget, states: &RenderStates, sidebar_selection: Option<Placeable>) {
         let mut info_overlay = None;
         for (i, &flag_id) in self.plando.game_data.flag_ids.iter().enumerate() {
-            let vertex_info = &self.plando.get_vertex_info(self.plando.game_data.flag_vertex_ids[i][0]);
+            let vertex_info = &get_vertex_info(self.plando.game_data.flag_vertex_ids[i][0], &self.plando.game_data, self.plando.map());
             let room_idx = self.plando.room_id_to_idx(vertex_info.room_id);
             if !self.plando.map().room_mask[room_idx] {
                 continue;
@@ -2708,10 +2733,18 @@ impl PlandoApp {
     }
 
     fn draw_sidebar_error_list(&mut self, ui: &mut Ui) {
+        ui.checkbox(&mut self.hide_warnings, "Hide Warnings");
+        ui.checkbox(&mut self.hide_errors, "Hide Errors");
+        ui.separator();
+
         egui::ScrollArea::vertical().show(ui, |ui| {
             let w = ui.available_width();
 
             for error in &self.plando.map_editor.error_list {
+                if (error.is_severe() && self.hide_errors) || (!error.is_severe() && self.hide_warnings) {
+                    continue;
+                }
+
                 let bt = egui::Button::new(error.to_string(&self.plando.game_data)).fill(
                     if error.is_severe() { Color32::from_rgb(110, 24, 24) } else { Color32::from_rgb(84, 80, 0) }
                 ).min_size(Vec2 { x: w, y: 1.0 });
