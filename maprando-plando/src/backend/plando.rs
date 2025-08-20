@@ -805,7 +805,7 @@ impl Plando {
         self.locked_doors.clear();
         self.total_door_count = 0;
 
-        for i in Placeable::DoorMissile as usize..Placeable::DoorWall as usize {
+        for i in Placeable::DoorMissile as usize..=Placeable::DoorWall as usize {
             self.placed_item_count[i] = 0;
         }
     }

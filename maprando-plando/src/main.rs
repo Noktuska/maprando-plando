@@ -1,4 +1,4 @@
-use crate::{backend::{map_editor::{self, MapErrorType}, plando::{get_double_item_offset, DoubleItemPlacement, MapRepositoryType, Placeable, Plando, SpoilerOverride, ITEM_VALUES}}, input_state::KeyState, layout::{hotkey_settings::Keybind, map_editor_ui::MapEditorUi, room_search::{RoomSearch, SearchOpt}, settings_customize::{Customization, SettingsCustomize, SettingsCustomizeResult}, settings_logic::LogicCustomization, Layout, SidebarPanel, WindowType}};
+use crate::{backend::{map_editor::{self, MapEditor, MapErrorType}, plando::{get_double_item_offset, DoubleItemPlacement, MapRepositoryType, Placeable, Plando, SpoilerOverride, ITEM_VALUES}}, input_state::KeyState, layout::{hotkey_settings::Keybind, map_editor_ui::MapEditorUi, room_search::{RoomSearch, SearchOpt}, settings_customize::{Customization, SettingsCustomize, SettingsCustomizeResult}, settings_logic::LogicCustomization, Layout, SidebarPanel, WindowType}};
 use anyhow::{anyhow, bail, Result};
 use egui::{self, style::default_text_styles, Color32, Context, FontDefinitions, Id, RichText, Sense, TextureId, Ui, Vec2};
 use egui_sfml::{SfEgui, UserTexSource};
@@ -15,7 +15,7 @@ use sfml::{
         cpp::FBox, graphics::{
             self, Color, FloatRect, IntRect, PrimitiveType, RenderStates, RenderTarget, RenderWindow, Shape, Transformable, Vertex
         }, system::{Vector2f, Vector2i}, window::{
-            mouse, Event, Key, Style
+            mouse, ContextSettings, Event, Key, Style
         }
     };
 use strum::VariantArray;
@@ -993,7 +993,7 @@ struct PlandoApp {
 }
 
 impl PlandoApp {
-    const GRID_SIZE: usize = 72;
+    //const GRID_SIZE: usize = 72;
 
     fn new() -> Result<PlandoApp> {
         let game_data = GameData::load()?;
@@ -1093,7 +1093,7 @@ impl PlandoApp {
             room_data,
             atlas_tex,
 
-            tex_base_map: graphics::RenderTexture::new(PlandoApp::GRID_SIZE as u32 * 8, PlandoApp::GRID_SIZE as u32 * 8)?,
+            tex_base_map: graphics::RenderTexture::new(MapEditor::MAP_MAX_SIZE as u32 * 8, MapEditor::MAP_MAX_SIZE as u32 * 8)?,
 
             view: View::new(),
 
@@ -1152,6 +1152,21 @@ impl PlandoApp {
             }
         }
         let tex_obj = graphics::Texture::from_image(&img_obj, IntRect::default()).unwrap();
+
+        let mut max_x = 0;
+        let mut max_y = 0;
+        for (idx, &(room_x, room_y)) in self.plando.map().rooms.iter().enumerate() {
+            let room_geometry = &self.plando.game_data.room_geometry[idx];
+            let room_width = room_geometry.map[0].len();
+            let room_height = room_geometry.map.len();
+
+            let room_right = room_x + room_width;
+            let room_bottom = room_y + room_height;
+
+            max_x = max_x.max(room_right);
+            max_y = max_y.max(room_bottom);
+        }
+        self.tex_base_map.recreate(max_x as u32 * 8, max_y as u32 * 8, &ContextSettings::default()).unwrap();
 
         self.tex_base_map.clear(Color::TRANSPARENT);
 
@@ -1398,8 +1413,9 @@ impl PlandoApp {
             if !reset_after_patch {
                 // Draw background grid
                 if !self.settings.disable_bg_grid {
-                    let spr_bg_grid = graphics::Sprite::with_texture_and_rect(&tex_grid, IntRect::new(0, 0, 8 * PlandoApp::GRID_SIZE as i32, 8 * PlandoApp::GRID_SIZE as i32));
-                    window.draw_with_renderstates(&spr_bg_grid, &states);
+                    //let spr_bg_grid = graphics::Sprite::with_texture_and_rect(&tex_grid, IntRect::new(0, 0, 8 * PlandoApp::GRID_SIZE as i32, 8 * PlandoApp::GRID_SIZE as i32));
+                    //window.draw_with_renderstates(&spr_bg_grid, &states);
+                    self.draw_background_grid(&mut *window, &states, &tex_grid);
                 }
 
                 // Draw the entire map
@@ -1784,8 +1800,8 @@ impl PlandoApp {
     fn handle_map_io(&mut self, rt: &mut dyn RenderTarget, states: &RenderStates) {
         let mut info_overlay = None;
 
-        let mouse_tile_x = ((self.local_mouse_x / 8.0).floor().max(0.0) as usize).min(PlandoApp::GRID_SIZE);
-        let mouse_tile_y = ((self.local_mouse_y / 8.0).floor().max(0.0) as usize).min(PlandoApp::GRID_SIZE);
+        let mouse_tile_x = (self.local_mouse_x / 8.0).floor().max(0.0) as usize;
+        let mouse_tile_y = (self.local_mouse_y / 8.0).floor().max(0.0) as usize;
 
         // Find hovered room for info overlay and possible selections
         let mut last_hovered_room_idx = None;
@@ -1921,8 +1937,14 @@ impl PlandoApp {
             MapErrorType::MapPerArea(room_idx) => {
                 vec![self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data)]
             },
-            MapErrorType::MapBounds(x, y, width, height) => {
-                vec![IntRect::new(x, y, width as i32, height as i32)]
+            MapErrorType::MapBounds(_, _, _, _) => {
+                (0..self.plando.map().rooms.len()).filter_map(|room_idx| {
+                    let bbox = self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data);
+                    if bbox.left + bbox.width > MapEditor::MAP_MAX_SIZE as i32 || bbox.top + bbox.height > MapEditor::MAP_MAX_SIZE as i32 {
+                        return Some(bbox);
+                    }
+                    None
+                }).collect()
             }
             MapErrorType::PhantoonMap => {
                 let room_idx = self.plando.game_data.room_idx_by_ptr[&511179];
@@ -1950,6 +1972,38 @@ impl PlandoApp {
                 vec![self.plando.map_editor.get_room_bounds(self.plando.game_data.toilet_room_idx, &self.plando.game_data)]
             },
         }
+    }
+
+    fn draw_background_grid(&self, rt: &mut dyn RenderTarget, states: &RenderStates, tex_grid: &FBox<graphics::Texture>) {
+        let trans = &states.transform;
+
+        let tl = trans.transform_point(Vector2f::default());
+        let tr = Vector2f::new(rt.size().x as f32, tl.y);
+        let bl = Vector2f::new(tl.x, rt.size().y as f32);
+        let br: Vector2f = rt.size().as_other();
+
+        let vertex_array = vec![
+            Vertex::with_pos_coords(tl, Vector2f::default()),
+            Vertex::with_pos_coords(tr, (tr - tl) / self.view.zoom),
+            Vertex::with_pos_coords(bl, (bl - tl) / self.view.zoom),
+            Vertex::with_pos_coords(br, (br - tl) / self.view.zoom)
+        ];
+
+        {
+            let mut states = RenderStates::DEFAULT;
+            states.texture = Some(&tex_grid);
+
+            rt.draw_primitives(&vertex_array, PrimitiveType::TRIANGLE_STRIP, &states);
+        }
+
+        let mut border = graphics::RectangleShape::with_size((MapEditor::MAP_MAX_SIZE as f32 * 8.0 + 1.0, 1.0).into());
+        border.set_fill_color(Color::WHITE);
+        border.set_position((0.0, MapEditor::MAP_MAX_SIZE as f32 * 8.0));
+        rt.draw_with_renderstates(&border, &states);
+
+        border.set_position((MapEditor::MAP_MAX_SIZE as f32 * 8.0, 0.0));
+        border.set_size((1.0, MapEditor::MAP_MAX_SIZE as f32 * 8.0));
+        rt.draw_with_renderstates(&border, &states);
     }
 
     fn draw_map_error_overlay(&mut self, rt: &mut dyn RenderTarget, states: &RenderStates) {

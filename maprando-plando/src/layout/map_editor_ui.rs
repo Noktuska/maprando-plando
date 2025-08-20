@@ -1,7 +1,7 @@
 use maprando_game::{GameData, Map};
 use sfml::{graphics::IntRect, system::Vector2i, window::Key};
 
-use crate::{backend::map_editor::MapEditor, utils, PlandoApp};
+use crate::{backend::map_editor::MapEditor, utils};
 
 #[derive(Default)]
 pub struct MapEditorUi {
@@ -112,8 +112,8 @@ impl MapEditorUi {
             let left = mouse_tile_x as i32 - self.dragged_room_xoffset as i32;
             let top = mouse_tile_y as i32 - self.dragged_room_yoffset as i32;
 
-            let left = left.max(0).min(PlandoApp::GRID_SIZE as i32 - bbox.width);
-            let top = top.max(0).min(PlandoApp::GRID_SIZE as i32 - bbox.height);
+            let left = left.max(0);
+            let top = top.max(0);
 
             // Box hasn't moved
             if left == bbox.left && top == bbox.top {

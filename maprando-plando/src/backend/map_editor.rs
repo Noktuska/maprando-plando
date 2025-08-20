@@ -6,8 +6,6 @@ use maprando_game::{GameData, Map};
 use serde_json::Value;
 use sfml::{graphics::{Color, IntRect}, system::Vector2i};
 
-use crate::PlandoApp;
-
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub enum Area {
     OuterCrateria,
@@ -491,7 +489,7 @@ impl MapEditor {
         let (room_x, room_y) = self.map.rooms[room_idx];
         let target_x = door.x as i32 + room_x as i32 + dx;
         let target_y = door.y as i32 + room_y as i32 + dy;
-        if target_x < 0 || target_x >= PlandoApp::GRID_SIZE as i32 || target_y < 0 || target_y >= PlandoApp::GRID_SIZE as i32 {
+        if target_x < 0 || target_x >= Self::MAP_MAX_SIZE as i32 || target_y < 0 || target_y >= Self::MAP_MAX_SIZE as i32 {
             self.invalid_doors.insert((room_idx, door_idx));
             return None;
         }
@@ -565,8 +563,6 @@ impl MapEditor {
     }
 
     fn check_map_bounds(&mut self, game_data: &GameData) {
-        let mut min_x = i32::MAX;
-        let mut min_y = i32::MAX;
         let mut max_x = 0;
         let mut max_y = 0;
 
@@ -575,19 +571,15 @@ impl MapEditor {
             let room_width = room_geometry.map[0].len();
             let room_height = room_geometry.map.len();
 
-            let room_right = (room_x + room_width) as i32;
-            let room_bottom = (room_y + room_height) as i32;
+            let room_right = room_x + room_width;
+            let room_bottom = room_y + room_height;
 
-            min_x = min_x.min(room_x as i32);
-            min_y = min_y.min(room_y as i32);
             max_x = max_x.max(room_right);
             max_y = max_y.max(room_bottom);
         }
 
-        let map_width = (max_x - min_x) as usize;
-        let map_height = (max_y - min_y) as usize;
-        if map_width > Self::MAP_MAX_SIZE || map_height > Self::MAP_MAX_SIZE {
-            self.error_list.push(MapErrorType::MapBounds(min_x, min_y, map_width, map_height));
+        if max_x > Self::MAP_MAX_SIZE || max_y > Self::MAP_MAX_SIZE {
+            self.error_list.push(MapErrorType::MapBounds(0, 0, max_x, max_y));
         }
     }
 
