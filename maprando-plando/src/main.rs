@@ -170,12 +170,39 @@ fn load_seed(plando: &mut Plando, path: &Path, preset_data: &PresetData) -> Resu
             *start_loc_idx = serde_json::to_value((start_loc.room_id, start_loc.node_id))?;
         }
     }
-    // Locked doors were put in a serializable wrapper. This is not really upgradeable without huge overhead so we clear all the doors
-    if let Some(v) = v.get_mut("door_locks") {
-        if let Some(vec) = v.as_array() {
-            if !vec.is_empty() {
-                if serde_json::from_value::<LockedDoor>(vec[0].clone()).is_err() {
-                    *v = Value::Array(Vec::new());
+    // Locked doors were put in a serializable wrapper
+    let map: Map = serde_json::from_value(v["map"].clone())?;
+    if let Some(v_door_locks) = v.get_mut("door_locks") {
+        if let Some(vec) = v_door_locks.as_array_mut() {
+            if !vec.is_empty() && serde_json::from_value::<LockedDoor>(vec[0].clone()).is_err() {
+                for old_value in vec {
+                    let room_id = old_value["room_id"].as_u64().ok_or(anyhow!("Expected room_id"))? as usize;
+                    let node_id = old_value["node_id"].as_u64().ok_or(anyhow!("Expected node_id"))? as usize;
+                    let door_type = match old_value["door_type"].as_u64().ok_or(anyhow!("Expected door_type"))? {
+                        2 => DoorType::Red,
+                        3 => DoorType::Green,
+                        4 => DoorType::Yellow,
+                        5 => DoorType::Beam(BeamType::Charge),
+                        6 => DoorType::Beam(BeamType::Ice),
+                        7 => DoorType::Beam(BeamType::Wave),
+                        8 => DoorType::Beam(BeamType::Spazer),
+                        9 => DoorType::Beam(BeamType::Plasma),
+                        _ => DoorType::Red
+                    };
+
+                    let ptr_pair = plando.game_data.reverse_door_ptr_pair_map[&(room_id, node_id)];
+                    let conn = map.doors.iter().find(|door_conn| {
+                        door_conn.0 == ptr_pair || door_conn.1 == ptr_pair
+                    }).ok_or(anyhow!("Door connection not defined in map"))?;
+
+                    let locked_door = LockedDoor {
+                        src_ptr_pair: conn.0,
+                        dst_ptr_pair: conn.1,
+                        door_type,
+                        bidirectional: conn.2
+                    };
+                    
+                    *old_value = serde_json::to_value(&locked_door)?;
                 }
             }
         }
