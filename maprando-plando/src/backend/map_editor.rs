@@ -149,7 +149,7 @@ impl MapErrorType {
             MapErrorType::RoomOverlap(_, _) =>
                 format!("Two or more rooms are overlapping"),
             MapErrorType::MapPerArea(_) => 
-                format!("This map already has a Map Station"),
+                format!("This area already has a Map Station"),
             MapErrorType::MapBounds(_, _, w, h) => 
                 format!("Map exceeds maximum size: Currently ({w}, {h}), Maximum: ({}, {})", MapEditor::MAP_MAX_SIZE, MapEditor::MAP_MAX_SIZE),
             MapErrorType::PhantoonMap => 
@@ -711,7 +711,7 @@ impl MapEditor {
         for room_idx in map_room_idxs {
             let area = self.map.area[room_idx];
             if area_maps[area] {
-                self.error_list.push(MapErrorType::MapPerArea(area));
+                self.error_list.push(MapErrorType::MapPerArea(room_idx));
             }
             area_maps[area] = true;
         }
