@@ -4,7 +4,7 @@ use egui::{self, style::default_text_styles, Color32, Context, FontDefinitions, 
 use egui_sfml::{SfEgui, UserTexSource};
 use hashbrown::{HashMap, HashSet};
 use input_state::MouseState;
-use maprando::{patch::Rom, preset::PresetData, randomize::{LockedDoor, SpoilerRouteEntry}, settings::{DoorsMode, Objective, RandomizerSettings}};
+use maprando::{patch::Rom, preset::PresetData, randomize::{LockedDoor, SpoilerRouteEntry}, settings::{Objective, RandomizerSettings}};
 use maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType};
 use rand::RngCore;
 use rfd::FileDialog;
@@ -2718,7 +2718,7 @@ impl PlandoApp {
                         let room_idx = self.map_editor.selected_room_idx[i];
                         let sub_area = self.plando.map().subarea[room_idx];
                         let sub_sub_area = self.plando.map().subsubarea[room_idx];
-                        self.plando.map_editor.apply_area(room_idx, map_editor::Area::from_tuple((idx, sub_area, sub_sub_area)));
+                        self.plando.map_editor.apply_area(room_idx, map_editor::Area::from_tuple((idx, sub_area, sub_sub_area)), &self.plando.game_data);
                     }
                     self.redraw_map();
                 }
@@ -2734,7 +2734,7 @@ impl PlandoApp {
                 let btn = egui::Button::new(RichText::new(area_value.to_string()).color(stroke_col.clone())).fill(col32).min_size(Vec2 { x: 256.0, y: 1.0 });
                 if ui.add(btn).clicked() && !self.map_editor.selected_room_idx.is_empty() {
                     for i in 0..self.map_editor.selected_room_idx.len() {
-                        self.plando.map_editor.apply_area(self.map_editor.selected_room_idx[i], area_value);
+                        self.plando.map_editor.apply_area(self.map_editor.selected_room_idx[i], area_value, &self.plando.game_data);
                     }
                     self.redraw_map();
                 }
@@ -2748,7 +2748,7 @@ impl PlandoApp {
                 }
             });
             if ui.button("Swap!").clicked() {
-                self.plando.map_editor.swap_areas(self.map_editor.swap_first, self.map_editor.swap_second);
+                self.plando.map_editor.swap_areas(self.map_editor.swap_first, self.map_editor.swap_second, &self.plando.game_data);
                 self.redraw_map();
             }
             egui::ComboBox::from_id_salt("combo_swap_area_second").selected_text(areas[self.map_editor.swap_second]).show_ui(ui, |ui| {
