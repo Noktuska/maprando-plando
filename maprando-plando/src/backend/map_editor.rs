@@ -323,14 +323,15 @@ impl MapEditor {
         self.error_list.clear();
     }
 
-    pub fn apply_area(&mut self, room_idx: usize, area_value: Area) {
+    pub fn apply_area(&mut self, room_idx: usize, area_value: Area, game_data: &GameData) {
         let (area, sub_area, sub_sub_area) = area_value.to_tuple();
         self.map.area[room_idx] = area;
         self.map.subarea[room_idx] = sub_area;
         self.map.subsubarea[room_idx] = sub_sub_area;
+        self.is_valid(game_data);
     }
 
-    pub fn swap_areas(&mut self, area1: usize, area2: usize) {
+    pub fn swap_areas(&mut self, area1: usize, area2: usize, game_data: &GameData) {
         if area1 == area2 {
             return;
         }
@@ -345,8 +346,13 @@ impl MapEditor {
                 (area1, area_tuple.1, area_tuple.2)
             };
             let new_area = Area::from_tuple(other_area);
-            self.apply_area(room_idx, new_area);
+            
+            let (area, sub_area, sub_sub_area) = new_area.to_tuple();
+            self.map.area[room_idx] = area;
+            self.map.subarea[room_idx] = sub_area;
+            self.map.subsubarea[room_idx] = sub_sub_area;
         }
+        self.is_valid(game_data);
     }
 
     pub fn get_area_value(&self, room_idx: usize) -> Area {
