@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{ops::DerefMut, path::Path};
 
 use anyhow::{anyhow, bail, Result};
 use hashbrown::{HashMap, HashSet};
@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use strum::{VariantArray, VariantNames};
 use strum_macros::VariantArray;
 
-use crate::backend::{map_editor::{MapEditor, MapErrorType}, randomize::{get_escape_safe_randomization, get_gray_doors, get_randomizable_doors, get_vertex_info_by_id}};
+use crate::backend::{map_editor::{MapEditor, MapErrorType}, randomize::{get_gray_doors, get_randomizable_doors, get_vertex_info_by_id}};
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DoubleItemPlacement {
@@ -541,7 +541,7 @@ impl Plando {
             actions: vec![],
         }];
 
-        let global = self.get_initial_global_state();
+        let (global, _) = self.get_initial_states();
         let local = apply_requirement(
             &self.start_location_data.start_location.requires_parsed.as_ref().unwrap(),
             &global,
@@ -572,6 +572,7 @@ impl Plando {
             &randomizer.door_map,
             &locked_door_data,
             &self.objectives,
+            randomizer.next_traversal_number.borrow_mut().deref_mut()
         );
         let reverse = traverse(
             &randomizer.base_links_data,
@@ -588,6 +589,7 @@ impl Plando {
             &randomizer.door_map,
             &locked_door_data,
             &self.objectives,
+            randomizer.next_traversal_number.borrow_mut().deref_mut()
         );
 
         let mut best_hub_vertex_id = start_vertex_id;
@@ -942,7 +944,7 @@ impl Plando {
             &mut self.rng
         );
 
-        let initial_global_state = self.get_initial_global_state();
+        let (initial_global_state, initial_local_state) = self.get_initial_states();
         let initial_item_location_state = ItemLocationState {
             placed_item: None,
             collected: false,
@@ -975,6 +977,7 @@ impl Plando {
             flag_location_state: vec![initial_flag_location_state; self.game_data.flag_ids.len()],
             door_state: vec![initial_door_state; locked_door_data.locked_doors.len()],
             items_remaining: randomizer.initial_items_remaining.clone(),
+            starting_local_state: initial_local_state,
             global_state: initial_global_state,
             debug_data: None,
             previous_debug_data: None,
@@ -1017,8 +1020,7 @@ impl Plando {
         let seed_part = (self.rng.next_u32() % 0xFE) + 1; // Generate seed_part 1-255 so seed can't be 0
         let seed = seed_part | (seed_part << 8) | (seed_part << 16) | (seed_part << 24);
 
-        self.randomization = Some(get_escape_safe_randomization(
-            &randomizer,
+        self.randomization = Some(randomizer.get_randomization(
             &state,
             spoiler_summary_vec,
             spoiler_details_vec,
@@ -1026,7 +1028,7 @@ impl Plando {
             seed as usize,
             seed as usize,
             &mut self.rng
-        ));
+        ).unwrap());
 
         // Apply custom escape time
         if let Some(custom_escape_time) = self.custom_escape_time {
@@ -1125,6 +1127,7 @@ impl Plando {
             door_state: state.door_state.clone(),
             items_remaining: state.items_remaining.clone(),
             global_state: state.global_state.clone(),
+            starting_local_state: self.get_initial_local_state(state),
             debug_data: None,
             previous_debug_data: None,
             key_visited_vertices: HashSet::new(),
@@ -1134,13 +1137,13 @@ impl Plando {
         new_state.key_visited_vertices = state.key_visited_vertices.clone();
 
         for &item in &placed_uncollected_bireachable_items {
-            new_state.global_state.collect(item, &self.game_data, self.randomizer_settings.item_progression_settings.ammo_collect_fraction, &self.difficulty_tiers[0].tech);
+            new_state.global_state.collect(item, &self.game_data, self.randomizer_settings.item_progression_settings.ammo_collect_fraction, &self.difficulty_tiers[0].tech, &mut new_state.starting_local_state);
         }
         // Add overrides to the current step
         let overrides: Vec<_> = self.spoiler_overrides.iter().filter(|x| x.step == state.step_num).collect();
         for item_override in &overrides {
             let item = self.item_locations[item_override.item_idx];
-            new_state.global_state.collect(item, &self.game_data, self.randomizer_settings.item_progression_settings.ammo_collect_fraction, &self.difficulty_tiers[0].tech);
+            new_state.global_state.collect(item, &self.game_data, self.randomizer_settings.item_progression_settings.ammo_collect_fraction, &self.difficulty_tiers[0].tech, &mut new_state.starting_local_state);
         }
 
         randomizer.update_reachability(&mut new_state);
@@ -1213,8 +1216,8 @@ impl Plando {
         (spoiler_summary, spoiler_details)
     }
 
-    /* COPY FROM maprando::randomize::get_initial_global_state */
-    fn get_initial_global_state(&self) -> GlobalState {
+    /* COPY FROM maprando::randomize::get_initial_states */
+    fn get_initial_states(&self) -> (GlobalState, LocalState) {
         let items = vec![false; self.game_data.item_isv.keys.len()];
         let weapon_mask = self
             .game_data
@@ -1235,6 +1238,7 @@ impl Plando {
             doors_unlocked: vec![false; self.locked_doors.len()],
             weapon_mask: weapon_mask,
         };
+        let mut local = LocalState::empty(&global);
         for x in &self.randomizer_settings.item_progression_settings.starting_items {
             for _ in 0..x.count {
                 global.collect(
@@ -1244,10 +1248,23 @@ impl Plando {
                         .item_progression_settings
                         .ammo_collect_fraction,
                     &self.difficulty_tiers[0].tech,
+                    &mut local
                 );
             }
         }
-        global
+        (global, local)
+    }
+
+    fn get_initial_local_state(&self, state: &RandomizationState) -> LocalState {
+        let start_vertex_id = self.game_data.vertex_isv.index_by_key[&VertexKey {
+            room_id: state.hub_location.room_id,
+            node_id: state.hub_location.node_id,
+            obstacle_mask: 0,
+            actions: vec![],
+        }];
+        let cost_metric_idx = 0; // use energy-sensitive cost metric
+        let forward_traverse = &state.debug_data.as_ref().unwrap().forward;
+        forward_traverse.local_states[start_vertex_id][cost_metric_idx]
     }
 
     fn get_initial_flag_vec(&self) -> Vec<bool> {
