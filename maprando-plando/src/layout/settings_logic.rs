@@ -376,32 +376,34 @@ impl LogicCustomization {
             ui.label("Map");
             egui::Grid::new("grid_qol_map").num_columns(5).show(ui, |ui| {
                 ui.label("Item markers");
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut qol.item_markers, ItemMarkers::Simple, "Simple");
-                    ui.selectable_value(&mut qol.item_markers, ItemMarkers::Majors, "Majors");
-                    ui.selectable_value(&mut qol.item_markers, ItemMarkers::Uniques, "Uniques");
-                    ui.selectable_value(&mut qol.item_markers, ItemMarkers::ThreeTiered, "3-Tiered");
-                    ui.selectable_value(&mut qol.item_markers, ItemMarkers::FourTiered, "4-Tiered");
-                });
+                ui.selectable_value(&mut qol.item_markers, ItemMarkers::Simple, "Simple");
+                ui.selectable_value(&mut qol.item_markers, ItemMarkers::Majors, "Majors");
+                ui.selectable_value(&mut qol.item_markers, ItemMarkers::Uniques, "Uniques");
+                ui.selectable_value(&mut qol.item_markers, ItemMarkers::ThreeTiered, "3-Tiered");
+                ui.selectable_value(&mut qol.item_markers, ItemMarkers::FourTiered, "4-Tiered");
                 ui.end_row();
 
                 let s = &mut qol.initial_map_reveal_settings;
                 s.generate("Initial Map Reveal", ui);
+                ui.end_row();
 
                 ui.collapsing("Custom", |ui| {
-                    s.map_stations.generate("Map stations", ui);
-                    s.save_stations.generate("Save stations", ui);
-                    s.refill_stations.generate("Refill stations", ui);
-                    s.ship.generate("Ship", ui);
-                    s.objectives.generate("Objectives", ui);
-                    s.area_transitions.generate("Area transitions", ui);
-                    s.items1.generate("Items: tier 1 (small dots)", ui);
-                    s.items2.generate("Items: tier 2 (X's)", ui);
-                    s.items3.generate("Items: tier 3 (hollow circles)", ui);
-                    s.items4.generate("Items: tier 4 (large dots)", ui);
-                    s.other.generate("Other", ui);
-                    s.all_areas.generate("Reveal tiles in unvisited areas", ui);
+                    egui::Grid::new("grid_qol_map_reveal").num_columns(4).show(ui, |ui| {
+                        s.map_stations.generate("Map stations", ui);
+                        s.save_stations.generate("Save stations", ui);
+                        s.refill_stations.generate("Refill stations", ui);
+                        s.ship.generate("Ship", ui);
+                        s.objectives.generate("Objectives", ui);
+                        s.area_transitions.generate("Area transitions", ui);
+                        s.items1.generate("Items: tier 1 (small dots)", ui);
+                        s.items2.generate("Items: tier 2 (X's)", ui);
+                        s.items3.generate("Items: tier 3 (hollow circles)", ui);
+                        s.items4.generate("Items: tier 4 (large dots)", ui);
+                        s.other.generate("Other", ui);
+                        s.all_areas.generate("Reveal tiles in unvisited areas", ui);
+                    });
                 });
+                ui.end_row();
 
                 qol.room_outline_revealed.generate("Room outline revealed on entry", ui);
                 qol.opposite_area_revealed.generate("Opposite area connections revealed by map", ui);
@@ -411,11 +413,9 @@ impl LogicCustomization {
             ui.label("End game");
             egui::Grid::new("grid_qol_endgame").num_columns(2).show(ui, |ui| {
                 ui.label("Mother Brain fight (phases 2 and 3)");
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut qol.mother_brain_fight, MotherBrainFight::Vanilla, "Vanilla");
-                    ui.selectable_value(&mut qol.mother_brain_fight, MotherBrainFight::Short, "Short");
-                    ui.selectable_value(&mut qol.mother_brain_fight, MotherBrainFight::Skip, "Skip");
-                });
+                ui.selectable_value(&mut qol.mother_brain_fight, MotherBrainFight::Vanilla, "Vanilla");
+                ui.selectable_value(&mut qol.mother_brain_fight, MotherBrainFight::Short, "Short");
+                ui.selectable_value(&mut qol.mother_brain_fight, MotherBrainFight::Skip, "Skip");
                 ui.end_row();
 
                 qol.supers_double.generate("Supers do double damage to Mother Brain", ui);
@@ -432,11 +432,9 @@ impl LogicCustomization {
                 qol.fast_pause_menu.generate("Fast pause menu", ui);
 
                 ui.label("Item fanfares");
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut qol.fanfares, Fanfares::Vanilla, "Vanilla");
-                    ui.selectable_value(&mut qol.fanfares, Fanfares::Trimmed, "Trimmed");
-                    ui.selectable_value(&mut qol.fanfares, Fanfares::Off, "Off");
-                });
+                ui.selectable_value(&mut qol.fanfares, Fanfares::Vanilla, "Vanilla");
+                ui.selectable_value(&mut qol.fanfares, Fanfares::Trimmed, "Trimmed");
+                ui.selectable_value(&mut qol.fanfares, Fanfares::Off, "Off");
             });
             ui.separator();
 
@@ -459,11 +457,9 @@ impl LogicCustomization {
             ui.label("Energy and reserves");
             egui::Grid::new("grid_qol_energy").num_columns(2).show(ui, |ui| {
                 ui.label("E-Tank energy refill");
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut qol.etank_refill, ETankRefill::Disabled, "Disabled");
-                    ui.selectable_value(&mut qol.etank_refill, ETankRefill::Vanilla, "Vanilla");
-                    ui.selectable_value(&mut qol.etank_refill, ETankRefill::Full, "Full");
-                });
+                ui.selectable_value(&mut qol.etank_refill, ETankRefill::Disabled, "Disabled");
+                ui.selectable_value(&mut qol.etank_refill, ETankRefill::Vanilla, "Vanilla");
+                ui.selectable_value(&mut qol.etank_refill, ETankRefill::Full, "Full");
                 ui.end_row();
 
                 qol.energy_station_reserves.generate("Energy stations refill reserves", ui);
