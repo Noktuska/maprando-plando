@@ -1,16 +1,17 @@
-use std::{ops::DerefMut, path::Path};
+use std::{path::Path, sync::{Arc, MutexGuard}};
 
 use anyhow::{anyhow, bail, Result};
 use hashbrown::{HashMap, HashSet};
-use maprando::{customize::{mosaic::MosaicTheme, samus_sprite::SamusSpriteCategory, CustomizeSettings}, map_repository::MapRepository, patch::Rom, preset::PresetData, randomize::{DebugData, DifficultyConfig, DoorState, FlagLocationState, ItemLocationState, LockedDoor, Randomization, RandomizationState, Randomizer, SaveLocationState, SpoilerDetails, SpoilerDoorDetails, SpoilerDoorSummary, SpoilerFlagDetails, SpoilerFlagSummary, SpoilerItemDetails, SpoilerItemSummary, SpoilerLocation, SpoilerLog, SpoilerSummary, StartLocationData}, settings::{Objective, RandomizerSettings, WallJump}, traverse::{apply_requirement, get_bireachable_idxs, get_spoiler_route, traverse, LockedDoorData}};
-use maprando_game::{BeamType, Capacity, DoorPtrPair, DoorType, GameData, HubLocation, Item, ItemLocationId, LinksDataGroup, Map, NodeId, Requirement, RoomId, StartLocation, VertexKey};
+use maprando::{customize::{mosaic::MosaicTheme, samus_sprite::SamusSpriteCategory, CustomizeSettings}, map_repository::MapRepository, patch::Rom, preset::PresetData, randomize::{DifficultyConfig, LockedDoor, Randomization, SpoilerLog}, settings::{Objective, RandomizerSettings, WallJump}, traverse::LockedDoorData};
+use maprando_game::{BeamType, DoorPtrPair, DoorType, GameData, HubLocation, Item, Map, NodeId, RoomId, StartLocation, VertexKey};
 use maprando_logic::{GlobalState, Inventory, LocalState};
 use rand::{rngs::StdRng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
-use strum::{VariantArray, VariantNames};
+use strum::VariantArray;
 use strum_macros::VariantArray;
+use tokio::task::JoinHandle;
 
-use crate::backend::{map_editor::{MapEditor, MapErrorType}, randomize::{get_gray_doors, get_randomizable_doors, get_vertex_info_by_id}};
+use crate::backend::{logic::{HubLocationData, Logic}, map_editor::{MapEditor, MapErrorType}, randomize::{get_gray_doors, get_randomizable_doors}};
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DoubleItemPlacement {
@@ -186,7 +187,7 @@ struct ImplicitPresetData {
 }
 
 pub struct Plando {
-    pub game_data: GameData,
+    pub game_data: Arc<GameData>,
     pub difficulty_tiers: Vec<DifficultyConfig>,
     maps_vanilla: MapRepositoryWrapper,
     maps_standard: Option<MapRepositoryWrapper>,
@@ -195,7 +196,7 @@ pub struct Plando {
     pub randomizer_settings: RandomizerSettings,
     pub objectives: Vec<Objective>,
     pub item_locations: Vec<Item>,
-    pub start_location_data: StartLocationData,
+    pub start_location: StartLocation,
     pub placed_item_count: [usize; Placeable::VARIANTS.len()],
     pub randomizable_doors: HashSet<(Option<usize>, Option<usize>)>,
     pub locked_doors: Vec<LockedDoor>,
@@ -208,7 +209,7 @@ pub struct Plando {
     total_door_count: usize,
     preset_data: ImplicitPresetData,
 
-    pub randomization: Option<(Randomization, SpoilerLog)>,
+    logic: Logic,
 
     pub rng: StdRng
 }
@@ -235,14 +236,6 @@ impl Plando {
         let randomizable_doors = get_randomizable_doors(&game_data, &objectives);
 
         let ship_start = Self::get_ship_start();
-        let ship_hub = Self::get_ship_hub(&game_data);
-
-        let start_location_data = StartLocationData {
-            start_location: ship_start,
-            hub_location: ship_hub,
-            hub_obtain_route: Vec::new(),
-            hub_return_route: Vec::new()
-        };
 
         let mut placed_item_count = [0usize; Placeable::VARIANTS.len()];
         placed_item_count[0] = 1;
@@ -255,8 +248,10 @@ impl Plando {
             implicit_notables: preset_data.notables_by_difficulty["Implicit"].clone()
         };
 
+        let game_data = Arc::new(game_data);
+
         let mut plando = Plando {
-            game_data,
+            game_data: game_data.clone(),
             difficulty_tiers: Vec::new(),
             maps_vanilla,
             maps_standard,
@@ -265,7 +260,7 @@ impl Plando {
             randomizer_settings,
             objectives,
             item_locations: vec![Item::Nothing; item_location_len],
-            start_location_data,
+            start_location: ship_start,
             placed_item_count,
             randomizable_doors,
             locked_doors: Vec::new(),
@@ -277,7 +272,7 @@ impl Plando {
             door_beam_loc: Vec::new(),
             total_door_count: 0,
             preset_data: impl_preset_data,
-            randomization: None,
+            logic: Logic::new(game_data),
 
             rng
         };
@@ -289,6 +284,14 @@ impl Plando {
 
     pub fn map(&self) -> &Map {
         self.map_editor.get_map()
+    }
+
+    pub fn get_randomization(&'_ self) -> MutexGuard<'_, Option<(Randomization, SpoilerLog)>> {
+        self.logic.get_randomization()
+    }
+
+    pub fn get_hub_data(&'_ self) -> MutexGuard<'_, HubLocationData> {
+        self.logic.get_hub_data()
     }
 
     pub fn clear_item_locations(&mut self) {
@@ -328,29 +331,24 @@ impl Plando {
         }
     }
 
-    pub fn load_map(&mut self, map: Map) -> Result<()> {
+    pub fn load_map(&mut self, map: Map) {
         self.map_editor.load_map(map, &self.game_data);
         self.clear_item_locations();
         self.clear_doors();
-        self.start_location_data.start_location = Plando::get_ship_start();
-        self.update_hub_location()?;
+        self.start_location = Plando::get_ship_start();
         self.update_randomizable_doors();
-        self.update_spoiler_data()?;
-        Ok(())
     }
 
     pub fn load_map_from_file(&mut self, path: &Path) -> Result<()> {
         self.map_editor.load_map_from_file(&self.game_data, path)?;
         self.clear_item_locations();
         self.clear_doors();
-        self.start_location_data.start_location = Plando::get_ship_start();
-        self.update_hub_location()?;
+        self.start_location = Plando::get_ship_start();
         self.update_randomizable_doors();
-        self.update_spoiler_data()?;
         Ok(())
     }
 
-    pub fn patch_rom(&mut self, rom_vanilla: &Rom, settings: CustomizeSettings, samus_sprite_categories: &[SamusSpriteCategory], mosaic_themes: &[MosaicTheme]) -> Result<Rom> {
+    pub fn patch_rom(&mut self, rom_vanilla: &Rom, settings: CustomizeSettings, samus_sprite_categories: Vec<SamusSpriteCategory>, mosaic_themes: Vec<MosaicTheme>) -> Result<JoinHandle<Result<Rom>>> {
         if self.map_editor.error_list.iter().filter(|err| err.is_severe()).count() > 0 {
             bail!("Map has errors that need to be fixed");
         }
@@ -358,25 +356,38 @@ impl Plando {
         // Place any remaining wall doors
         for door in self.map_editor.error_list.clone() {
             if let MapErrorType::DoorDisconnected(room_idx, door_idx) = door {
-                let _ = self.place_door(room_idx, door_idx, Some(DoorType::Wall), false, true);
+                let _ = self.place_door(room_idx, door_idx, Some(DoorType::Wall), false);
             }
         }
-        
-        self.update_spoiler_data()?;
-        if self.randomization.is_none() {
-            bail!("No randomization generated");
-        }
-        let (r, _spoiler_log) = self.randomization.as_ref().unwrap();
 
-        maprando::patch::make_rom(
-            rom_vanilla,
-            &self.randomizer_settings,
-            &settings,
-            r,
-            &self.game_data,
-            samus_sprite_categories,
-            mosaic_themes
-        )
+        let handle = self.update_spoiler_data()?;
+        let arc = self.logic.get_randomization_arc();
+
+        let randomizer_settings = self.randomizer_settings.clone();
+        let game_data = self.game_data.clone();
+        let rom_vanilla = rom_vanilla.clone();
+
+        let result_handle: JoinHandle<Result<Rom>> = tokio::spawn(async move {
+            handle.await??;
+
+            let randomization = arc.lock().unwrap();
+            if randomization.is_none() {
+                bail!("Could not generate spoiler data");
+            }
+            let (r, _) = randomization.as_ref().unwrap();
+
+            maprando::patch::make_rom(
+                &rom_vanilla,
+                &randomizer_settings,
+                &settings,
+                r,
+                &game_data,
+                &samus_sprite_categories,
+                &mosaic_themes
+            )
+        });
+
+        Ok(result_handle)
     }
 
     pub fn does_repo_exist(&self, repo_type: MapRepositoryType) -> bool {
@@ -395,7 +406,7 @@ impl Plando {
         };
 
         let map = repo.roll_map(&mut self.rng, &self.game_data)?;
-        self.load_map(map)?;
+        self.load_map(map);
         
         Ok(())
     }
@@ -405,7 +416,6 @@ impl Plando {
         self.objectives = maprando::randomize::get_objectives(&self.randomizer_settings, Some(self.map_editor.get_map()), &self.game_data, &mut self.rng);
         self.update_randomizable_doors();
         self.get_difficulty_tiers();
-        let _ = self.update_spoiler_data();
     }
 
     pub fn update_randomizable_doors(&mut self) {
@@ -463,200 +473,19 @@ impl Plando {
         // Clear all door locks
         for door_idx in 0..self.game_data.room_geometry[room_idx].doors.len() {
             // This should never error
-            let _ = self.place_door(room_idx, door_idx, None, true, true);
+            let _ = self.place_door(room_idx, door_idx, None, true);
         }
 
         // Reset start location if its inside removed room
-        if self.start_location_data.start_location.room_id == room_id {
-            self.start_location_data.start_location = Self::get_ship_start();
-            self.start_location_data.hub_location = Self::get_ship_hub(&self.game_data);
-        }
-
-        // Reset the hub if its inside removed room
-        if self.start_location_data.hub_location.room_id == room_id {
-            if self.update_hub_location().is_err() {
-                self.start_location_data.start_location = Self::get_ship_start();
-                self.start_location_data.hub_location = Self::get_ship_hub(&self.game_data);
-            }
+        if self.start_location.room_id == room_id {
+            self.place_start_location(Self::get_ship_start());
         }
 
         self.map_editor.erase_room(room_idx, &self.game_data);
     }
 
-    pub fn place_start_location(&mut self, start_loc: StartLocation) -> Result<()> {
-        let old_start_loc = self.start_location_data.start_location.clone();
-        self.start_location_data.start_location = start_loc;
-
-        if let Err(err) = self.update_hub_location() {
-            self.start_location_data.start_location = old_start_loc;
-            bail!(err)
-        }
-
-        Ok(())
-    }
-
-    pub fn update_hub_location(&mut self) -> Result<()> {
-        let start_loc = &self.start_location_data.start_location;
-        // Ship location
-        if start_loc.room_id == 8 && start_loc.node_id == 5 && start_loc.x == 72.0 && start_loc.y == 69.5 {
-            let ship_hub = Self::get_ship_hub(&self.game_data);
-            self.start_location_data.hub_location = ship_hub;
-            self.start_location_data.hub_obtain_route = Vec::new();
-            self.start_location_data.hub_return_route = Vec::new();
-
-            return Ok(());
-        }
-
-        let locked_door_data = self.get_locked_door_data();
-        let implicit_tech = &self.preset_data.implicit_tech;
-        let implicit_notables = &self.preset_data.implicit_notables;
-        let difficulty = DifficultyConfig::new(
-            &self.randomizer_settings.skill_assumption_settings,
-            &self.game_data,
-            &implicit_tech,
-            &implicit_notables,
-        );
-        let filtered_base_links = maprando::randomize::filter_links(&self.game_data.links, &self.game_data, &difficulty);
-        let base_links_data = LinksDataGroup::new(
-            filtered_base_links,
-            self.game_data.vertex_isv.keys.len(),
-            0,
-        );
-        let randomizer = Randomizer::new(
-            self.map_editor.get_map(), 
-            &locked_door_data, 
-            self.objectives.clone(), 
-            &self.randomizer_settings,
-            &self.difficulty_tiers,
-            &self.game_data,
-            &base_links_data,
-            &mut self.rng
-        );
-
-        let num_vertices = self.game_data.vertex_isv.keys.len();
-        let start_vertex_id = self.game_data.vertex_isv.index_by_key[&VertexKey {
-            room_id: self.start_location_data.start_location.room_id,
-            node_id: self.start_location_data.start_location.node_id,
-            obstacle_mask: 0,
-            actions: vec![],
-        }];
-
-        let (global, _) = self.get_initial_states();
-        let local = apply_requirement(
-            &self.start_location_data.start_location.requires_parsed.as_ref().unwrap(),
-            &global,
-            LocalState::full(),
-            false,
-            &self.randomizer_settings,
-            &self.difficulty_tiers[0],
-            &self.game_data,
-            &randomizer.door_map,
-            &locked_door_data,
-            &self.objectives,
-        );
-        if local.is_none() {
-            bail!("Invalid start location");
-        }
-        let forward = traverse(
-            &randomizer.base_links_data,
-            &randomizer.seed_links_data,
-            None,
-            &global,
-            local.unwrap(),
-            num_vertices,
-            start_vertex_id,
-            false,
-            &self.randomizer_settings,
-            &self.difficulty_tiers[0],
-            &self.game_data,
-            &randomizer.door_map,
-            &locked_door_data,
-            &self.objectives,
-            randomizer.next_traversal_number.borrow_mut().deref_mut()
-        );
-        let reverse = traverse(
-            &randomizer.base_links_data,
-            &randomizer.seed_links_data,
-            None,
-            &global,
-            LocalState::full(),
-            num_vertices,
-            start_vertex_id,
-            true,
-            &self.randomizer_settings,
-            &self.difficulty_tiers[0],
-            &self.game_data,
-            &randomizer.door_map,
-            &locked_door_data,
-            &self.objectives,
-            randomizer.next_traversal_number.borrow_mut().deref_mut()
-        );
-
-        let mut best_hub_vertex_id = start_vertex_id;
-        let mut best_hub_cost = global.inventory.max_energy - 1;
-        for &(hub_vertex_id, ref hub_req) in [(start_vertex_id, Requirement::Free)].iter().chain(self.game_data.hub_farms.iter()) {
-            if get_bireachable_idxs(&global, hub_vertex_id, &forward, &reverse).is_none() {
-                continue;
-            }
-
-            let new_local = apply_requirement(
-                hub_req,
-                &global,
-                LocalState::empty(&global),
-                false,
-                &self.randomizer_settings,
-                &self.difficulty_tiers[0],
-                &self.game_data,
-                &randomizer.door_map,
-                &locked_door_data,
-                &self.objectives
-            );
-
-            let hub_cost = match new_local {
-                Some(loc) => loc.energy_used,
-                None => Capacity::MAX
-            };
-            if hub_cost < best_hub_cost {
-                best_hub_cost = hub_cost;
-                best_hub_vertex_id = hub_vertex_id;
-            }
-        }
-
-        let Some((forward_cost_idx, reverse_cost_id)) = get_bireachable_idxs(&global, best_hub_vertex_id, &forward, &reverse)
-        else {
-            bail!("Inconsistent result from get_bireachable_idxs")
-        };
-
-        let vertex_key = self.game_data.vertex_isv.keys[best_hub_vertex_id].clone();
-        let hub_location = HubLocation {
-            room_id: vertex_key.room_id,
-            node_id: vertex_key.node_id,
-            vertex_id: best_hub_vertex_id
-        };
-
-        let hub_obtain_link_idxs = get_spoiler_route(&forward, best_hub_vertex_id, forward_cost_idx);
-        let hub_return_link_idxs = get_spoiler_route(&reverse, best_hub_vertex_id, reverse_cost_id);
-
-        let hub_obtain_route = randomizer.get_spoiler_route(
-            &global,
-            local.unwrap(),
-            &hub_obtain_link_idxs,
-            &self.difficulty_tiers[0],
-            false
-        );
-        let hub_return_route = randomizer.get_spoiler_route(
-            &global,
-            LocalState::full(),
-            &hub_return_link_idxs,
-            &self.difficulty_tiers[0],
-            true
-        );
-
-        self.start_location_data.hub_location = hub_location;
-        self.start_location_data.hub_obtain_route = hub_obtain_route;
-        self.start_location_data.hub_return_route = hub_return_route;
-
-        Ok(())
+    pub fn place_start_location(&mut self, start_loc: StartLocation) {
+        self.start_location = start_loc;
     }
 
     pub fn place_item(&mut self, item_loc: usize, item: Item) {
@@ -671,7 +500,7 @@ impl Plando {
         self.item_locations[item_loc] = item;
     }
 
-    pub fn place_door(&mut self, room_idx: usize, door_idx: usize, door_type_opt: Option<DoorType>, replace: bool, ignore_hub: bool) -> Result<()> {
+    pub fn place_door(&mut self, room_idx: usize, door_idx: usize, door_type_opt: Option<DoorType>, replace: bool) -> Result<()> {
         let door = &self.game_data.room_geometry[room_idx].doors[door_idx];
         let ptr_pair = (door.exit_ptr, door.entrance_ptr);
 
@@ -727,10 +556,6 @@ impl Plando {
 
             self.locked_doors.retain(|x| x.src_ptr_pair != src_ptr_pair || x.dst_ptr_pair != dst_ptr_pair);
 
-            if !ignore_hub {
-                let _ = self.update_hub_location(); // This should never error
-            }
-
             return Ok(());
         }
         let door_type = door_type_opt.unwrap();
@@ -767,7 +592,7 @@ impl Plando {
 
         // Remove any previous door locks
         if prev_door_opt.is_some() {
-            self.place_door(room_idx, door_idx, None, false, true)?;
+            self.place_door(room_idx, door_idx, None, false)?;
         }
 
         // Actually place the door
@@ -793,11 +618,6 @@ impl Plando {
         self.placed_item_count[placeable as usize] += 1;
         if door_type != DoorType::Wall {
             self.total_door_count += 1;
-        }
-
-        if !ignore_hub && self.update_hub_location().is_err() {
-            self.place_door(room_idx, door_idx, None, false, true)?;
-            bail!("Placing door would block off any possible hub location");
         }
 
         Ok(())
@@ -910,14 +730,9 @@ impl Plando {
         Ok(())
     }
 
-    pub fn update_spoiler_data(&mut self) -> Result<()> {
-        if let Err(err) = self.is_map_logic_valid() {
-            self.randomization = None;
-            return Err(err);
-        }
-
-        self.update_overrides();
-
+    /*pub fn update_hub_location(&mut self) -> JoinHandle<Result<()>> {
+        let start_loc = &self.start_location_data.start_location;
+        
         let locked_door_data = self.get_locked_door_data();
         let implicit_tech = &self.preset_data.implicit_tech;
         let implicit_notables = &self.preset_data.implicit_notables;
@@ -933,287 +748,57 @@ impl Plando {
             self.game_data.vertex_isv.keys.len(),
             0,
         );
-        let randomizer = Randomizer::new(
-            self.map_editor.get_map(), 
-            &locked_door_data, 
-            self.objectives.clone(), 
-            &self.randomizer_settings,
-            &self.difficulty_tiers,
+
+        let (initial_global_state, _) = self.get_initial_states();
+
+        self.logic.update_hub_location(
+            start_loc.clone(),
+            initial_global_state,
+            locked_door_data,
+            self.objectives.clone(),
+            base_links_data,
+            self.randomizer_settings.clone(),
+            self.difficulty_tiers.clone(),
+            self.map().clone()
+        )
+    }*/
+
+    pub fn update_spoiler_data(&mut self) -> Result<JoinHandle<Result<()>>> {
+        if let Err(err) = self.is_map_logic_valid() {
+            self.logic.reset();
+            return Err(err);
+        }
+
+        self.update_overrides();
+
+        let locked_door_data = self.get_locked_door_data();
+        let implicit_tech = &self.preset_data.implicit_tech;
+        let implicit_notables = &self.preset_data.implicit_notables;
+        let difficulty = DifficultyConfig::new(
+            &self.randomizer_settings.skill_assumption_settings,
             &self.game_data,
-            &base_links_data,
-            &mut self.rng
+            &implicit_tech,
+            &implicit_notables,
         );
 
         let (initial_global_state, initial_local_state) = self.get_initial_states();
-        let initial_item_location_state = ItemLocationState {
-            placed_item: None,
-            collected: false,
-            reachable_step: None,
-            bireachable: false,
-            bireachable_vertex_id: None,
-            difficulty_tier: None,
-        };
-        let initial_flag_location_state = FlagLocationState {
-            reachable_step: None,
-            reachable_vertex_id: None,
-            bireachable: false,
-            bireachable_vertex_id: None,
-        };
-        let initial_save_location_state = SaveLocationState { bireachable: false };
-        let initial_door_state = DoorState {
-            bireachable: false,
-            bireachable_vertex_id: None,
-        };
 
-        let mut state = RandomizationState {
-            step_num: 1,
-            start_location: self.start_location_data.start_location.clone(),
-            hub_location: self.start_location_data.hub_location.clone(),
-            hub_obtain_route: self.start_location_data.hub_obtain_route.clone(),
-            hub_return_route: self.start_location_data.hub_return_route.clone(),
-            item_precedence: Vec::new(),
-            save_location_state: vec![initial_save_location_state; self.game_data.save_locations.len()],
-            item_location_state: vec![initial_item_location_state; self.game_data.item_locations.len()],
-            flag_location_state: vec![initial_flag_location_state; self.game_data.flag_ids.len()],
-            door_state: vec![initial_door_state; locked_door_data.locked_doors.len()],
-            items_remaining: randomizer.initial_items_remaining.clone(),
-            starting_local_state: initial_local_state,
-            global_state: initial_global_state,
-            debug_data: None,
-            previous_debug_data: None,
-            key_visited_vertices: HashSet::new(),
-            last_key_areas: Vec::new(),
-        };
-
-        randomizer.update_reachability(&mut state);
-
-        for i in 0..state.item_location_state.len() {
-            if self.item_locations[i] != Item::Nothing {
-                state.item_location_state[i].placed_item = Some(self.item_locations[i]);
-            }
-        }
-
-        let mut spoiler_summary_vec = vec![];
-        let mut spoiler_details_vec = vec![];
-        let mut debug_data_vec: Vec<DebugData> = Vec::new();
-
-        let max_override_step = self.spoiler_overrides.iter().map(|x| x.step).reduce(|acc, e| acc.max(e)).unwrap_or_default();
-
-        loop {
-            let (spoiler_summary, spoiler_details) = self.update_step(&mut state, &randomizer);
-            let any_progress = spoiler_summary.items.len() > 0 || spoiler_summary.flags.len() > 0;
-            spoiler_summary_vec.push(spoiler_summary);
-            spoiler_details_vec.push(spoiler_details);
-            debug_data_vec.push(state.previous_debug_data.as_ref().unwrap().clone());
-
-            if !any_progress && state.step_num > max_override_step {
-                break;
-            }
-        }
-
-        for item_loc_state in &mut state.item_location_state {
-            if item_loc_state.placed_item.is_none() {
-                item_loc_state.placed_item = Some(Item::Nothing);
-            }
-        }
-
-        let seed_part = (self.rng.next_u32() % 0xFE) + 1; // Generate seed_part 1-255 so seed can't be 0
-        let seed = seed_part | (seed_part << 8) | (seed_part << 16) | (seed_part << 24);
-
-        self.randomization = Some(randomizer.get_randomization(
-            &state,
-            spoiler_summary_vec,
-            spoiler_details_vec,
-            debug_data_vec,
-            seed as usize,
-            seed as usize,
-            &mut self.rng
-        ).unwrap());
-
-        // Apply custom escape time
-        if let Some(custom_escape_time) = self.custom_escape_time {
-            let (r, s) = &mut self.randomization.as_mut().unwrap();
-            let base_igt_frames = custom_escape_time * 60;
-            let base_igt_seconds = custom_escape_time as f32;
-            let raw_time_seconds = base_igt_seconds; // Ignore multiplier for custom time
-            let final_time_seconds = raw_time_seconds.min(5995.0);
-
-            s.escape.base_igt_frames = base_igt_frames;
-            s.escape.base_igt_seconds = base_igt_seconds;
-            s.escape.raw_time_seconds = raw_time_seconds;
-            s.escape.final_time_seconds = final_time_seconds;
-
-            r.escape_time_seconds = final_time_seconds;
-        }
-        self.map_editor.error_list.retain(|&err| {
-            err != MapErrorType::EscapeNotLogical
-        });
-        if self.randomization.as_ref().unwrap().0.escape_time_seconds <= 0.0 {
-            self.map_editor.error_list.push(MapErrorType::EscapeNotLogical);
-        }
-
-        match self.randomization {
-            Some(_) => Ok(()),
-            None => Err(anyhow!("Couldn't compute valid escape route"))
-        }
-    }
-
-    fn update_step(&self, state: &mut RandomizationState, randomizer: &Randomizer) -> (SpoilerSummary, SpoilerDetails) {
-        let orig_global_state = state.global_state.clone();
-        let mut spoiler_flag_summaries: Vec<SpoilerFlagSummary> = Vec::new();
-        let mut spoiler_flag_details: Vec<SpoilerFlagDetails> = Vec::new();
-        let mut spoiler_door_summaries: Vec<SpoilerDoorSummary> = Vec::new();
-        let mut spoiler_door_details: Vec<SpoilerDoorDetails> = Vec::new();
-        loop {
-            let mut any_update = false;
-            for (i, &flag_id) in self.game_data.flag_ids.iter().enumerate() {
-                if state.global_state.flags[flag_id] {
-                    continue;
-                }
-                if state.flag_location_state[i].reachable_step.is_some() && flag_id == self.game_data.mother_brain_defeated_flag_id {
-                    any_update = true;
-                    let flag_vertex_id = state.flag_location_state[i].reachable_vertex_id.unwrap();
-                    spoiler_flag_summaries.push(randomizer.get_spoiler_flag_summary(&state, flag_vertex_id, flag_id));
-                    spoiler_flag_details.push(randomizer.get_spoiler_flag_details_one_way(&state, flag_vertex_id, flag_id, i));
-                    state.global_state.flags[flag_id] = true;
-                } else if state.flag_location_state[i].bireachable {
-                    any_update = true;
-                    let flag_vertex_id = state.flag_location_state[i].bireachable_vertex_id.unwrap();
-                    spoiler_flag_summaries.push(randomizer.get_spoiler_flag_summary(&state, flag_vertex_id, flag_id));
-                    spoiler_flag_details.push(randomizer.get_spoiler_flag_details(&state, flag_vertex_id, flag_id, i));
-                    state.global_state.flags[flag_id] = true;
-                }
-            }
-            for i in 0..randomizer.locked_door_data.locked_doors.len() {
-                if state.global_state.doors_unlocked[i] {
-                    continue;
-                }
-                if state.door_state[i].bireachable {
-                    any_update = true;
-                    let door_vertex_id = state.door_state[i].bireachable_vertex_id.unwrap();
-                    spoiler_door_summaries.push(randomizer.get_spoiler_door_summary(door_vertex_id, i));
-                    spoiler_door_details.push(randomizer.get_spoiler_door_details(&state, door_vertex_id, i));
-                    state.global_state.doors_unlocked[i] = true;
-                }
-            }
-            if any_update {
-                randomizer.update_reachability(state);
-            } else {
-                break;
-            }
-        }
-
-        let mut placed_uncollected_bireachable_loc: Vec<ItemLocationId> = Vec::new();
-        let mut placed_uncollected_bireachable_items: Vec<Item> = Vec::new();
-        for (i, item_location_state) in state.item_location_state.iter().enumerate() {
-            if let Some(item) = item_location_state.placed_item {
-                if !item_location_state.collected && item_location_state.bireachable {
-                    placed_uncollected_bireachable_loc.push(i);
-                    placed_uncollected_bireachable_items.push(item);
-                }
-            }
-        }
-
-        let mut new_state = RandomizationState {
-            step_num: state.step_num + 1,
-            start_location: state.start_location.clone(),
-            hub_location: state.hub_location.clone(),
-            hub_obtain_route: state.hub_obtain_route.clone(),
-            hub_return_route: state.hub_return_route.clone(),
-            item_precedence: state.item_precedence.clone(),
-            item_location_state: state.item_location_state.clone(),
-            flag_location_state: state.flag_location_state.clone(),
-            save_location_state: state.save_location_state.clone(),
-            door_state: state.door_state.clone(),
-            items_remaining: state.items_remaining.clone(),
-            global_state: state.global_state.clone(),
-            starting_local_state: self.get_initial_local_state(state),
-            debug_data: None,
-            previous_debug_data: None,
-            key_visited_vertices: HashSet::new(),
-            last_key_areas: Vec::new()
-        };
-        new_state.previous_debug_data = state.debug_data.clone();
-        new_state.key_visited_vertices = state.key_visited_vertices.clone();
-
-        for &item in &placed_uncollected_bireachable_items {
-            new_state.global_state.collect(item, &self.game_data, self.randomizer_settings.item_progression_settings.ammo_collect_fraction, &self.difficulty_tiers[0].tech, &mut new_state.starting_local_state);
-        }
-        // Add overrides to the current step
-        let overrides: Vec<_> = self.spoiler_overrides.iter().filter(|x| x.step == state.step_num).collect();
-        for item_override in &overrides {
-            let item = self.item_locations[item_override.item_idx];
-            new_state.global_state.collect(item, &self.game_data, self.randomizer_settings.item_progression_settings.ammo_collect_fraction, &self.difficulty_tiers[0].tech, &mut new_state.starting_local_state);
-        }
-
-        randomizer.update_reachability(&mut new_state);
-
-        for &loc in &placed_uncollected_bireachable_loc {
-            new_state.item_location_state[loc].collected = true;
-        }
-
-        let mut spoiler_summary = randomizer.get_spoiler_summary(
-            &orig_global_state,
-            &state,
-            &new_state,
-            spoiler_flag_summaries,
-            spoiler_door_summaries
+        let handle = self.logic.update_hub_and_randomization(
+            initial_global_state,
+            initial_local_state,
+            self.start_location.clone(),
+            locked_door_data,
+            self.objectives.clone(),
+            difficulty,
+            self.item_locations.clone(),
+            self.spoiler_overrides.clone(),
+            self.randomizer_settings.clone(),
+            self.difficulty_tiers.clone(),
+            self.map().clone(),
+            self.custom_escape_time.clone()
         );
-        let mut spoiler_details = randomizer.get_spoiler_details(
-            &orig_global_state,
-            &state,
-            &new_state,
-            spoiler_flag_details,
-            spoiler_door_details
-        );
-
-        // Mark items as collected after getting spoiler data as they are not logically bireachable
-        for item_override in overrides {
-            let state = &mut new_state.item_location_state[item_override.item_idx];
-            if state.collected {
-                continue;
-            }
-            state.collected = true;
-            state.bireachable = true;
-            state.bireachable_vertex_id = self.game_data.item_vertex_ids[item_override.item_idx].first().copied();
-            state.reachable_step = Some(new_state.step_num);
-
-            let item = self.item_locations[item_override.item_idx];
-            let item_str: String = Item::VARIANTS[item as usize].to_string();
-            let (room_id, node_id) = self.game_data.item_locations[item_override.item_idx];
-            let vertex_info = get_vertex_info_by_id(room_id, node_id, &self.game_data, self.map());
-
-            // Dummy fill spoiler summary and details
-            spoiler_summary.items.push(SpoilerItemSummary {
-                item: item_str.clone(),
-                location: SpoilerLocation {
-                    area: vertex_info.area_name.clone(),
-                    room_id: vertex_info.room_id,
-                    room: vertex_info.room_name.clone(),
-                    node_id: vertex_info.node_id,
-                    node: vertex_info.node_name.clone(),
-                    coords: vertex_info.room_coords
-                }
-            });
-            spoiler_details.items.push(SpoilerItemDetails {
-                item: item_str,
-                location: SpoilerLocation {
-                    area: vertex_info.area_name,
-                    room_id: vertex_info.room_id,
-                    room: vertex_info.room_name,
-                    node_id: vertex_info.node_id,
-                    node: vertex_info.node_name,
-                    coords: vertex_info.room_coords
-                },
-                reachable_step: new_state.step_num,
-                difficulty: Some("Custom".to_string()),
-                obtain_route: Vec::new(),
-                return_route: Vec::new()
-            });
-        }
-
-        *state = new_state;
-        (spoiler_summary, spoiler_details)
+        
+        Ok(handle)
     }
 
     /* COPY FROM maprando::randomize::get_initial_states */
@@ -1253,18 +838,6 @@ impl Plando {
             }
         }
         (global, local)
-    }
-
-    fn get_initial_local_state(&self, state: &RandomizationState) -> LocalState {
-        let start_vertex_id = self.game_data.vertex_isv.index_by_key[&VertexKey {
-            room_id: state.hub_location.room_id,
-            node_id: state.hub_location.node_id,
-            obstacle_mask: 0,
-            actions: vec![],
-        }];
-        let cost_metric_idx = 0; // use energy-sensitive cost metric
-        let forward_traverse = &state.debug_data.as_ref().unwrap().forward;
-        forward_traverse.local_states[start_vertex_id][cost_metric_idx]
     }
 
     fn get_initial_flag_vec(&self) -> Vec<bool> {
