@@ -1994,6 +1994,7 @@ impl PlandoApp {
                 self.benchmark.split("Draw modals");
             }).unwrap();
             sfegui.draw(gui, &mut window, Some(&mut self.texture_manager));
+            self.benchmark.split("Draw egui to screen");
 
             // Draw current version number
             let mut version_text = graphics::Text::new(PlandoApp::VERSION, &font_default, 12);
@@ -2973,19 +2974,32 @@ impl PlandoApp {
     fn draw_sidebar_benchmark(&mut self, ui: &mut Ui, benchmark: &BenchmarkResult) {
         ui.heading("Benchmark results of last frame");
         ui.separator();
+
+        // Ensure we can't divide by 0
+        if benchmark.total_time.as_secs_f64() == 0.0 {
+            return;
+        }
+
         egui::Grid::new("grid_benchmark").num_columns(3).show(ui, |ui| {
             for (label, dur) in &benchmark.splits {
                 let ratio = dur.as_secs_f64() / benchmark.total_time.as_secs_f64();
-                let ratio_pretty = (ratio * 100.0).round() / 100.0;
+                let ratio_pretty = (ratio * 10000.0).round() / 100.0;
 
                 ui.label(label);
-                ui.label(format!("{} ns", dur.as_nanos()));
+                ui.label(format!("{} ms", dur.as_millis()));
                 ui.label(format!("{}%", ratio_pretty));
                 ui.end_row();
             }
             ui.end_row();
+            let ratio = benchmark.empty_time.as_secs_f64() / benchmark.total_time.as_secs_f64();
+            let ratio_pretty = (ratio * 10000.0).round() / 100.0;
+
+            ui.label("Other (e.g. FPS Limiter)");
+            ui.label(format!("{} ms", benchmark.empty_time.as_millis()));
+            ui.label(format!("{}%", ratio_pretty));
+            ui.end_row();
             ui.label("Total time");
-            ui.label(format!("{} ns", benchmark.total_time.as_nanos()));
+            ui.label(format!("{} ms", benchmark.total_time.as_millis()));
             ui.label("100%");
         });
     }

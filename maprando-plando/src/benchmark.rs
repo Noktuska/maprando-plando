@@ -11,6 +11,7 @@ pub struct Benchmark {
 pub struct BenchmarkResult {
     pub splits: HashMap<String, Duration>,
     pub total_time: Duration,
+    pub empty_time: Duration
 }
 
 impl Benchmark {
@@ -38,9 +39,16 @@ impl Benchmark {
 
     pub fn evaluate(&mut self) -> BenchmarkResult {
         let dur = self.total_timer.elapsed();
+        let collected_dur = self.splits.iter().map(|x| x.1.clone()).sum::<Duration>();
+        let empty_time = if collected_dur >= dur {
+            Duration::ZERO
+        } else {
+            dur - collected_dur
+        };
         BenchmarkResult {
             splits: self.splits.clone(),
-            total_time: dur
+            total_time: dur,
+            empty_time
         }
     }
 }
