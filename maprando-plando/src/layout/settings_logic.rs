@@ -132,13 +132,6 @@ impl LogicCustomization {
             });
 
             egui::Grid::new("grid_customize_logic_other").num_columns(4).striped(true).show(ui, |ui| {
-                // Doors
-                ui.label("Doors");
-                ui.selectable_value(&mut self.cur_settings.doors_mode, DoorsMode::Blue, "Blue");
-                ui.selectable_value(&mut self.cur_settings.doors_mode, DoorsMode::Ammo, "Ammo");
-                ui.selectable_value(&mut self.cur_settings.doors_mode, DoorsMode::Beam, "Beam");
-                ui.end_row();
-
                 // Save the animals
                 ui.label("Save the animals");
                 ui.selectable_value(&mut self.cur_settings.save_animals, SaveAnimals::No, "No");
