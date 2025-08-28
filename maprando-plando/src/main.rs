@@ -1,4 +1,4 @@
-use crate::{backend::{map_editor::{self, MapEditor, MapErrorType}, plando::{get_double_item_offset, DoubleItemPlacement, MapRepositoryType, Placeable, Plando, SpoilerOverride, ITEM_VALUES}, randomize::get_vertex_info}, input_state::KeyState, layout::{hotkey_settings::Keybind, map_editor_ui::MapEditorUi, room_search::{RoomSearch, SearchOpt}, settings_customize::{Customization, SettingsCustomize, SettingsCustomizeResult}, settings_logic::LogicCustomization, Layout, SidebarPanel, WindowType}, texture_manager::TextureManager};
+use crate::{backend::{map_editor::{self, MapEditor, MapErrorType}, plando::{get_double_item_offset, DoubleItemPlacement, MapRepositoryType, Placeable, Plando, SpoilerOverride, ITEM_VALUES}, randomize::get_vertex_info}, benchmark::{Benchmark, BenchmarkResult}, input_state::KeyState, layout::{hotkey_settings::Keybind, map_editor_ui::MapEditorUi, room_search::{RoomSearch, SearchOpt}, settings_customize::{Customization, SettingsCustomize, SettingsCustomizeResult}, settings_logic::LogicCustomization, Layout, SidebarPanel, WindowType}, texture_manager::TextureManager};
 use anyhow::{anyhow, bail, Result};
 use egui::{self, style::default_text_styles, Color32, Context, FontDefinitions, Id, RichText, Sense, Ui, Vec2};
 use egui_sfml::{SfEgui, UserTexSource};
@@ -21,9 +21,10 @@ use sfml::{
 use strum::VariantArray;
 use strum_macros::VariantArray;
 use tokio::task::JoinHandle;
-use std::{cmp::{max, min}, ffi::OsStr, fs::File, io::{Read, Write}, path::Path, sync::mpsc::{Sender, TryRecvError}, thread::{self}, time::Instant};
+use std::{cmp::{max, min}, ffi::OsStr, fs::File, io::{Read, Write}, path::Path, sync::mpsc::{Sender, TryRecvError}, thread::{self}, time::{Duration, Instant}};
 
 mod backend;
+mod benchmark;
 mod layout;
 mod input_state;
 mod utils;
@@ -923,6 +924,7 @@ struct PlandoApp {
     obj_room_map: HashMap<usize, Objective>,
     room_data: Vec<RoomData>,
 
+    benchmark: Benchmark,
     view: View,
 
     key_state: KeyState,
@@ -1089,6 +1091,7 @@ impl PlandoApp {
             obj_room_map,
             room_data,
 
+            benchmark: Benchmark::new(),
             view: View::new(),
 
             key_state: KeyState::new(),
@@ -1458,12 +1461,16 @@ impl PlandoApp {
         self.redraw_map(&mut tex_base_map);
 
         while window.is_open() {
+            let last_benchmark = self.benchmark.evaluate();
+            self.benchmark.start();
+
             self.key_state.next_frame();
             self.mouse_state.next_frame();
             self.global_timer += 1;
             (self.local_mouse_x, self.local_mouse_y) = self.view.to_local_coords(self.mouse_state.mouse_x, self.mouse_state.mouse_y);
             self.click_consumed = false;
             self.view.window_size = window.size().as_other() - Vector2f::new(sidebar_width, 0.0);
+            self.benchmark.split("Pre-event frame setup");
 
             if download_thread_active {
                 if download_thread_handle.is_finished() {
@@ -1476,6 +1483,7 @@ impl PlandoApp {
                     download_thread_handle = thread::spawn(|| { Ok(()) }); // Reset the handle
                 }
             }
+            self.benchmark.split("Download thread handling");
 
             if self.spoiler_step != last_spoiler_step {
                 self.schedule_redraw();
@@ -1485,11 +1493,13 @@ impl PlandoApp {
             if let Err(err) = self.update_handles().await {
                 self.modal_type = ModalType::Error(err.to_string());
             }
+            self.benchmark.split("Update async handles");
 
             if self.should_redraw {
                 self.redraw_map(&mut tex_base_map);
                 self.should_redraw = false;
             }
+            self.benchmark.split("Pre-render map layout");
 
             // mouse_is_public is true if the mouse is on the map view and not on some GUI
             self.is_mouse_public = !(spoiler_details_hovered || settings_open || customize_open || customize_logic_open || self.modal_type != ModalType::None
@@ -1531,6 +1541,7 @@ impl PlandoApp {
                     _ => {}
                 }
             }
+            self.benchmark.split("SFML Event handling");
 
             let window_size = window.size();
 
@@ -1569,6 +1580,7 @@ impl PlandoApp {
                     }
                 }
             }
+            self.benchmark.split("Hotkey handling");
 
             // Drag to pan the view
             if self.mouse_state.is_button_down(mouse::Button::Middle) && self.is_mouse_public {
@@ -1593,35 +1605,45 @@ impl PlandoApp {
                     //window.draw_with_renderstates(&spr_bg_grid, &states);
                     self.draw_background_grid(&mut *window, &states, &tex_grid);
                 }
+                self.benchmark.split("Draw background grid");
 
                 // Draw the entire map
                 {
                     let spr_map = graphics::Sprite::with_texture(tex_base_map.texture());
                     window.draw_with_renderstates(&spr_map, &states);
                 }
+                self.benchmark.split("Draw map layout");
 
                 // Draw Possible Start Locations
                 self.draw_start_locations(&mut *window, &states, sidebar_selection);
+                self.benchmark.split("Draw starting locations");
 
                 // Draw Doors
                 self.draw_placed_doors(&mut *window, &states);
+                self.benchmark.split("Draw placed doors");
 
                 // Draw Gray Doors
                 self.draw_gray_doors(&mut *window, &states);
+                self.benchmark.split("Draw gray doors");
 
                 // Draw items
                 self.draw_items(&mut *window, &states, sidebar_selection, &tex_items);
+                self.benchmark.split("Draw placed items");
 
                 // Draw flags
                 self.draw_flags(&mut *window, &states, sidebar_selection);
+                self.benchmark.split("Draw flags");
 
                 // Handle map io after all other io has been handled, also draws errors and editor overlays
                 if sidebar_selection.is_none() {
                     self.handle_map_io(&mut *window, &states);
                 }
+                
+                self.benchmark.split("Handle map IO");
         
                 // Draw Door hover
                 self.draw_door_hover(&mut *window, &states, sidebar_selection);
+                self.benchmark.split("Draw door hover ghost");
 
                 // Draw the info overlay
                 let window_size = window.size();
@@ -1633,9 +1655,11 @@ impl PlandoApp {
                     &font_default,
                     14
                 );
+                self.benchmark.split("Draw info overlay");
 
                 // Draw spoiler route
                 self.draw_spoiler_route(&mut *window, &states);
+                self.benchmark.split("Draw spoiler route");
             }
 
             // Reset spoiler step and type if click resulted in nothing
@@ -1827,6 +1851,7 @@ impl PlandoApp {
                         }
                     });
                 });
+                self.benchmark.split("Draw main menu bar");
 
                 if self.handle_spoiler.is_some() {
                     egui::Window::new("Updating Spoiler")
@@ -1838,14 +1863,17 @@ impl PlandoApp {
                         })
                     });
                 }
+                self.benchmark.split("Draw async handle progress window");
 
                 self.layout.render(ctx);
+                self.benchmark.split("Draw generic layout windows");
 
                 // Draw item selection sidebar
                 let max_sidebar_width = (window_size.x / 2) as f32;
                 sidebar_width = egui::SidePanel::right("panel_item_select").width_range(128.0..=max_sidebar_width).show(ctx, |ui| {
-                    self.draw_sidebar(ui, &mut sidebar_selection);
+                    self.draw_sidebar(ui, &mut sidebar_selection, &last_benchmark);
                 }).response.rect.width();
+                self.benchmark.split("Draw sidebar");
 
                 // Draw Spoiler Details Window
                 if !reset_after_patch {
@@ -1855,13 +1883,16 @@ impl PlandoApp {
                         spoiler_window_bounds = self.draw_spoiler_summary(ctx, self.mouse_state.mouse_y as f32, spoiler_window_bounds);
                     }
                 }
+                self.benchmark.split("Draw spoiler details/summary window");
 
                 if self.override_window.is_some() {
                     spoiler_details_hovered |= self.draw_spoiler_override(ctx);
+                    self.benchmark.split("Draw spoiler overrides");
                 }
 
                 if settings_open {
                     settings_open = self.draw_settings_window(ctx);
+                    self.benchmark.split("Draw settings window");
                 }
 
                 if customize_open {
@@ -1904,6 +1935,7 @@ impl PlandoApp {
                         self.plando.load_preset(preset);
                         reset_after_patch = false;
                     }
+                    self.benchmark.split("Draw seed customization window");
                 }
 
                 if customize_logic_open {
@@ -1920,6 +1952,7 @@ impl PlandoApp {
                         }
                         Err(err) => self.modal_type = ModalType::Error(err.to_string())
                     }
+                    self.benchmark.split("Draw logic customization window");
                 }
 
                 match self.modal_type.clone() {
@@ -1958,6 +1991,7 @@ impl PlandoApp {
                         }
                     }
                 }
+                self.benchmark.split("Draw modals");
             }).unwrap();
             sfegui.draw(gui, &mut window, Some(&mut self.texture_manager));
 
@@ -1966,6 +2000,7 @@ impl PlandoApp {
             version_text.set_fill_color(Color::rgba(0xAF, 0xAF, 0xAF, 0xCF));
             version_text.set_position((2.0, window.size().y as f32 - 14.0));
             window.draw(&version_text);
+            self.benchmark.split("Draw version string");
 
             frame_counter += 1;
             if (Instant::now() - start).as_secs_f32() >= 1.0 {
@@ -1976,6 +2011,7 @@ impl PlandoApp {
                 frame_counter = 0;
                 start = Instant::now();
             }
+            self.benchmark.split("Draw FPS counter");
             window.draw(&fps_text);
 
             window.display();
@@ -2679,7 +2715,7 @@ impl PlandoApp {
         }
     }
 
-    fn draw_sidebar(&mut self, ui: &mut Ui, sidebar_selection: &mut Option<Placeable>) {
+    fn draw_sidebar(&mut self, ui: &mut Ui, sidebar_selection: &mut Option<Placeable>, last_benchmark: &BenchmarkResult) {
         ui.scope(|ui| {
             ui.style_mut().spacing.item_spacing = egui::Vec2::ZERO;
 
@@ -2692,6 +2728,7 @@ impl PlandoApp {
                         SidebarPanel::Rooms => "Rooms".to_string(),
                         SidebarPanel::Areas => "Areas".to_string(),
                         SidebarPanel::Errors => format!("Errors ({})", self.plando.map_editor.error_list.len()),
+                        SidebarPanel::Benchmark => "Benchmark".to_string()
                     };
 
                     let mut bt = egui::Button::new(title)
@@ -2715,7 +2752,8 @@ impl PlandoApp {
             SidebarPanel::Items => self.draw_sidebar_item_select(ui, sidebar_selection),
             SidebarPanel::Rooms => self.draw_sidebar_room_select(ui),
             SidebarPanel::Areas => self.draw_sidebar_area_select(ui),
-            SidebarPanel::Errors => self.draw_sidebar_error_list(ui)
+            SidebarPanel::Errors => self.draw_sidebar_error_list(ui),
+            SidebarPanel::Benchmark => self.draw_sidebar_benchmark(ui, last_benchmark),
         }
     }
 
@@ -2929,6 +2967,26 @@ impl PlandoApp {
                     }
                 }
             }
+        });
+    }
+
+    fn draw_sidebar_benchmark(&mut self, ui: &mut Ui, benchmark: &BenchmarkResult) {
+        ui.heading("Benchmark results of last frame");
+        ui.separator();
+        egui::Grid::new("grid_benchmark").num_columns(3).show(ui, |ui| {
+            for (label, dur) in &benchmark.splits {
+                let ratio = dur.as_secs_f64() / benchmark.total_time.as_secs_f64();
+                let ratio_pretty = (ratio * 100.0).round() / 100.0;
+
+                ui.label(label);
+                ui.label(format!("{} ns", dur.as_nanos()));
+                ui.label(format!("{}%", ratio_pretty));
+                ui.end_row();
+            }
+            ui.end_row();
+            ui.label("Total time");
+            ui.label(format!("{} ns", benchmark.total_time.as_nanos()));
+            ui.label("100%");
         });
     }
 

@@ -37,7 +37,8 @@ pub enum SidebarPanel {
     Items,
     Rooms,
     Areas,
-    Errors
+    Errors,
+    Benchmark
 }
 
 impl Layout {
