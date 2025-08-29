@@ -2018,9 +2018,7 @@ impl PlandoApp {
                 let rect = utils::normalize_rect(rect);
                 self.draw_room_outline(rt, states, vec![rect]);
             }
-        }
-
-        if let Some(room_idx) = last_hovered_room_idx {
+        } else if let Some(room_idx) = last_hovered_room_idx {
             if self.map_editor.dragged_room_idx.is_empty() {
                 let bbox = self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data);
                 self.draw_room_outline(rt, states, vec![bbox]);
