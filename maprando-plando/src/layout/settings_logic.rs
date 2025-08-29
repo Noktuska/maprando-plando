@@ -318,6 +318,10 @@ impl LogicCustomization {
                 ui.add(egui::DragValue::new(&mut self.cur_settings.skill_assumption_settings.gate_glitch_leniency).speed(0.05).range(0..=1000));
                 ui.end_row();
 
+                ui.label("Farm time limit");
+                ui.add(egui::DragValue::new(&mut self.cur_settings.skill_assumption_settings.farm_time_limit).speed(0.05).range(0.0..=1000.0));
+                ui.end_row();
+
                 ui.label("Shinecharge tiles");
                 ui.add(egui::DragValue::new(&mut self.cur_settings.skill_assumption_settings.shinespark_tiles).speed(0.1).range(0.0..=1000.0));
                 ui.end_row();
