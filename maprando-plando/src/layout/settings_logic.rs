@@ -29,7 +29,6 @@ pub struct LogicCustomization {
 
 impl LogicCustomization {
     pub fn new(preset_data: PresetData, mut settings: RandomizerSettings) -> Self {
-        settings.map_layout = "Plando".to_string();
         Self {
             preset_data,
             cur_settings: settings.clone(),

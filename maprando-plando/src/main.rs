@@ -20,7 +20,7 @@ use sfml::{
 use strum::VariantArray;
 use strum_macros::VariantArray;
 use tokio::{sync::mpsc::error::TryRecvError, task::JoinHandle};
-use std::{cmp::{max, min}, ffi::OsStr, fs::File, io::{Read, Write}, path::Path, time::Instant};
+use std::{cmp::{max, min}, collections::VecDeque, ffi::OsStr, fs::File, io::{Read, Write}, path::Path, time::Instant};
 
 mod backend;
 mod benchmark;
@@ -52,6 +52,7 @@ struct Settings {
     last_logic_preset: Option<RandomizerSettings>,
     creator_name: String,
     custom_escape_time: Option<usize>,
+    recent_seeds: VecDeque<String>,
     disable_logic: bool,
     auto_update: bool,
     disable_bg_grid: bool,
@@ -73,6 +74,7 @@ impl Default for Settings {
             last_logic_preset: None,
             creator_name: "Plando".to_string(),
             custom_escape_time: None,
+            recent_seeds: VecDeque::new(),
             disable_logic: false,
             auto_update: true,
             disable_bg_grid: false,
@@ -157,18 +159,6 @@ fn load_settings(path: &Path, preset_data: &PresetData) -> Result<Settings> {
     result.last_logic_preset = preset_opt;
 
     Ok(result)
-}
-
-fn save_seed(plando: &mut Plando, path: &Path) -> Result<()> {
-    let mut file = File::create(path)?;
-
-    let seed_data = SeedData::new(plando);
-
-    let out = serde_json::to_string(&seed_data)?;
-
-    file.write_all(out.as_bytes())?;
-
-    Ok(())
 }
 
 fn load_preset_data(game_data: &GameData) -> Result<PresetData> {
@@ -1099,6 +1089,30 @@ impl PlandoApp {
         self.global_timer as f32 / self.settings.fps_cap as f32
     }
 
+    fn push_recent_seed(&mut self, path: String) {
+        let max_queue_len = 6;
+
+        self.settings.recent_seeds.retain(|elem| *elem != path);
+        self.settings.recent_seeds.push_front(path);
+        while self.settings.recent_seeds.len() > max_queue_len {
+            self.settings.recent_seeds.pop_back();
+        }
+    }
+
+    fn save_seed(&mut self, path: &Path) -> Result<()> {
+        let mut file = File::create(path)?;
+
+        let seed_data = SeedData::new(&self.plando);
+
+        let out = serde_json::to_string(&seed_data)?;
+
+        file.write_all(out.as_bytes())?;
+
+        self.push_recent_seed(path.to_str().unwrap().to_string());
+
+        Ok(())
+    }
+
     fn load_seed(&mut self, path: &Path) -> Result<()> {
         let mut file = File::open(path)?;
 
@@ -1122,7 +1136,11 @@ impl PlandoApp {
         // Start Location was stored as the vec idx in previous editions
         if let Some(start_loc_idx) = v.get_mut("start_location") {
             if let Some(idx) = start_loc_idx.as_u64() {
-                let start_loc = &plando.game_data.start_locations[idx as usize];
+                let start_loc = if idx as usize >= plando.game_data.start_locations.len() {
+                    &Plando::get_ship_start()
+                } else {
+                    &plando.game_data.start_locations[idx as usize]
+                };
                 *start_loc_idx = serde_json::to_value((start_loc.room_id, start_loc.node_id))?;
             }
         }
@@ -1191,12 +1209,20 @@ impl PlandoApp {
             plando.place_door(room_idx, door_idx, Some(door_data.door_type), false)?;
         }
 
-        let start_loc_idx = plando.game_data.start_location_id_map[&seed_data.start_location];
-        plando.place_start_location(plando.game_data.start_locations[start_loc_idx].clone());
+        let ship_start = Plando::get_ship_start();
+        let start_loc = if seed_data.start_location == (ship_start.room_id, ship_start.node_id) {
+            ship_start
+        } else {
+            let start_loc_idx = plando.game_data.start_location_id_map[&seed_data.start_location];
+            plando.game_data.start_locations[start_loc_idx].clone()
+        };
+        plando.place_start_location(start_loc);
 
         plando.spoiler_overrides = seed_data.spoiler_overrides;
 
         self.update_spoiler_data_async()?;
+
+        self.push_recent_seed(path.to_str().unwrap().to_string());
 
         Ok(())
     }
@@ -1417,8 +1443,6 @@ impl PlandoApp {
         tex_grid.set_repeated(true);
 
         let mut tex_base_map = graphics::RenderTexture::new(1, 1).unwrap();
-
-        let mut cur_settings = self.plando.randomizer_settings.clone();
 
         let mut sidebar_width = 0.0;
 
@@ -1658,9 +1682,8 @@ impl PlandoApp {
                                     .add_filter("JSON File", &["json"])
                                     .save_file();
                                 if let Some(file) = file_opt {
-                                    let res = save_seed(&mut self.plando, file.as_path());
-                                    if res.is_err() {
-                                        self.modal_type = ModalType::Error(res.unwrap_err().to_string());
+                                    if let Err(err) = self.save_seed(file.as_path()) {
+                                        self.modal_type = ModalType::Error(err.to_string());
                                     }
                                 }
                                 ui.close_menu();
@@ -1673,13 +1696,34 @@ impl PlandoApp {
                                     .pick_file();
                                 if let Some(file) = file_opt {
                                     match self.load_seed(file.as_path()) {
-                                        Ok(_) => cur_settings = self.plando.randomizer_settings.clone(),
+                                        Ok(_) => {}
                                         Err(err) => self.modal_type = ModalType::Error(err.to_string())
                                     }
                                     self.redraw_map(&mut tex_base_map);
                                 }
                                 ui.close_menu();
                             }
+                            ui.add_enabled_ui(!self.settings.recent_seeds.is_empty(), |ui| {
+                                ui.menu_button("Recent Seeds", |ui| {
+                                    for seed in &self.settings.recent_seeds {
+                                        let seed = seed.clone();
+                                        let path = Path::new(&seed);
+                                        let name = match path.file_name() {
+                                            Some(s) => s.to_str().unwrap().to_string(),
+                                            None => continue
+                                        };
+                                        if ui.button(name).clicked() {
+                                            match self.load_seed(path) {
+                                                Ok(_) => {}
+                                                Err(err) => self.modal_type = ModalType::Error(err.to_string())
+                                            }
+                                            self.schedule_redraw();
+                                            ui.close_menu();
+                                            break;
+                                        }
+                                    }
+                                });
+                            });
                             ui.separator();
                             if ui.button("Patch ROM").clicked() {
                                 customize_open = true;
