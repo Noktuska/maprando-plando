@@ -3504,6 +3504,7 @@ async fn main() {
             window_context.sfegui.add_event(&event);
             if event == Event::Closed {
                 window_context.window.close();
+                load_data.abort();
             }
         }
 
@@ -3514,11 +3515,20 @@ async fn main() {
                 TryRecvError::Disconnected => break
             }
         }
+        let mut should_send_progress = false;
 
         window_context.window.clear(Color::TRANSPARENT);
 
         let sf_draw_res = window_context.sfegui.run(&mut window_context.window, |rt, ctx| {
-            egui::Modal::new(egui::Id::new("modal_load_progress")).show(ctx, |ui| {
+            egui::Window::new("modal_load_progress")
+                .min_width(rt.size().x as f32 / 5.0)
+                .resizable(false)
+                .collapsible(false)
+                .movable(false)
+                .title_bar(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .fixed_pos(egui::pos2(rt.size().x as f32, rt.size().y as f32))
+                .show(ctx, |ui| {
                 match &current_progress {
                     Progress::FoundUpdate { release } => {
                         ui.label(format!("Found update: {} -> {}. Do you want to update?", update::VERSION, release.version));
@@ -3532,7 +3542,7 @@ async fn main() {
                                 }
                             }
                             if ui.button("No").clicked() {
-                                let _ = tx2.blocking_send(true);
+                                should_send_progress = true;
                             }
                         });
                     },
@@ -3555,6 +3565,10 @@ async fn main() {
         window_context.sfegui.draw(sf_draw_res, &mut window_context.window, None);
 
         window_context.window.display();
+
+        if should_send_progress {
+            let _ = tx2.send(true).await;
+        }
     }
 
     let load_data = match load_data.await {

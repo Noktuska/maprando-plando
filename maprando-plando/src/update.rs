@@ -60,7 +60,7 @@ pub async fn check_update() -> Result<Release> {
     }
     let latest_release = releases.swap_remove(0);
 
-    if !is_version_higher(&latest_release.version, "0.1.3") {
+    if !is_version_higher(&latest_release.version, VERSION) {
         bail!("Current version is up to date");
     }
 
