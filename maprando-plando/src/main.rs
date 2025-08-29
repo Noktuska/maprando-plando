@@ -20,7 +20,7 @@ use sfml::{
 use strum::VariantArray;
 use strum_macros::VariantArray;
 use tokio::{sync::mpsc::error::TryRecvError, task::JoinHandle};
-use std::{cmp::{max, min}, fs::File, io::{Read, Write}, path::Path, time::Instant};
+use std::{cmp::{max, min}, ffi::OsStr, fs::File, io::{Read, Write}, path::Path, time::Instant};
 
 mod backend;
 mod benchmark;
@@ -50,6 +50,8 @@ struct Settings {
     spoiler_auto_update: bool,
     last_customization: Customization,
     last_logic_preset: Option<RandomizerSettings>,
+    creator_name: String,
+    custom_escape_time: Option<usize>,
     disable_logic: bool,
     auto_update: bool,
     disable_bg_grid: bool,
@@ -69,6 +71,8 @@ impl Default for Settings {
             spoiler_auto_update: true,
             last_customization: Customization::default(),
             last_logic_preset: None,
+            creator_name: "Plando".to_string(),
+            custom_escape_time: None,
             disable_logic: false,
             auto_update: true,
             disable_bg_grid: false,
@@ -172,8 +176,34 @@ fn load_preset_data(game_data: &GameData) -> Result<PresetData> {
     let notable_path = Path::new("./data/notable_data.json");
     let presets_path = Path::new("./data/presets/");
 
-    let preset_data = PresetData::load(tech_path, notable_path, presets_path, game_data);
-    preset_data
+    let mut preset_data = PresetData::load(tech_path, notable_path, presets_path, game_data)?;
+
+    let custom_presets_path = Path::new(LogicCustomization::CUSTOM_PRESETS_PATH);
+    if !std::fs::exists(custom_presets_path)? {
+        std::fs::create_dir_all(custom_presets_path)?;
+    }
+
+    let dir_iter = std::fs::read_dir(custom_presets_path)?;
+    for entry in dir_iter {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => continue
+        };
+        let metadata = match entry.metadata() {
+            Ok(md) => md,
+            Err(_) => continue
+        };
+        if !metadata.is_file() || entry.path().extension() != Some(OsStr::new(&"json")) {
+            continue;
+        }
+
+        let preset_str = std::fs::read_to_string(entry.path())?;
+        let preset = serde_json::from_str::<RandomizerSettings>(&preset_str)?;
+
+        preset_data.full_presets.push(preset);
+    }
+
+    Ok(preset_data)
 }
 
 async fn download_map_repos() -> Result<()> {
@@ -928,7 +958,7 @@ impl PlandoApp {
         };
 
         tx.send(Progress::CheckUpdate).await?;
-        if let Ok(release) = check_update().await {
+        if settings.auto_update && let Ok(release) = check_update().await {
             if !release.assets.is_empty() {
                 tx.send(Progress::FoundUpdate { release }).await?;
                 rx.recv().await;
@@ -944,6 +974,8 @@ impl PlandoApp {
         };
 
         plando.load_preset(preset.clone());
+        plando.custom_escape_time = settings.custom_escape_time;
+        plando.creator_name = settings.creator_name.clone();
 
         Ok(LoadData {
             preset_data,
@@ -1904,6 +1936,8 @@ impl PlandoApp {
                             self.plando.creator_name = self.logic_customization.creator_name.clone();
                             self.plando.load_preset(self.logic_customization.settings.clone());
                             self.settings.last_logic_preset = Some(self.logic_customization.settings.clone());
+                            self.settings.creator_name = self.logic_customization.creator_name.clone();
+                            self.settings.custom_escape_time = self.plando.custom_escape_time;
                             self.redraw_map(&mut tex_base_map);
                         }
                         Err(err) => self.modal_type = ModalType::Error(err.to_string())

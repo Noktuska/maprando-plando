@@ -18,6 +18,7 @@ pub struct LogicCustomization {
     cur_settings: RandomizerSettings, // Working state of logic settings
     cur_customize_logic_window: CustomizeLogicWindow,
     customize_window_open: bool,
+    custom_preset_name: String,
 
     pub settings: RandomizerSettings, // Applied logic settings
 
@@ -34,6 +35,7 @@ impl LogicCustomization {
             cur_settings: settings.clone(),
             cur_customize_logic_window: CustomizeLogicWindow::None,
             customize_window_open: false,
+            custom_preset_name: settings.name.as_ref().unwrap_or(&String::new()).clone(),
             settings,
             use_custom_escape_time: false,
             custom_escape_time: 0,
@@ -72,7 +74,10 @@ impl LogicCustomization {
                     ui.separator();
                     for preset in &self.preset_data.full_presets {
                         if ui.selectable_label(self.cur_settings.name.as_ref().is_some_and(|x| *x == *preset.name.as_ref().unwrap()), preset.name.as_ref().unwrap().clone()).clicked() {
-                            self.cur_settings.clone_from(preset);
+                            self.cur_settings = preset.clone();
+                            if let Some(name) = &preset.name {
+                                self.custom_preset_name = name.clone();
+                            }
                         }
                     }
                 });
@@ -197,7 +202,7 @@ impl LogicCustomization {
             }
             ui.horizontal(|ui| {
                 ui.label("Save preset as");
-                ui.text_edit_singleline(self.cur_settings.name.as_mut().unwrap());
+                ui.text_edit_singleline(&mut self.custom_preset_name);
             });
             ui.end_row();
 
@@ -208,11 +213,10 @@ impl LogicCustomization {
                     self.customize_window_open = false;
                     should_close = Ok(true);
                 }
-                if ui.button("Save to file").clicked() && self.cur_settings.name.as_ref().is_some_and(|x| !x.is_empty()) {
+                if ui.button("Save to file").clicked() && !self.custom_preset_name.is_empty() {
                     if let Err(err) = self.save_preset() {
                         should_close = Err(err);
                     }
-                    self.preset_data.full_presets.push(self.cur_settings.clone());
                 }
                 if ui.button("Cancel").clicked() {
                     self.cur_settings.clone_from(&self.settings);
@@ -516,12 +520,18 @@ impl LogicCustomization {
     });
     }
 
-    fn save_preset(&self) -> Result<()> {
+    pub const CUSTOM_PRESETS_PATH: &'static str = "../../custom-presets/";
+
+    fn save_preset(&mut self) -> Result<()> {
+        self.cur_settings.name = Some(self.custom_preset_name.clone());
+
         let str = serde_json::to_string_pretty(&self.cur_settings)?;
-        let dir = Path::new("./data/presets/full-settings/");
-        let path = dir.join(self.cur_settings.name.as_ref().unwrap());
+        let dir = Path::new(Self::CUSTOM_PRESETS_PATH);
+        let path = dir.join(format!("{}.json", self.custom_preset_name));
         let mut file = std::fs::File::create(path)?;
         file.write_all(str.as_bytes())?;
+
+        self.preset_data.full_presets.push(self.cur_settings.clone());
 
         Ok(())
     }
