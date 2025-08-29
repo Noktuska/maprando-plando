@@ -1,4 +1,4 @@
-use crate::{backend::{map_editor::{self, MapEditor, MapErrorType}, plando::{get_double_item_offset, DoubleItemPlacement, MapRepositoryType, Placeable, Plando, SpoilerOverride, ITEM_VALUES}, randomize::get_vertex_info}, benchmark::{Benchmark, BenchmarkResult}, input_state::KeyState, layout::{hotkey_settings::Keybind, map_editor_ui::MapEditorUi, room_search::{RoomSearch, SearchOpt}, settings_customize::{Customization, SettingsCustomize, SettingsCustomizeResult}, settings_logic::LogicCustomization, Layout, SidebarPanel, WindowType}, texture_manager::TextureManager};
+use crate::{backend::{map_editor::{self, MapEditor, MapErrorType}, plando::{get_double_item_offset, DoubleItemPlacement, MapRepositoryType, Placeable, Plando, SpoilerOverride, ITEM_VALUES}, randomize::get_vertex_info}, benchmark::{Benchmark, BenchmarkResult}, input_state::KeyState, layout::{hotkey_settings::Keybind, map_editor_ui::MapEditorUi, room_search::{RoomSearch, SearchOpt}, settings_customize::{Customization, SettingsCustomize, SettingsCustomizeResult}, settings_logic::LogicCustomization, Layout, SidebarPanel, WindowType}, texture_manager::TextureManager, update::{Asset, Release}};
 use anyhow::{anyhow, bail, Result};
 use egui::{self, style::default_text_styles, Color32, Context, FontDefinitions, Id, RichText, Sense, Ui, Vec2};
 use egui_sfml::{SfEgui, UserTexSource};
@@ -8,7 +8,6 @@ use maprando::{patch::Rom, preset::PresetData, randomize::{LockedDoor, SpoilerRo
 use maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType};
 use rand::RngCore;
 use rfd::FileDialog;
-use self_update::cargo_crate_version;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sfml::{
@@ -20,13 +19,14 @@ use sfml::{
     };
 use strum::VariantArray;
 use strum_macros::VariantArray;
-use tokio::task::JoinHandle;
-use std::{cmp::{max, min}, ffi::OsStr, fs::File, io::{Read, Write}, path::Path, sync::mpsc::{Sender, TryRecvError}, thread::{self}, time::{Duration, Instant}};
+use tokio::{sync::mpsc::error::TryRecvError, task::JoinHandle};
+use std::{cmp::{max, min}, fs::File, io::{Read, Write}, path::Path, time::Instant};
 
 mod backend;
 mod benchmark;
 mod layout;
 mod input_state;
+mod update;
 mod utils;
 mod egui_sfml;
 mod texture_manager;
@@ -103,7 +103,11 @@ struct SeedData {
     door_locks: Vec<LockedDoor>,
     settings: RandomizerSettings,
     #[serde(default = "Vec::new")]
-    spoiler_overrides: Vec<SpoilerOverride>
+    spoiler_overrides: Vec<SpoilerOverride>,
+    #[serde(default)]
+    custom_escape_time: Option<usize>,
+    #[serde(default)]
+    creator_name: String
 }
 
 impl SeedData {
@@ -116,7 +120,9 @@ impl SeedData {
             item_placements: plando.item_locations.clone(),
             door_locks: plando.locked_doors.clone(),
             settings: plando.randomizer_settings.clone(),
-            spoiler_overrides: plando.spoiler_overrides.clone()
+            spoiler_overrides: plando.spoiler_overrides.clone(),
+            custom_escape_time: plando.custom_escape_time.clone(),
+            creator_name: plando.creator_name.clone()
         }
     }
 }
@@ -170,14 +176,14 @@ fn load_preset_data(game_data: &GameData) -> Result<PresetData> {
     preset_data
 }
 
-fn download_map_repos() -> Result<()> {
+async fn download_map_repos() -> Result<()> {
     for pool in ["v119-standard-avro", "v119-wild-avro"] {
         let url = format!("https://map-rando-artifacts.s3.us-west-004.backblazeb2.com/maps/{pool}.tar");
-        let client = reqwest::blocking::Client::new();
-        let resp = client.get(&url).send()?;
+        let client = reqwest::Client::new();
+        let resp = client.get(&url).send().await?;
 
         println!("Attempting to download {url}");
-        let bytes = resp.bytes()?;
+        let bytes = resp.bytes().await?;
         let cursor = std::io::Cursor::new(&bytes);
         //let decoder = GzDecoder::new(cursor);
         let mut archive = tar::Archive::new(cursor);
@@ -188,100 +194,19 @@ fn download_map_repos() -> Result<()> {
     Ok(())
 }
 
-fn check_update() -> Result<()> {
-    let cur_ver = cargo_crate_version!();
+async fn check_update() -> Result<update::Release> {
+    update::check_update().await.map_err(|err| {
+        println!("{}", err.to_string());
+        err
+    })
+}
 
-    println!("Checking for updates...");
-    let releases = self_update::backends::github::ReleaseList::configure()
-        .repo_owner("Noktuska")
-        .repo_name("maprando-plando")
-        .build()?
-        .fetch()?;
-
-    if releases.is_empty() {
-        bail!("No releases found");
-    }
-    let release = releases[0].clone();
-    println!("Found release {} ({} total releases)", release.version, releases.len());
-
-    if !self_update::version::bump_is_greater(&cur_ver, &release.version)? {
-        bail!("Current release is up to date");
-    }
-    println!("Found update {} --> {}", &cur_ver, &release.version);
-    loop {
-        println!("Do you want to update? (Y/N) ");
-        std::io::stdout().flush()?;
-        let mut s = String::new();
-        match std::io::stdin().read_line(&mut s) {
-            Err(err) => bail!(err.to_string()),
-            Ok(_) => match s.to_lowercase().trim() {
-                "y" => break,
-                "n" => bail!("Update declined"),
-                _ => {}
-            }
-        }
-    }
-
-    let asset = release.assets.first().ok_or(anyhow!("Could not find downloadable asset"))?;
-
-    let tmp_dir_path = Path::new("./tmp/");
-    let tmp_archive_path = tmp_dir_path.join(&asset.name);
-    let file_ext = tmp_archive_path.extension().ok_or(anyhow!("Found asset has no file extension"))?.to_str().unwrap();
-
-    std::fs::create_dir_all(tmp_dir_path)?;
-    let tmp_file = File::create(&tmp_archive_path)?;
-
-    println!("Downloading...");
-    self_update::Download::from_url(&asset.download_url)
-        .set_header(reqwest::header::ACCEPT, "application/octet-stream".parse()?)
-        .download_to(tmp_file)?;
-
-    match file_ext {
-        "exe" => {
-            println!("Replacing executable...");
-            self_update::self_replace::self_replace(&tmp_archive_path)?;
-        }
-        "zip" => {
-            let exe_path = std::env::current_exe()?;
-            let dir_path = exe_path.parent().unwrap();
-            
-            let file = File::open(&tmp_archive_path)?;
-            let mut archive = zip::ZipArchive::new(file)?;
-            let new_exe_path = dir_path.join(Path::new("maprando-plando__new__.exe"));
-
-            for i in 0..archive.len() {
-                let mut file = archive.by_index(i)?;
-                let path = match file.enclosed_name() {
-                    Some(path) => path,
-                    None => continue
-                };
-
-                let out_path = dir_path.join(&path);
-                if file.is_dir() {
-                    std::fs::create_dir_all(out_path)?;
-                } else if path.file_name() == Some(OsStr::new("maprando-plando.exe")) {
-                    let mut outfile = File::create(&new_exe_path)?;
-                    std::io::copy(&mut file, &mut outfile)?;
-                } else {
-                    if let Some(parent) = out_path.parent() {
-                        if !parent.exists() {
-                            std::fs::create_dir_all(parent)?;
-                        }
-                    }
-                    let mut outfile = File::create(out_path)?;
-                    std::io::copy(&mut file, &mut outfile)?;
-                }
-            }
-
-            self_update::self_replace::self_replace(&new_exe_path)?;
-        }
-        _ => bail!("Unexpected file type")
-    }
-
-    println!("Removing tmp directory...");
-    std::fs::remove_dir_all(tmp_dir_path)?;
-
-    println!("Done!");
+fn download_update(asset: &Asset) -> Result<()> {
+    let exe_path = std::env::current_exe()?;
+    let exe_dir = exe_path.parent().unwrap();
+    let update_path = exe_dir.join("maprando-plando-update.exe");
+    let update_path_str = update_path.to_str().unwrap();
+    open::that(format!("{update_path_str}\" \"name={}\" \"url={}\" \"", asset.name, asset.url))?;
     Ok(())
 }
 
@@ -833,7 +758,7 @@ enum ModalType {
     None,
     Error(String),
     Status(String),
-    Info(String)
+    _Info(String)
 }
 
 struct View {
@@ -909,11 +834,13 @@ struct LoadData {
     plando_core: Plando,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Progress {
     LoadGameData,
     LoadPresetData,
     LoadSettings,
+    CheckUpdate,
+    FoundUpdate{ release: Release },
     LoadPlandoCore,
 }
 
@@ -951,16 +878,16 @@ struct PlandoApp {
 
     handle_spoiler: Option<JoinHandle<Result<()>>>,
     handle_patch: Option<(JoinHandle<Result<Rom>>, String)>,
+    handle_map_download: Option<JoinHandle<Result<()>>>,
 
     global_timer: u64
 }
 
 impl PlandoApp {
     const SETTINGS_PATH: &str = "../plando_settings.json";
-    const VERSION: &str = cargo_crate_version!();
 
     fn new_window_context() -> WindowContext {
-        let version_number = "v".to_string() + PlandoApp::VERSION;
+        let version_number = "v".to_string() + update::VERSION;
 
         let mut window = RenderWindow::new((1080, 720), &format!("Maprando Plando {version_number}"), Style::DEFAULT, &Default::default()).expect("Could not create Window");
         window.set_vertical_sync_enabled(false);
@@ -984,13 +911,13 @@ impl PlandoApp {
         }
     }
 
-    async fn load_data(tx: Sender<Progress>) -> Result<LoadData> {
-        tx.send(Progress::LoadGameData)?;
+    async fn load_data(mut rx: tokio::sync::mpsc::Receiver<bool>, tx: tokio::sync::mpsc::Sender<Progress>) -> Result<LoadData> {
+        tx.send(Progress::LoadGameData).await?;
         let game_data = GameData::load()?;
-        tx.send(Progress::LoadPresetData)?;
+        tx.send(Progress::LoadPresetData).await?;
         let preset_data = load_preset_data(&game_data)?;
 
-        tx.send(Progress::LoadSettings)?;
+        tx.send(Progress::LoadSettings).await?;
         let settings_path = Path::new(PlandoApp::SETTINGS_PATH);
         let settings = match load_settings(settings_path, &preset_data) {
             Ok(settings) => settings,
@@ -1000,7 +927,15 @@ impl PlandoApp {
             }
         };
 
-        tx.send(Progress::LoadPlandoCore)?;
+        tx.send(Progress::CheckUpdate).await?;
+        if let Ok(release) = check_update().await {
+            if !release.assets.is_empty() {
+                tx.send(Progress::FoundUpdate { release }).await?;
+                rx.recv().await;
+            }
+        }
+
+        tx.send(Progress::LoadPlandoCore).await?;
         let mut plando = Plando::new(game_data, preset_data.default_preset.clone(), &preset_data)?;
 
         let preset = match &settings.last_logic_preset {
@@ -1118,6 +1053,7 @@ impl PlandoApp {
 
             handle_spoiler: None,
             handle_patch: None,
+            handle_map_download: None,
 
             global_timer: 0
         })
@@ -1205,6 +1141,9 @@ impl PlandoApp {
 
         plando.load_preset(seed_data.settings);
 
+        plando.custom_escape_time = seed_data.custom_escape_time;
+        plando.creator_name = seed_data.creator_name;
+
         plando.load_map(seed_data.map);
 
         plando.item_locations = seed_data.item_placements;
@@ -1284,12 +1223,30 @@ impl PlandoApp {
                     bail!(err.to_string())
                 }
             }
+
+            self.handle_patch = None;
+        }
+
+        if let Some(handle) = self.handle_map_download.as_mut() && handle.is_finished() {
+            match handle.await {
+                Ok(res) => match res {
+                    Ok(_) => {
+                        self.modal_type = ModalType::None;
+                        self.plando.reload_map_repositories();
+                    }
+                    Err(err) => bail!(err.to_string())
+                },
+                Err(err) => if err.is_panic() {
+                    bail!(err.to_string())
+                }
+            }
+            self.handle_map_download = None;
         }
 
         Ok(())
     }
 
-    async fn update_spoiler_data(&mut self) -> Result<()> {
+    async fn _update_spoiler_data(&mut self) -> Result<()> {
         let handle = self.plando.update_spoiler_data()?;
 
         let res = match handle.await {
@@ -1450,9 +1407,6 @@ impl PlandoApp {
         let mut spoiler_window_bounds = FloatRect::default();
         let mut spoiler_details_hovered = false;
 
-        let mut download_thread_active = false;
-        let mut download_thread_handle: std::thread::JoinHandle<Result<(), anyhow::Error>> = thread::spawn(|| { Ok(()) });
-
         let mut frame_counter = 0;
         let mut start = Instant::now();
         let mut fps_text = graphics::Text::new("FPS: 0", &font_default, 12);
@@ -1472,17 +1426,6 @@ impl PlandoApp {
             self.view.window_size = window.size().as_other() - Vector2f::new(sidebar_width, 0.0);
             self.benchmark.split("Pre-event frame setup");
 
-            if download_thread_active {
-                if download_thread_handle.is_finished() {
-                    let res = download_thread_handle.join().unwrap();
-                    match res {
-                        Ok(_) => self.modal_type = ModalType::None,
-                        Err(err) => self.modal_type = ModalType::Error(err.to_string())
-                    }
-                    download_thread_active = false;
-                    download_thread_handle = thread::spawn(|| { Ok(()) }); // Reset the handle
-                }
-            }
             self.benchmark.split("Download thread handling");
 
             if self.spoiler_step != last_spoiler_step {
@@ -1769,9 +1712,8 @@ impl PlandoApp {
                                 ui.close_menu();
                             }
                             ui.separator();
-                            if ui.add_enabled(self.modal_type == ModalType::None, egui::Button::new("Download Map Repositories")).clicked() {
-                                download_thread_handle = thread::spawn(download_map_repos);
-                                download_thread_active = true;
+                            if ui.add_enabled(self.handle_map_download.is_none(), egui::Button::new("Download Map Repositories")).clicked() {
+                                self.handle_map_download = Some(tokio::spawn(download_map_repos()));
                                 self.modal_type = ModalType::Status("Downloading/Unpacking... This might take a while".to_string());
                             }
                         });
@@ -1838,6 +1780,11 @@ impl PlandoApp {
                             }
                             if ui.button("Logic Settings").clicked() {
                                 customize_logic_open = true;
+                                self.logic_customization.load(
+                                    self.plando.randomizer_settings.clone(),
+                                    self.plando.custom_escape_time.unwrap_or(0),
+                                    self.plando.creator_name.clone()
+                                );
                                 ui.close_menu();
                             }
                             if ui.button("Hotkeys").clicked() {
@@ -1853,12 +1800,20 @@ impl PlandoApp {
                 });
                 self.benchmark.split("Draw main menu bar");
 
-                if self.handle_spoiler.is_some() {
-                    egui::Window::new("Updating Spoiler")
+                if self.handle_spoiler.is_some() || self.handle_patch.is_some() {
+                    egui::Window::new("Updating Async Handle")
                     .resizable(false).movable(false).title_bar(false).min_width(320.0)
                     .fixed_pos(Vec2::new(rt.size().x as f32 - sidebar_width - 320.0, 32.0).to_pos2()).show(ctx, |ui| {
                         ui.horizontal(|ui| {
-                            ui.label("Updating Spoiler Data...");
+                            let str = if self.handle_spoiler.is_some() {
+                                "Updating Spoiler Data..."
+                            } else if self.handle_patch.is_some() {
+                                "Patching ROM..."
+                            } else {
+                                panic!("How???");
+                            };
+
+                            ui.label(str);
                             ui.spinner();
                         })
                     });
@@ -1946,6 +1901,7 @@ impl PlandoApp {
                                 true => Some(self.logic_customization.custom_escape_time),
                                 false => None
                             };
+                            self.plando.creator_name = self.logic_customization.creator_name.clone();
                             self.plando.load_preset(self.logic_customization.settings.clone());
                             self.settings.last_logic_preset = Some(self.logic_customization.settings.clone());
                             self.redraw_map(&mut tex_base_map);
@@ -1977,7 +1933,7 @@ impl PlandoApp {
                             ui.label(msg);
                         });
                     }
-                    ModalType::Info(msg) => {
+                    ModalType::_Info(msg) => {
                         let modal = egui::Modal::new(Id::new("modal_info")).show(ctx, |ui| {
                             ui.set_min_width(256.0);
                             ui.heading("Info");
@@ -1997,7 +1953,7 @@ impl PlandoApp {
             self.benchmark.split("Draw egui to screen");
 
             // Draw current version number
-            let mut version_text = graphics::Text::new(PlandoApp::VERSION, &font_default, 12);
+            let mut version_text = graphics::Text::new(update::VERSION, &font_default, 12);
             version_text.set_fill_color(Color::rgba(0xAF, 0xAF, 0xAF, 0xCF));
             version_text.set_position((2.0, window.size().y as f32 - 14.0));
             window.draw(&version_text);
@@ -3534,16 +3490,18 @@ async fn main() {
 
     let mut window_context = PlandoApp::new_window_context();
 
-    let (tx, rx) = std::sync::mpsc::channel();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    let (tx2, rx2) = tokio::sync::mpsc::channel(1);
 
     let load_data = tokio::spawn(async move {
-        PlandoApp::load_data(tx).await
+        PlandoApp::load_data(rx2, tx).await
     });
 
     let mut current_progress = Progress::LoadGameData;
 
     while window_context.window.is_open() && !load_data.is_finished() {
         while let Some(event) = window_context.window.poll_event() {
+            window_context.sfegui.add_event(&event);
             if event == Event::Closed {
                 window_context.window.close();
             }
@@ -3559,17 +3517,39 @@ async fn main() {
 
         window_context.window.clear(Color::TRANSPARENT);
 
-        let sf_draw_res = window_context.sfegui.run(&mut window_context.window, move |_rt, ctx| {
+        let sf_draw_res = window_context.sfegui.run(&mut window_context.window, |rt, ctx| {
             egui::Modal::new(egui::Id::new("modal_load_progress")).show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(match current_progress {
-                        Progress::LoadGameData => "Loading Super Metroid Game Data...",
-                        Progress::LoadPresetData => "Loading MapRandomizer presets...",
-                        Progress::LoadSettings => "Loading Plandomizer Settings...",
-                        Progress::LoadPlandoCore => "Loading Plandomizer Core...",
-                    });
-                    ui.spinner();
-                })
+                match &current_progress {
+                    Progress::FoundUpdate { release } => {
+                        ui.label(format!("Found update: {} -> {}. Do you want to update?", update::VERSION, release.version));
+                        ui.horizontal(|ui| {
+                            if ui.button("Yes").clicked() {
+                                load_data.abort();
+                                if download_update(&release.assets[0]).is_ok() {
+                                    rt.close();
+                                } else {
+                                    panic!("Could not open maprando-plando-update.exe");
+                                }
+                            }
+                            if ui.button("No").clicked() {
+                                let _ = tx2.blocking_send(true);
+                            }
+                        });
+                    },
+                    _ => {
+                        ui.horizontal(|ui| {
+                            ui.label(match &current_progress {
+                                Progress::LoadGameData => "Loading Super Metroid Game Data...",
+                                Progress::LoadPresetData => "Loading MapRandomizer presets...",
+                                Progress::LoadSettings => "Loading Plandomizer Settings...",
+                                Progress::LoadPlandoCore => "Loading Plandomizer Core...",
+                                Progress::CheckUpdate => "Checking for updates...",
+                                _ => "...",
+                            });
+                            ui.spinner();
+                        });
+                    }
+                }
             });
         }).unwrap();
         window_context.sfegui.draw(sf_draw_res, &mut window_context.window, None);
@@ -3577,7 +3557,14 @@ async fn main() {
         window_context.window.display();
     }
 
-    let load_data = load_data.await.unwrap().unwrap();
+    let load_data = match load_data.await {
+        Ok(res) => res.unwrap(),
+        Err(join_err) => if join_err.is_panic() {
+            panic!("Error while loading: {}", join_err.to_string());
+        } else {
+            return;
+        }
+    };
 
     let mut plando_app = PlandoApp::new(load_data).unwrap();
     plando_app.render_loop(window_context).await;

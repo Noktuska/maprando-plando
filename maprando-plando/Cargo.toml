@@ -15,9 +15,8 @@ glu-sys = "0.1.4"
 hashbrown = { version = "0.14.5", features = ["serde"] }
 open = "5.3.2"
 rand = "0.8.5"
-reqwest = { version = "0.12.15", features = ["blocking"] }
+reqwest = { version = "0.12.15" }
 rfd = "0.15.3"
-self_update = "0.42.0"
 serde_json = "1.0.91"
 serde = "1.0.152"
 serde_derive = "1.0.152"

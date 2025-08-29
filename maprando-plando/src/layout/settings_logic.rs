@@ -3,7 +3,7 @@ use std::{io::Write, path::Path};
 use anyhow::Result;
 use egui::Context;
 use hashbrown::HashMap;
-use maprando::{preset::PresetData, settings::{DoorLocksSize, DoorsMode, ETankRefill, Fanfares, InitialMapRevealSettings, ItemMarkers, MapRevealLevel, MapStationReveal, MotherBrainFight, ObjectiveScreen, ObjectiveSetting, RandomizerSettings, SaveAnimals, WallJump}};
+use maprando::{preset::PresetData, settings::{DoorLocksSize, ETankRefill, Fanfares, InitialMapRevealSettings, ItemMarkers, MapRevealLevel, MapStationReveal, MotherBrainFight, ObjectiveScreen, ObjectiveSetting, RandomizerSettings, SaveAnimals, WallJump}};
 use maprando_game::Item;
 use strum_macros::VariantArray;
 
@@ -23,6 +23,7 @@ pub struct LogicCustomization {
 
     pub use_custom_escape_time: bool,
     pub custom_escape_time: usize,
+    pub creator_name: String,
 }
 
 impl LogicCustomization {
@@ -35,14 +36,28 @@ impl LogicCustomization {
             customize_window_open: false,
             settings,
             use_custom_escape_time: false,
-            custom_escape_time: 0
+            custom_escape_time: 0,
+            creator_name: "Plando".to_string()
         }
+    }
+
+    pub fn load(&mut self, settings: RandomizerSettings, custom_escape_time: usize, creator_name: String) {
+        self.settings = settings.clone();
+        self.cur_settings = settings;
+        self.custom_escape_time = custom_escape_time;
+        self.creator_name = creator_name;
     }
 
     pub fn draw_window(&mut self, ctx: &Context) -> Result<bool> {
         let mut should_close = Ok(false);
 
         egui::Window::new("Logic Customization").resizable(false).title_bar(false).show(ctx, |ui| {
+            // Creator name
+            ui.horizontal(|ui| {
+                ui.label("Creator name").on_hover_text_at_pointer("This will replace the item progression preset. Max 9 characters");
+                let text_edit = egui::TextEdit::singleline(&mut self.creator_name).char_limit(9);
+                ui.add(text_edit);
+            });
             // Settings preset
             ui.horizontal(|ui| {
                 ui.label("Settings preset");

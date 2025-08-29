@@ -2,7 +2,7 @@ use std::{path::Path, sync::{Arc, MutexGuard}};
 
 use anyhow::{anyhow, bail, Result};
 use hashbrown::{HashMap, HashSet};
-use maprando::{customize::{mosaic::MosaicTheme, samus_sprite::SamusSpriteCategory, CustomizeSettings}, map_repository::MapRepository, patch::Rom, preset::PresetData, randomize::{DifficultyConfig, LockedDoor, Randomization, SpoilerLog}, settings::{Objective, RandomizerSettings, WallJump}, traverse::LockedDoorData};
+use maprando::{customize::{mosaic::MosaicTheme, samus_sprite::SamusSpriteCategory, CustomizeSettings}, map_repository::MapRepository, patch::Rom, preset::PresetData, randomize::{DifficultyConfig, LockedDoor, Randomization, SpoilerLog}, settings::{DoorsMode, Objective, RandomizerSettings, WallJump}, traverse::LockedDoorData};
 use maprando_game::{BeamType, DoorPtrPair, DoorType, GameData, HubLocation, Item, Map, NodeId, RoomId, StartLocation, VertexKey};
 use maprando_logic::{GlobalState, Inventory, LocalState};
 use rand::{rngs::StdRng, RngCore, SeedableRng};
@@ -203,6 +203,7 @@ pub struct Plando {
     pub gray_doors: HashSet<DoorPtrPair>,
     pub spoiler_overrides: Vec<SpoilerOverride>,
     pub custom_escape_time: Option<usize>,
+    pub creator_name: String,
 
     door_lock_loc: Vec<(usize, usize, usize)>,
     door_beam_loc: Vec<(usize, usize, usize)>,
@@ -267,6 +268,7 @@ impl Plando {
             gray_doors: get_gray_doors(),
             spoiler_overrides: Vec::new(),
             custom_escape_time: None,
+            creator_name: "Plando".to_string(),
 
             door_lock_loc: Vec::new(),
             door_beam_loc: Vec::new(),
@@ -331,6 +333,11 @@ impl Plando {
         }
     }
 
+    pub fn reload_map_repositories(&mut self) {
+        self.maps_standard = Self::load_map_repository(MapRepositoryType::Standard).map(|x| x.into());
+        self.maps_wild = Self::load_map_repository(MapRepositoryType::Standard).map(|x| x.into());
+    }
+
     pub fn load_map(&mut self, map: Map) {
         self.map_editor.load_map(map, &self.game_data);
         self.clear_item_locations();
@@ -348,6 +355,18 @@ impl Plando {
         Ok(())
     }
 
+    fn get_doors_mode(&self) -> DoorsMode {
+        let mut result = DoorsMode::Blue;
+        for door_lock in &self.locked_doors {
+            match door_lock.door_type {
+                DoorType::Red | DoorType::Green | DoorType::Yellow => result = DoorsMode::Ammo,
+                DoorType::Beam(_) => return DoorsMode::Beam,
+                _ => {}
+            }
+        }
+        result
+    }
+
     pub fn patch_rom(&mut self, rom_vanilla: &Rom, settings: CustomizeSettings, samus_sprite_categories: Vec<SamusSpriteCategory>, mosaic_themes: Vec<MosaicTheme>) -> Result<JoinHandle<Result<Rom>>> {
         if self.map_editor.error_list.iter().filter(|err| err.is_severe()).count() > 0 {
             bail!("Map has errors that need to be fixed");
@@ -360,10 +379,15 @@ impl Plando {
             }
         }
 
+        // Post process randomizer settings
+        let mut randomizer_settings = self.randomizer_settings.clone();
+        randomizer_settings.doors_mode = self.get_doors_mode();
+        randomizer_settings.item_progression_settings.preset = Some(self.creator_name.clone());
+        randomizer_settings.map_layout = self.creator_name.clone();
+
         let handle = self.update_spoiler_data()?;
         let arc = self.logic.get_randomization_arc();
 
-        let randomizer_settings = self.randomizer_settings.clone();
         let game_data = self.game_data.clone();
         let rom_vanilla = rom_vanilla.clone();
 
