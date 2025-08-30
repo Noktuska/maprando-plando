@@ -1259,7 +1259,7 @@ impl PlandoApp {
     }
 
     async fn update_handles(&mut self) -> Result<()> {
-        if let Some(handle) = self.handle_spoiler.as_mut() && handle.is_finished() {
+        if let Some(handle) = self.handle_spoiler.take() && handle.is_finished() {
             match handle.await {
                 Ok(res) => res?,
                 Err(err) => {
@@ -1269,12 +1269,11 @@ impl PlandoApp {
                 }
             }
 
-            self.handle_spoiler = None;
             self.schedule_redraw();
         }
 
-        if let Some((handle, save_path)) = self.handle_patch.as_mut() && handle.is_finished() {
-            let path = Path::new(save_path);
+        if let Some((handle, save_path)) = self.handle_patch.take() && handle.is_finished() {
+            let path = Path::new(&save_path);
             match handle.await {
                 Ok(res) => {
                     let rom = res?;
@@ -1295,11 +1294,9 @@ impl PlandoApp {
                 self.plando.load_preset(preset);
                 self.reset_after_patch = false;
             }
-
-            self.handle_patch = None;
         }
 
-        if let Some(handle) = self.handle_map_download.as_mut() && handle.is_finished() {
+        if let Some(handle) = self.handle_map_download.take() && handle.is_finished() {
             match handle.await {
                 Ok(res) => match res {
                     Ok(_) => {
@@ -1394,15 +1391,17 @@ impl PlandoApp {
                     let mut color_div = 1;
                     if !self.settings.disable_logic && !draw_subareas {
                         if let Some((_r, spoiler_log)) = &self.plando.get_randomization().as_ref() {
-                            let spoiler_room_loc = spoiler_log.all_rooms.iter().find(|x| {
+                            let spoiler_room_loc_opt = spoiler_log.all_rooms.iter().find(|x| {
                                 x.room_id == data.room_id
-                            }).unwrap();
+                            });
 
-                            if spoiler_room_loc.map_bireachable_step[local_y][local_x] > self.spoiler_step as u8 {
-                                color_div *= 2;
-                            }
-                            if spoiler_room_loc.map_reachable_step[local_y][local_x] > self.spoiler_step as u8 {
-                                color_div *= 3;
+                            if let Some(spoiler_room_loc) = spoiler_room_loc_opt {
+                                if spoiler_room_loc.map_bireachable_step[local_y][local_x] > self.spoiler_step as u8 {
+                                    color_div *= 2;
+                                }
+                                if spoiler_room_loc.map_reachable_step[local_y][local_x] > self.spoiler_step as u8 {
+                                    color_div *= 3;
+                                }
                             }
                         }
                     }

@@ -2,7 +2,7 @@ use std::{path::Path, sync::{Arc, MutexGuard}};
 
 use anyhow::{anyhow, bail, Result};
 use hashbrown::{HashMap, HashSet};
-use maprando::{customize::{mosaic::MosaicTheme, samus_sprite::SamusSpriteCategory, CustomizeSettings}, map_repository::MapRepository, patch::Rom, preset::PresetData, randomize::{DifficultyConfig, LockedDoor, Randomization, SpoilerLog}, settings::{DoorsMode, Objective, RandomizerSettings, WallJump}, traverse::LockedDoorData};
+use maprando::{customize::{mosaic::MosaicTheme, samus_sprite::SamusSpriteCategory, CustomizeSettings}, map_repository::MapRepository, patch::Rom, preset::PresetData, randomize::{DifficultyConfig, LockedDoor, Randomization, SpoilerLog}, settings::{DoorsMode, ItemCount, Objective, RandomizerSettings, WallJump}, traverse::LockedDoorData};
 use maprando_game::{BeamType, DoorPtrPair, DoorType, GameData, HubLocation, Item, Map, NodeId, RoomId, StartLocation, VertexKey};
 use maprando_logic::{GlobalState, Inventory, LocalState};
 use rand::{rngs::StdRng, RngCore, SeedableRng};
@@ -369,13 +369,8 @@ impl Plando {
             }
         }
 
-        // Post process randomizer settings
-        let mut randomizer_settings = self.randomizer_settings.clone();
-        randomizer_settings.doors_mode = DoorsMode::Beam;
-        randomizer_settings.item_progression_settings.preset = Some(self.creator_name.clone());
-        randomizer_settings.map_layout = self.creator_name.clone();
-
         let handle = self.update_spoiler_data()?;
+        let randomizer_settings = self.randomizer_settings.clone();
         let arc = self.logic.get_randomization_arc();
 
         let game_data = self.game_data.clone();
@@ -730,6 +725,22 @@ impl Plando {
     }
 
     pub fn is_map_logic_valid(&self) -> Result<()> {
+        // Ensure there are enough available item locations. Randomizer::new has an assert on this
+        let map = self.map();
+        let item_loc_count = self.game_data.item_locations.iter().filter(|(room_id, _)| {
+            let room_idx = self.room_id_to_idx(*room_id);
+            map.room_mask[room_idx]
+        }).count();
+        let start_items = &self.randomizer_settings.item_progression_settings.starting_items;
+        let start_tanks = start_items.iter().map(
+            |i| if i.item == Item::ETank || i.item == Item::ReserveTank { i.count } else { 0 }
+        ).sum::<usize>();
+
+        if item_loc_count + start_tanks < 13 {
+            bail!("Not enough available item locations. Need at least {}", 13 - start_tanks);
+        }
+
+        // Ensure certain doors (if placed) are always linked
         let needed_doors = vec![
             (321, 1), (321, 2), // Toilet top and bottom, because logic creates a link that skips over toilet
             (32, 1), // West Ocean Bottom Left Door, because logic links the bridge door
@@ -737,48 +748,45 @@ impl Plando {
         ];
 
         for door in needed_doors {
+            let room_idx = self.room_id_to_idx(door.0);
+            if !self.map().room_mask[room_idx] {
+                continue;
+            }
+
             let door_ptr_pair = self.game_data.reverse_door_ptr_pair_map[&door];
 
             if !self.map().doors.iter().any(|x| x.0 == door_ptr_pair || x.1 == door_ptr_pair) {
-                bail!("Door needs connection for logic to be calculated: ({}, {})", door.0, door.1);
+                let room_geometry = &self.game_data.room_geometry[room_idx];
+                let room_name = &room_geometry.name;
+                let node_name = self.game_data.node_json_map[&door]["name"].as_str().unwrap();
+                bail!("Door needs connection for logic to be calculated: {room_name}: {node_name}");
             }
         }
 
         Ok(())
     }
 
-    /*pub fn update_hub_location(&mut self) -> JoinHandle<Result<()>> {
-        let start_loc = &self.start_location_data.start_location;
-        
-        let locked_door_data = self.get_locked_door_data();
-        let implicit_tech = &self.preset_data.implicit_tech;
-        let implicit_notables = &self.preset_data.implicit_notables;
-        let difficulty = DifficultyConfig::new(
-            &self.randomizer_settings.skill_assumption_settings,
-            &self.game_data,
-            &implicit_tech,
-            &implicit_notables,
-        );
-        let filtered_base_links = maprando::randomize::filter_links(&self.game_data.links, &self.game_data, &difficulty);
-        let base_links_data = LinksDataGroup::new(
-            filtered_base_links,
-            self.game_data.vertex_isv.keys.len(),
-            0,
-        );
+    pub fn update_settings(&mut self) {
+        let settings = &mut self.randomizer_settings;
 
-        let (initial_global_state, _) = self.get_initial_states();
+        let empty_pool = (0..self.game_data.item_isv.keys.len()).map(|idx| {
+            ItemCount {
+                item: Item::try_from(idx).unwrap(),
+                count: 0
+            }
+        }).collect();
+        settings.item_progression_settings.item_pool = empty_pool;
 
-        self.logic.update_hub_location(
-            start_loc.clone(),
-            initial_global_state,
-            locked_door_data,
-            self.objectives.clone(),
-            base_links_data,
-            self.randomizer_settings.clone(),
-            self.difficulty_tiers.clone(),
-            self.map().clone()
-        )
-    }*/
+        settings.item_progression_settings.preset = Some(self.creator_name.clone());
+        settings.map_layout = self.creator_name.clone();
+
+        settings.other_settings.wall_jump = if self.item_locations.iter().any(|item| *item == Item::WallJump) {
+            WallJump::Collectible
+        } else {
+            WallJump::Vanilla
+        };
+        settings.doors_mode = DoorsMode::Beam;
+    }
 
     pub fn update_spoiler_data(&mut self) -> Result<JoinHandle<Result<()>>> {
         if let Err(err) = self.is_map_logic_valid() {
@@ -786,6 +794,7 @@ impl Plando {
             return Err(err);
         }
 
+        self.update_settings();
         self.update_overrides();
 
         let locked_door_data = self.get_locked_door_data();
