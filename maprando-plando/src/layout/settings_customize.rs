@@ -217,6 +217,8 @@ pub enum SettingsCustomizeResult {
 }
 
 pub struct SettingsCustomize {
+    pub open: bool,
+
     pub customization: Customization,
 
     pub samus_sprite_categories: Vec<SamusSpriteCategory>,
@@ -249,6 +251,7 @@ impl SettingsCustomize {
         .collect();
 
         Ok(Self {
+            open: false,
             customization: Customization::default(),
             samus_sprite_categories: samus_sprites,
             mosaic_themes

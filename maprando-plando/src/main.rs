@@ -1,4 +1,4 @@
-use crate::{backend::{map_editor::{self, MapEditor, MapErrorType}, plando::{get_double_item_offset, DoubleItemPlacement, MapRepositoryType, Placeable, Plando, SpoilerOverride, ITEM_VALUES}, randomize::get_vertex_info}, benchmark::{Benchmark, BenchmarkResult}, input_state::KeyState, layout::{hotkey_settings::Keybind, map_editor_ui::MapEditorUi, room_search::{RoomSearch, SearchOpt}, settings_customize::{Customization, SettingsCustomize, SettingsCustomizeResult}, settings_logic::LogicCustomization, Layout, SidebarPanel, WindowType}, texture_manager::TextureManager, update::{Asset, Release}};
+use crate::{backend::{map_editor::{self, MapEditor, MapErrorType}, plando::{get_double_item_offset, DoubleItemPlacement, MapRepositoryType, Placeable, Plando, SpoilerOverride, ITEM_VALUES}, randomize::get_vertex_info}, benchmark::{Benchmark, BenchmarkResult}, egui_sfml::DrawInput, input_state::KeyState, layout::{hotkey_settings::Keybind, map_editor_ui::MapEditorUi, room_search::{RoomSearch, SearchOpt}, settings_customize::{Customization, SettingsCustomize, SettingsCustomizeResult}, settings_logic::LogicCustomization, Layout, SidebarPanel, WindowType}, texture_manager::TextureManager, update::{Asset, Release}};
 use anyhow::{anyhow, bail, Result};
 use egui::{self, style::default_text_styles, Color32, Context, FontDefinitions, Id, RichText, Sense, Ui, Vec2};
 use egui_sfml::{SfEgui, UserTexSource};
@@ -895,6 +895,8 @@ struct PlandoApp {
     hide_warnings: bool,
     hide_errors: bool,
     should_redraw: bool,
+    reset_after_patch: bool,
+    settings_open: bool,
 
     handle_spoiler: Option<JoinHandle<Result<()>>>,
     handle_patch: Option<(JoinHandle<Result<Rom>>, String)>,
@@ -1072,6 +1074,8 @@ impl PlandoApp {
             hide_warnings: false,
             hide_errors: false,
             should_redraw: false,
+            reset_after_patch: false,
+            settings_open: false,
 
             handle_spoiler: None,
             handle_patch: None,
@@ -1282,6 +1286,16 @@ impl PlandoApp {
                 }
             }
 
+            if self.reset_after_patch {
+                let _ = self.plando.reroll_map(MapRepositoryType::Vanilla);
+                let preset = match self.settings.last_logic_preset.as_ref() {
+                    Some(preset) => preset.clone(),
+                    None => self.logic_customization.preset_data.default_preset.clone()
+                };
+                self.plando.load_preset(preset);
+                self.reset_after_patch = false;
+            }
+
             self.handle_patch = None;
         }
 
@@ -1454,14 +1468,8 @@ impl PlandoApp {
             style.text_styles = def;
         });
 
-        let mut settings_open = false;
-        let mut customize_open = false;
-        let mut customize_logic_open = false;
-        let mut reset_after_patch = false;
-
         let mut sidebar_selection: Option<Placeable> = None;
         let mut spoiler_window_bounds = FloatRect::default();
-        let mut spoiler_details_hovered = false;
 
         let mut frame_counter = 0;
         let mut start = Instant::now();
@@ -1500,11 +1508,6 @@ impl PlandoApp {
             }
             self.benchmark.split("Pre-render map layout");
 
-            // mouse_is_public is true if the mouse is on the map view and not on some GUI
-            self.is_mouse_public = !(spoiler_details_hovered || settings_open || customize_open || customize_logic_open || self.modal_type != ModalType::None
-                || spoiler_window_bounds.contains(self.mouse_state.get_mouse_pos()) || self.mouse_state.mouse_x >= window.size().x as f32 - sidebar_width
-                || !self.map_editor.dragged_room_idx.is_empty() || self.override_window.is_some() || self.layout.is_open_any());
-
             while let Some(ev) = window.poll_event() {
                 sfegui.scroll_factor = self.settings.scroll_speed;
                 sfegui.add_event(&ev);
@@ -1541,8 +1544,6 @@ impl PlandoApp {
                 }
             }
             self.benchmark.split("SFML Event handling");
-
-            let window_size = window.size();
 
             if !self.layout.is_open(WindowType::HotkeySettings) {
                 for (idx, hotkey) in self.layout.hotkey_settings.get_hotkeys().iter().enumerate() {
@@ -1581,13 +1582,16 @@ impl PlandoApp {
             }
             self.benchmark.split("Hotkey handling");
 
+            let gui = self.sfegui_pass(&mut sfegui, &mut *window, &mut sidebar_width, &mut sidebar_selection, &last_benchmark, &mut spoiler_window_bounds).unwrap();
+            self.is_mouse_public &= self.map_editor.dragged_room_idx.is_empty();
+            self.is_mouse_public &= self.modal_type == ModalType::None;
+            self.benchmark.split("SfEgui context run");
+
             // Drag to pan the view
             if self.mouse_state.is_button_down(mouse::Button::Middle) && self.is_mouse_public {
                 self.view.x_offset += self.mouse_state.mouse_dx;
                 self.view.y_offset += self.mouse_state.mouse_dy;
             }
-
-            spoiler_details_hovered = false;
 
             window.set_framerate_limit(self.settings.fps_cap);
             window.clear(Color::rgb(0x1F, 0x1F, 0x1F));
@@ -1597,11 +1601,9 @@ impl PlandoApp {
             states.transform.scale(self.view.zoom, self.view.zoom);
 
             // Don't render map if we're patching from a seed file to not spoiler the user
-            if !reset_after_patch {
+            if !self.reset_after_patch {
                 // Draw background grid
                 if !self.settings.disable_bg_grid {
-                    //let spr_bg_grid = graphics::Sprite::with_texture_and_rect(&tex_grid, IntRect::new(0, 0, 8 * PlandoApp::GRID_SIZE as i32, 8 * PlandoApp::GRID_SIZE as i32));
-                    //window.draw_with_renderstates(&spr_bg_grid, &states);
                     self.draw_background_grid(&mut *window, &states, &tex_grid);
                 }
                 self.benchmark.split("Draw background grid");
@@ -1670,363 +1672,6 @@ impl PlandoApp {
                 self.spoiler_type = SpoilerType::None;
             }
 
-            // Draw Menu Bar
-            let gui = sfegui.run(&mut window, |rt, ctx| {
-                egui::TopBottomPanel::top("menu_file_main").show(ctx, |ui| {
-                    egui::menu::bar(ui, |ui| {
-                        ui.menu_button("File", |ui| {
-                            if ui.button("Save Seed").clicked() {
-                                let file_opt = FileDialog::new()
-                                    .set_title("Save Seed as JSON file")
-                                    .set_directory("/")
-                                    .add_filter("JSON File", &["json"])
-                                    .save_file();
-                                if let Some(file) = file_opt {
-                                    if let Err(err) = self.save_seed(file.as_path()) {
-                                        self.modal_type = ModalType::Error(err.to_string());
-                                    }
-                                }
-                                ui.close_menu();
-                            }
-                            if ui.button("Load Seed").clicked() {
-                                let file_opt = FileDialog::new()
-                                    .set_title("Load seed from JSON file")
-                                    .set_directory("/")
-                                    .add_filter("JSON File", &["json"])
-                                    .pick_file();
-                                if let Some(file) = file_opt {
-                                    match self.load_seed(file.as_path()) {
-                                        Ok(_) => {}
-                                        Err(err) => self.modal_type = ModalType::Error(err.to_string())
-                                    }
-                                    self.redraw_map(&mut tex_base_map);
-                                }
-                                ui.close_menu();
-                            }
-                            ui.add_enabled_ui(!self.settings.recent_seeds.is_empty(), |ui| {
-                                ui.menu_button("Recent Seeds", |ui| {
-                                    for seed in &self.settings.recent_seeds {
-                                        let seed = seed.clone();
-                                        let path = Path::new(&seed);
-                                        let name = match path.file_name() {
-                                            Some(s) => s.to_str().unwrap().to_string(),
-                                            None => continue
-                                        };
-                                        if ui.button(name).clicked() {
-                                            match self.load_seed(path) {
-                                                Ok(_) => {}
-                                                Err(err) => self.modal_type = ModalType::Error(err.to_string())
-                                            }
-                                            self.schedule_redraw();
-                                            ui.close_menu();
-                                            break;
-                                        }
-                                    }
-                                });
-                            });
-                            ui.separator();
-                            if ui.button("Patch ROM").clicked() {
-                                customize_open = true;
-                                ui.close_menu();
-                            }
-                            if ui.button("Patch ROM from seed file").clicked() {
-                                if let Some(file) = FileDialog::new()
-                                .set_title("Select seed JSON file to load and patch")
-                                .set_directory("/").add_filter("JSON File", &["json"]).pick_file() {
-                                    match self.load_seed(&file) {
-                                        Ok(_) => {
-                                            customize_open = true;
-                                            reset_after_patch = true;
-                                        }
-                                        Err(err) => self.modal_type = ModalType::Error(err.to_string())
-                                    }
-                                    ui.close_menu();
-                                }
-                            }
-                        });
-                        ui.menu_button("Map", |ui| {
-                            if ui.button("Reroll Map (Vanilla)").clicked() {
-                                self.plando.reroll_map(MapRepositoryType::Vanilla).unwrap();
-                                self.redraw_map(&mut tex_base_map);
-                                ui.close_menu();
-                            }
-                            if ui.add_enabled(self.plando.does_repo_exist(MapRepositoryType::Standard), egui::Button::new("Reroll Map (Standard)")).clicked() {
-                                self.plando.reroll_map(MapRepositoryType::Standard).unwrap();
-                                self.redraw_map(&mut tex_base_map);
-                            }
-                            if ui.add_enabled(self.plando.does_repo_exist(MapRepositoryType::Wild), egui::Button::new("Reroll Map (Wild)")).clicked() {
-                                self.plando.reroll_map(MapRepositoryType::Wild).unwrap();
-                                self.redraw_map(&mut tex_base_map);
-                            }
-                            ui.separator();
-                            if ui.button("Save Map to file").clicked() {
-                                let file_opt = FileDialog::new()
-                                    .set_title("Save Map to JSON file")
-                                    .set_directory("/")
-                                    .add_filter("JSON File", &["json"])
-                                    .save_file();
-                                if let Some(file) = file_opt {
-                                    let res = self.plando.map_editor.save_map(file.as_path());
-                                    if res.is_err() {
-                                        self.modal_type = ModalType::Error(res.unwrap_err().to_string());
-                                    }
-                                }
-                                ui.close_menu();
-                            }
-                            if ui.button("Load Map from file").clicked() {
-                                let file_opt = FileDialog::new()
-                                    .set_title("Select Map JSON to load")
-                                    .set_directory("/")
-                                    .add_filter("JSON File", &["json"])
-                                    .pick_file();
-                                if let Some(file) = file_opt {
-                                    match self.plando.load_map_from_file(&file) {
-                                        Ok(_) => {},
-                                        Err(err) => self.modal_type = ModalType::Error(err.to_string())
-                                    }
-                                }
-                                ui.close_menu();
-                            }
-                            ui.separator();
-                            if ui.add_enabled(self.handle_map_download.is_none(), egui::Button::new("Download Map Repositories")).clicked() {
-                                self.handle_map_download = Some(tokio::spawn(download_map_repos()));
-                                self.modal_type = ModalType::Status("Downloading/Unpacking... This might take a while".to_string());
-                            }
-                        });
-                        ui.menu_button("Items", |ui| {
-                            if ui.button("Clear all Items").clicked() {
-                                self.plando.clear_item_locations();
-                                if self.settings.spoiler_auto_update {
-                                    if let Err(err) = self.update_spoiler_data_async() {
-                                        self.modal_type = ModalType::Error(err.to_string());
-                                    }
-                                }
-                            }
-                            if ui.button("Clear all Doors").clicked() {
-                                self.plando.clear_doors();
-                                if self.settings.spoiler_auto_update {
-                                    if let Err(err) = self.update_spoiler_data_async() {
-                                        self.modal_type = ModalType::Error(err.to_string());
-                                    }
-                                }
-                            }
-                            ui.separator();
-                            if ui.button("Replace Nothings with Missiles").clicked() {
-                                for i in 0..self.plando.item_locations.len() {
-                                    if self.plando.item_locations[i] == Item::Nothing {
-                                        let _ = self.plando.place_item(i, Item::Missile);
-                                    }
-                                }
-                                if self.settings.spoiler_auto_update {
-                                    if let Err(err) = self.update_spoiler_data_async() {
-                                        self.modal_type = ModalType::Error(err.to_string());
-                                    }
-                                }
-                                ui.close_menu();
-                            }
-                            if ui.button("Randomize Doors").clicked() {
-                                self.plando.clear_doors();
-
-                                let seed = (self.plando.rng.next_u64() & 0xFFFFFFFF) as usize;
-                                let locked_door_data = maprando::randomize::randomize_doors(&self.plando.game_data, self.plando.map(), &self.plando.randomizer_settings, &self.plando.objectives, seed);
-                                for door in locked_door_data.locked_doors {
-                                    let (room_idx, door_idx) = self.plando.game_data.room_and_door_idxs_by_door_ptr_pair[&door.src_ptr_pair];
-                                    let _ = self.plando.place_door(room_idx, door_idx, Some(door.door_type), false);
-                                }
-
-                                if self.settings.spoiler_auto_update {
-                                    if let Err(err) = self.update_spoiler_data_async() {
-                                        self.modal_type = ModalType::Error(err.to_string());
-                                    }
-                                }
-                            }
-
-                            ui.separator();
-                            if ui.button("Reset all Spoiler Overrides").clicked() {
-                                self.plando.spoiler_overrides.clear();
-                                if self.settings.spoiler_auto_update {
-                                    let _ = self.update_spoiler_data_async();
-                                }
-                            }
-                        });
-                        ui.menu_button("Settings", |ui| {
-                            if ui.button("Plando Settings").clicked() {
-                                settings_open = true;
-                                ui.close_menu();
-                            }
-                            if ui.button("Logic Settings").clicked() {
-                                customize_logic_open = true;
-                                self.logic_customization.load(
-                                    self.plando.randomizer_settings.clone(),
-                                    self.plando.custom_escape_time.unwrap_or(0),
-                                    self.plando.creator_name.clone()
-                                );
-                                ui.close_menu();
-                            }
-                            if ui.button("Hotkeys").clicked() {
-                                self.layout.open(WindowType::HotkeySettings);
-                            }
-                        });
-                        if ui.button("Github").clicked() {
-                            if let Err(err) = open::that("https://github.com/Noktuska/maprando-plando/blob/main/README.md") {
-                                self.modal_type = ModalType::Error(err.to_string());
-                            }
-                        }
-                    });
-                });
-                self.benchmark.split("Draw main menu bar");
-
-                if self.handle_spoiler.is_some() || self.handle_patch.is_some() {
-                    egui::Window::new("Updating Async Handle")
-                    .resizable(false).movable(false).title_bar(false).min_width(320.0)
-                    .fixed_pos(Vec2::new(rt.size().x as f32 - sidebar_width - 320.0, 32.0).to_pos2()).show(ctx, |ui| {
-                        ui.horizontal(|ui| {
-                            let str = if self.handle_spoiler.is_some() {
-                                "Updating Spoiler Data..."
-                            } else if self.handle_patch.is_some() {
-                                "Patching ROM..."
-                            } else {
-                                panic!("How???");
-                            };
-
-                            ui.label(str);
-                            ui.spinner();
-                        })
-                    });
-                }
-                self.benchmark.split("Draw async handle progress window");
-
-                self.layout.render(ctx);
-                self.benchmark.split("Draw generic layout windows");
-
-                // Draw item selection sidebar
-                let max_sidebar_width = (window_size.x / 2) as f32;
-                sidebar_width = egui::SidePanel::right("panel_item_select").width_range(128.0..=max_sidebar_width).show(ctx, |ui| {
-                    self.draw_sidebar(ui, &mut sidebar_selection, &last_benchmark);
-                }).response.rect.width();
-                self.benchmark.split("Draw sidebar");
-
-                // Draw Spoiler Details Window
-                if !reset_after_patch {
-                    if self.spoiler_type != SpoilerType::None && self.plando.get_randomization().is_some() {
-                        spoiler_details_hovered = self.draw_spoiler_details(ctx);
-                    } else if self.plando.get_randomization().is_some() {
-                        spoiler_window_bounds = self.draw_spoiler_summary(ctx, self.mouse_state.mouse_y as f32, spoiler_window_bounds);
-                    }
-                }
-                self.benchmark.split("Draw spoiler details/summary window");
-
-                if self.override_window.is_some() {
-                    spoiler_details_hovered |= self.draw_spoiler_override(ctx);
-                    self.benchmark.split("Draw spoiler overrides");
-                }
-
-                if settings_open {
-                    settings_open = self.draw_settings_window(ctx);
-                    self.benchmark.split("Draw settings window");
-                }
-
-                if customize_open {
-                    match self.settings_customization.draw_customization_window(ctx) {
-                        SettingsCustomizeResult::Idle => {},
-                        SettingsCustomizeResult::Cancel => customize_open = false,
-                        SettingsCustomizeResult::Apply => {
-                            self.settings.last_customization = self.settings_customization.customization.clone();
-                            if self.rom_vanilla.is_none() {
-                                if let Some(file) = FileDialog::new().set_title("Select vanilla ROM")
-                                .set_directory("/").add_filter("Snes ROM", &["sfc", "smc"]).pick_file() {
-                                    self.settings.rom_path = file.to_str().unwrap().to_string();
-                                    match load_vanilla_rom(&Path::new(&self.settings.rom_path)) {
-                                        Ok(rom) => self.rom_vanilla = Some(rom),
-                                        Err(err) => self.modal_type = ModalType::Error(err.to_string())
-                                    }
-                                }
-                            }
-                            if self.rom_vanilla.is_some() {
-                                if let Some(file_out) = FileDialog::new().set_title("Select output location")
-                                .set_directory("/")
-                                .add_filter("Snes ROM", &["sfc"])
-                                .save_file() {
-                                    if let Err(err) = self.patch_rom(&file_out) {
-                                        self.modal_type = ModalType::Error(err.to_string());
-                                    }
-                                    customize_open = false;
-                                }
-                            }
-                        },
-                        SettingsCustomizeResult::Error(err) => self.modal_type = ModalType::Error(err),
-                    }
-
-                    if !customize_open && reset_after_patch {
-                        let _ = self.plando.reroll_map(MapRepositoryType::Vanilla);
-                        let preset = match self.settings.last_logic_preset.as_ref() {
-                            Some(preset) => preset.clone(),
-                            None => self.logic_customization.preset_data.default_preset.clone()
-                        };
-                        self.plando.load_preset(preset);
-                        reset_after_patch = false;
-                    }
-                    self.benchmark.split("Draw seed customization window");
-                }
-
-                if customize_logic_open {
-                    match self.logic_customization.draw_window(ctx) {
-                        Ok(should_close) => if should_close {
-                            customize_logic_open = false;
-                            self.plando.custom_escape_time = match self.logic_customization.use_custom_escape_time {
-                                true => Some(self.logic_customization.custom_escape_time),
-                                false => None
-                            };
-                            self.plando.creator_name = self.logic_customization.creator_name.clone();
-                            self.plando.load_preset(self.logic_customization.settings.clone());
-                            self.settings.last_logic_preset = Some(self.logic_customization.settings.clone());
-                            self.settings.creator_name = self.logic_customization.creator_name.clone();
-                            self.settings.custom_escape_time = self.plando.custom_escape_time;
-                            self.redraw_map(&mut tex_base_map);
-                        }
-                        Err(err) => self.modal_type = ModalType::Error(err.to_string())
-                    }
-                    self.benchmark.split("Draw logic customization window");
-                }
-
-                match self.modal_type.clone() {
-                    ModalType::None => {}
-                    ModalType::Error(msg) => {
-                        let modal = egui::Modal::new(Id::new("modal_error")).show(ctx, |ui| {
-                            ui.set_min_width(256.0);
-                            ui.heading("Error");
-                            ui.label(msg);
-                            if ui.button("OK").clicked() {
-                                self.modal_type = ModalType::None;
-                            }
-                        });
-                        if modal.should_close() {
-                            self.modal_type = ModalType::None;
-                        }
-                    }
-                    ModalType::Status(msg) => {
-                        egui::Modal::new(Id::new("modal_status")).show(ctx, |ui| {
-                            ui.set_min_width(256.0);
-                            ui.heading("Status");
-                            ui.label(msg);
-                        });
-                    }
-                    ModalType::_Info(msg) => {
-                        let modal = egui::Modal::new(Id::new("modal_info")).show(ctx, |ui| {
-                            ui.set_min_width(256.0);
-                            ui.heading("Info");
-                            ui.label(msg);
-                            if ui.button("OK").clicked() {
-                                self.modal_type = ModalType::None;
-                            }
-                        });
-                        if modal.should_close() {
-                            self.modal_type = ModalType::None;
-                        }
-                    }
-                }
-                self.benchmark.split("Draw modals");
-            }).unwrap();
             sfegui.draw(gui, &mut window, Some(&mut self.texture_manager));
             self.benchmark.split("Draw egui to screen");
 
@@ -2051,6 +1696,360 @@ impl PlandoApp {
 
             window.display();
         }
+    }
+
+    fn sfegui_pass(&mut self, sfegui: &mut SfEgui, rw: &mut RenderWindow, sidebar_width: &mut f32, sidebar_selection: &mut Option<Placeable>, last_benchmark: &BenchmarkResult, spoiler_window_bounds: &mut FloatRect) -> Result<DrawInput> {
+        let gui = sfegui.run(rw, |rt, ctx| {
+            egui::TopBottomPanel::top("menu_file_main").show(ctx, |ui| {
+                egui::menu::bar(ui, |ui| {
+                    ui.menu_button("File", |ui| {
+                        if ui.button("Save Seed").clicked() {
+                            let file_opt = FileDialog::new()
+                                .set_title("Save Seed as JSON file")
+                                .set_directory("/")
+                                .add_filter("JSON File", &["json"])
+                                .save_file();
+                            if let Some(file) = file_opt {
+                                if let Err(err) = self.save_seed(file.as_path()) {
+                                    self.modal_type = ModalType::Error(err.to_string());
+                                }
+                            }
+                            ui.close_menu();
+                        }
+                        if ui.button("Load Seed").clicked() {
+                            let file_opt = FileDialog::new()
+                                .set_title("Load seed from JSON file")
+                                .set_directory("/")
+                                .add_filter("JSON File", &["json"])
+                                .pick_file();
+                            if let Some(file) = file_opt {
+                                match self.load_seed(file.as_path()) {
+                                    Ok(_) => {}
+                                    Err(err) => self.modal_type = ModalType::Error(err.to_string())
+                                }
+                                self.schedule_redraw();
+                            }
+                            ui.close_menu();
+                        }
+                        ui.add_enabled_ui(!self.settings.recent_seeds.is_empty(), |ui| {
+                            ui.menu_button("Recent Seeds", |ui| {
+                                for seed in &self.settings.recent_seeds {
+                                    let seed = seed.clone();
+                                    let path = Path::new(&seed);
+                                    let name = match path.file_name() {
+                                        Some(s) => s.to_str().unwrap().to_string(),
+                                        None => continue
+                                    };
+                                    if ui.button(name).clicked() {
+                                        match self.load_seed(path) {
+                                            Ok(_) => {}
+                                            Err(err) => self.modal_type = ModalType::Error(err.to_string())
+                                        }
+                                        self.schedule_redraw();
+                                        ui.close_menu();
+                                        break;
+                                    }
+                                }
+                            });
+                        });
+                        ui.separator();
+                        if ui.button("Patch ROM").clicked() {
+                            self.settings_customization.open = true;
+                            ui.close_menu();
+                        }
+                        if ui.button("Patch ROM from seed file").clicked() {
+                            if let Some(file) = FileDialog::new()
+                            .set_title("Select seed JSON file to load and patch")
+                            .set_directory("/").add_filter("JSON File", &["json"]).pick_file() {
+                                match self.load_seed(&file) {
+                                    Ok(_) => {
+                                        self.settings_customization.open = true;
+                                        self.reset_after_patch = true;
+                                    }
+                                    Err(err) => self.modal_type = ModalType::Error(err.to_string())
+                                }
+                                ui.close_menu();
+                            }
+                        }
+                    });
+                    ui.menu_button("Map", |ui| {
+                        if ui.button("Reroll Map (Vanilla)").clicked() {
+                            self.plando.reroll_map(MapRepositoryType::Vanilla).unwrap();
+                            self.schedule_redraw();
+                            ui.close_menu();
+                        }
+                        if ui.add_enabled(self.plando.does_repo_exist(MapRepositoryType::Standard), egui::Button::new("Reroll Map (Standard)")).clicked() {
+                            self.plando.reroll_map(MapRepositoryType::Standard).unwrap();
+                            self.schedule_redraw();
+                        }
+                        if ui.add_enabled(self.plando.does_repo_exist(MapRepositoryType::Wild), egui::Button::new("Reroll Map (Wild)")).clicked() {
+                            self.plando.reroll_map(MapRepositoryType::Wild).unwrap();
+                            self.schedule_redraw();
+                        }
+                        ui.separator();
+                        if ui.button("Save Map to file").clicked() {
+                            let file_opt = FileDialog::new()
+                                .set_title("Save Map to JSON file")
+                                .set_directory("/")
+                                .add_filter("JSON File", &["json"])
+                                .save_file();
+                            if let Some(file) = file_opt {
+                                let res = self.plando.map_editor.save_map(file.as_path());
+                                if res.is_err() {
+                                    self.modal_type = ModalType::Error(res.unwrap_err().to_string());
+                                }
+                            }
+                            ui.close_menu();
+                        }
+                        if ui.button("Load Map from file").clicked() {
+                            let file_opt = FileDialog::new()
+                                .set_title("Select Map JSON to load")
+                                .set_directory("/")
+                                .add_filter("JSON File", &["json"])
+                                .pick_file();
+                            if let Some(file) = file_opt {
+                                match self.plando.load_map_from_file(&file) {
+                                    Ok(_) => {},
+                                    Err(err) => self.modal_type = ModalType::Error(err.to_string())
+                                }
+                            }
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.add_enabled(self.handle_map_download.is_none(), egui::Button::new("Download Map Repositories")).clicked() {
+                            self.handle_map_download = Some(tokio::spawn(download_map_repos()));
+                            self.modal_type = ModalType::Status("Downloading/Unpacking... This might take a while".to_string());
+                        }
+                    });
+                    ui.menu_button("Items", |ui| {
+                        if ui.button("Clear all Items").clicked() {
+                            self.plando.clear_item_locations();
+                            if self.settings.spoiler_auto_update {
+                                if let Err(err) = self.update_spoiler_data_async() {
+                                    self.modal_type = ModalType::Error(err.to_string());
+                                }
+                            }
+                        }
+                        if ui.button("Clear all Doors").clicked() {
+                            self.plando.clear_doors();
+                            if self.settings.spoiler_auto_update {
+                                if let Err(err) = self.update_spoiler_data_async() {
+                                    self.modal_type = ModalType::Error(err.to_string());
+                                }
+                            }
+                        }
+                        ui.separator();
+                        if ui.button("Replace Nothings with Missiles").clicked() {
+                            for i in 0..self.plando.item_locations.len() {
+                                if self.plando.item_locations[i] == Item::Nothing {
+                                    let _ = self.plando.place_item(i, Item::Missile);
+                                }
+                            }
+                            if self.settings.spoiler_auto_update {
+                                if let Err(err) = self.update_spoiler_data_async() {
+                                    self.modal_type = ModalType::Error(err.to_string());
+                                }
+                            }
+                            ui.close_menu();
+                        }
+                        if ui.button("Randomize Doors").clicked() {
+                            self.plando.clear_doors();
+
+                            let seed = (self.plando.rng.next_u64() & 0xFFFFFFFF) as usize;
+                            let locked_door_data = maprando::randomize::randomize_doors(&self.plando.game_data, self.plando.map(), &self.plando.randomizer_settings, &self.plando.objectives, seed);
+                            for door in locked_door_data.locked_doors {
+                                let (room_idx, door_idx) = self.plando.game_data.room_and_door_idxs_by_door_ptr_pair[&door.src_ptr_pair];
+                                let _ = self.plando.place_door(room_idx, door_idx, Some(door.door_type), false);
+                            }
+
+                            if self.settings.spoiler_auto_update {
+                                if let Err(err) = self.update_spoiler_data_async() {
+                                    self.modal_type = ModalType::Error(err.to_string());
+                                }
+                            }
+                        }
+
+                        ui.separator();
+                        if ui.button("Reset all Spoiler Overrides").clicked() {
+                            self.plando.spoiler_overrides.clear();
+                            if self.settings.spoiler_auto_update {
+                                let _ = self.update_spoiler_data_async();
+                            }
+                        }
+                    });
+                    ui.menu_button("Settings", |ui| {
+                        if ui.button("Plando Settings").clicked() {
+                            self.settings_open = true;
+                            ui.close_menu();
+                        }
+                        if ui.button("Logic Settings").clicked() {
+                            self.logic_customization.open = true;
+                            self.logic_customization.load(
+                                self.plando.randomizer_settings.clone(),
+                                self.plando.custom_escape_time.unwrap_or(0),
+                                self.plando.creator_name.clone()
+                            );
+                            ui.close_menu();
+                        }
+                        if ui.button("Hotkeys").clicked() {
+                            self.layout.open(WindowType::HotkeySettings);
+                        }
+                    });
+                    if ui.button("Github").clicked() {
+                        if let Err(err) = open::that("https://github.com/Noktuska/maprando-plando/blob/main/README.md") {
+                            self.modal_type = ModalType::Error(err.to_string());
+                        }
+                    }
+                });
+            });
+            self.benchmark.split("Draw main menu bar");
+
+            if self.handle_spoiler.is_some() || self.handle_patch.is_some() {
+                egui::Window::new("Updating Async Handle")
+                .resizable(false).movable(false).title_bar(false).min_width(320.0)
+                .fixed_pos(Vec2::new(rt.size().x as f32 - *sidebar_width - 320.0, 32.0).to_pos2()).show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        let str = if self.handle_spoiler.is_some() {
+                            "Updating Spoiler Data..."
+                        } else if self.handle_patch.is_some() {
+                            "Patching ROM..."
+                        } else {
+                            panic!("How???");
+                        };
+
+                        ui.label(str);
+                        ui.spinner();
+                    })
+                });
+            }
+            self.benchmark.split("Draw async handle progress window");
+
+            self.layout.render(ctx);
+            self.benchmark.split("Draw generic layout windows");
+
+            // Draw item selection sidebar
+            let window_size = rt.size();
+            let max_sidebar_width = (window_size.x / 2) as f32;
+            *sidebar_width = egui::SidePanel::right("panel_item_select").width_range(128.0..=max_sidebar_width).show(ctx, |ui| {
+                self.draw_sidebar(ui, sidebar_selection, last_benchmark);
+            }).response.rect.width();
+            self.benchmark.split("Draw sidebar");
+
+            // Draw Spoiler Details Window
+            if !self.reset_after_patch {
+                if self.spoiler_type != SpoilerType::None && self.plando.get_randomization().is_some() {
+                    self.draw_spoiler_details(ctx);
+                } else if self.plando.get_randomization().is_some() {
+                    *spoiler_window_bounds = self.draw_spoiler_summary(ctx, self.mouse_state.mouse_y as f32, *spoiler_window_bounds);
+                }
+            }
+            self.benchmark.split("Draw spoiler details/summary window");
+
+            if self.override_window.is_some() {
+                self.draw_spoiler_override(ctx);
+                self.benchmark.split("Draw spoiler overrides");
+            }
+
+            if self.settings_open {
+                self.settings_open = self.draw_settings_window(ctx);
+                self.benchmark.split("Draw settings window");
+            }
+
+            if self.settings_customization.open {
+                match self.settings_customization.draw_customization_window(ctx) {
+                    SettingsCustomizeResult::Idle => {},
+                    SettingsCustomizeResult::Cancel => self.settings_customization.open = false,
+                    SettingsCustomizeResult::Apply => {
+                        self.settings.last_customization = self.settings_customization.customization.clone();
+                        if self.rom_vanilla.is_none() {
+                            if let Some(file) = FileDialog::new().set_title("Select vanilla ROM")
+                            .set_directory("/").add_filter("Snes ROM", &["sfc", "smc"]).pick_file() {
+                                self.settings.rom_path = file.to_str().unwrap().to_string();
+                                match load_vanilla_rom(&Path::new(&self.settings.rom_path)) {
+                                    Ok(rom) => self.rom_vanilla = Some(rom),
+                                    Err(err) => self.modal_type = ModalType::Error(err.to_string())
+                                }
+                            }
+                        }
+                        if self.rom_vanilla.is_some() {
+                            if let Some(file_out) = FileDialog::new().set_title("Select output location")
+                            .set_directory("/")
+                            .add_filter("Snes ROM", &["sfc"])
+                            .save_file() {
+                                if let Err(err) = self.patch_rom(&file_out) {
+                                    self.modal_type = ModalType::Error(err.to_string());
+                                }
+                                self.settings_customization.open = false;
+                            }
+                        }
+                    },
+                    SettingsCustomizeResult::Error(err) => self.modal_type = ModalType::Error(err),
+                }
+                self.benchmark.split("Draw seed customization window");
+            }
+
+            if self.logic_customization.open {
+                match self.logic_customization.draw_window(ctx) {
+                    Ok(should_close) => if should_close {
+                        self.logic_customization.open = false;
+                        self.plando.custom_escape_time = match self.logic_customization.use_custom_escape_time {
+                            true => Some(self.logic_customization.custom_escape_time),
+                            false => None
+                        };
+                        self.plando.creator_name = self.logic_customization.creator_name.clone();
+                        self.plando.load_preset(self.logic_customization.settings.clone());
+                        self.settings.last_logic_preset = Some(self.logic_customization.settings.clone());
+                        self.settings.creator_name = self.logic_customization.creator_name.clone();
+                        self.settings.custom_escape_time = self.plando.custom_escape_time;
+                        self.schedule_redraw();
+                    }
+                    Err(err) => self.modal_type = ModalType::Error(err.to_string())
+                }
+                self.benchmark.split("Draw logic customization window");
+            }
+
+            match self.modal_type.clone() {
+                ModalType::None => {}
+                ModalType::Error(msg) => {
+                    let modal = egui::Modal::new(Id::new("modal_error")).show(ctx, |ui| {
+                        ui.set_min_width(256.0);
+                        ui.heading("Error");
+                        ui.label(msg);
+                        if ui.button("OK").clicked() {
+                            self.modal_type = ModalType::None;
+                        }
+                    });
+                    if modal.should_close() {
+                        self.modal_type = ModalType::None;
+                    }
+                }
+                ModalType::Status(msg) => {
+                    egui::Modal::new(Id::new("modal_status")).show(ctx, |ui| {
+                        ui.set_min_width(256.0);
+                        ui.heading("Status");
+                        ui.label(msg);
+                    });
+                }
+                ModalType::_Info(msg) => {
+                    let modal = egui::Modal::new(Id::new("modal_info")).show(ctx, |ui| {
+                        ui.set_min_width(256.0);
+                        ui.heading("Info");
+                        ui.label(msg);
+                        if ui.button("OK").clicked() {
+                            self.modal_type = ModalType::None;
+                        }
+                    });
+                    if modal.should_close() {
+                        self.modal_type = ModalType::None;
+                    }
+                }
+            }
+            self.benchmark.split("Draw modals");
+
+            let interaction = ctx.viewport(|vp| vp.interact_widgets.clone());
+            self.is_mouse_public = interaction.contains_pointer.len() <= 1;
+        });
+        gui
     }
 
     fn handle_map_io(&mut self, rt: &mut dyn RenderTarget, states: &RenderStates) {

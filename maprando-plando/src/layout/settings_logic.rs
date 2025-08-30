@@ -14,6 +14,8 @@ enum CustomizeLogicWindow {
 }
 
 pub struct LogicCustomization {
+    pub open: bool,
+
     pub preset_data: PresetData,
     cur_settings: RandomizerSettings, // Working state of logic settings
     cur_customize_logic_window: CustomizeLogicWindow,
@@ -28,8 +30,9 @@ pub struct LogicCustomization {
 }
 
 impl LogicCustomization {
-    pub fn new(preset_data: PresetData, mut settings: RandomizerSettings) -> Self {
+    pub fn new(preset_data: PresetData, settings: RandomizerSettings) -> Self {
         Self {
+            open: false,
             preset_data,
             cur_settings: settings.clone(),
             cur_customize_logic_window: CustomizeLogicWindow::None,

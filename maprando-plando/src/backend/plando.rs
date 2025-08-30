@@ -344,6 +344,7 @@ impl Plando {
         self.clear_doors();
         self.start_location = Plando::get_ship_start();
         self.update_randomizable_doors();
+        self.logic.reset();
     }
 
     pub fn load_map_from_file(&mut self, path: &Path) -> Result<()> {
@@ -352,19 +353,8 @@ impl Plando {
         self.clear_doors();
         self.start_location = Plando::get_ship_start();
         self.update_randomizable_doors();
+        self.logic.reset();
         Ok(())
-    }
-
-    fn get_doors_mode(&self) -> DoorsMode {
-        let mut result = DoorsMode::Blue;
-        for door_lock in &self.locked_doors {
-            match door_lock.door_type {
-                DoorType::Red | DoorType::Green | DoorType::Yellow => result = DoorsMode::Ammo,
-                DoorType::Beam(_) => return DoorsMode::Beam,
-                _ => {}
-            }
-        }
-        result
     }
 
     pub fn patch_rom(&mut self, rom_vanilla: &Rom, settings: CustomizeSettings, samus_sprite_categories: Vec<SamusSpriteCategory>, mosaic_themes: Vec<MosaicTheme>) -> Result<JoinHandle<Result<Rom>>> {
@@ -381,7 +371,7 @@ impl Plando {
 
         // Post process randomizer settings
         let mut randomizer_settings = self.randomizer_settings.clone();
-        randomizer_settings.doors_mode = self.get_doors_mode();
+        randomizer_settings.doors_mode = DoorsMode::Beam;
         randomizer_settings.item_progression_settings.preset = Some(self.creator_name.clone());
         randomizer_settings.map_layout = self.creator_name.clone();
 
