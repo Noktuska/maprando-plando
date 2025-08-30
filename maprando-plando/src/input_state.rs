@@ -99,6 +99,18 @@ impl MouseState {
     pub fn _get_mouse_pos(&self) -> Vector2f {
         Vector2f::new(self.mouse_x, self.mouse_y)
     }
+
+    pub fn consume_click(&mut self, bt: Button) -> bool {
+        if self.button_clicked == Some(bt) {
+            self.button_clicked = None;
+            return true;
+        }
+        false
+    }
+
+    pub fn consume_click_any(&mut self) -> Option<Button> {
+        self.button_clicked.take()
+    }
 }
 
 pub struct KeyState {

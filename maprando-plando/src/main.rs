@@ -879,7 +879,6 @@ struct PlandoApp {
     local_mouse_x: f32,
     local_mouse_y: f32,
     is_mouse_public: bool,
-    click_consumed: bool,
 
     spoiler_step: usize,
     spoiler_type: SpoilerType,
@@ -1058,7 +1057,6 @@ impl PlandoApp {
             local_mouse_x: 0.0,
             local_mouse_y: 0.0,
             is_mouse_public: true,
-            click_consumed: false,
 
             spoiler_step: 0,
             spoiler_type: SpoilerType::None,
@@ -1259,7 +1257,8 @@ impl PlandoApp {
     }
 
     async fn update_handles(&mut self) -> Result<()> {
-        if let Some(handle) = self.handle_spoiler.take() && handle.is_finished() {
+        if self.handle_spoiler.as_ref().is_some_and(|handle| handle.is_finished()) {
+            let handle = self.handle_spoiler.take().unwrap();
             match handle.await {
                 Ok(res) => res?,
                 Err(err) => {
@@ -1272,7 +1271,8 @@ impl PlandoApp {
             self.schedule_redraw();
         }
 
-        if let Some((handle, save_path)) = self.handle_patch.take() && handle.is_finished() {
+        if self.handle_patch.as_ref().is_some_and(|handle| handle.0.is_finished()) {
+            let (handle, save_path) = self.handle_patch.take().unwrap();
             let path = Path::new(&save_path);
             match handle.await {
                 Ok(res) => {
@@ -1296,7 +1296,8 @@ impl PlandoApp {
             }
         }
 
-        if let Some(handle) = self.handle_map_download.take() && handle.is_finished() {
+        if self.handle_map_download.as_ref().is_some_and(|handle| handle.is_finished()) {
+            let handle = self.handle_map_download.take().unwrap();
             match handle.await {
                 Ok(res) => match res {
                     Ok(_) => {
@@ -1489,7 +1490,6 @@ impl PlandoApp {
             self.mouse_state.next_frame();
             self.global_timer += 1;
             (self.local_mouse_x, self.local_mouse_y) = self.view.to_local_coords(self.mouse_state.mouse_x, self.mouse_state.mouse_y);
-            self.click_consumed = false;
             self.view.window_size = window.size().as_other() - Vector2f::new(sidebar_width, 0.0);
             self.benchmark.split("Pre-event frame setup");
 
@@ -1667,7 +1667,7 @@ impl PlandoApp {
             }
 
             // Reset spoiler step and type if click resulted in nothing
-            if !self.click_consumed && self.mouse_state.button_clicked.is_some() && self.is_mouse_public {
+            if self.mouse_state.button_clicked.is_some() && self.is_mouse_public {
                 sidebar_selection = None;
                 self.spoiler_type = SpoilerType::None;
             }
@@ -2063,31 +2063,33 @@ impl PlandoApp {
 
         // Find hovered room for info overlay and possible selections
         let mut last_hovered_room_idx = None;
-        for room_idx in 0..self.room_data.len() {
-            if !self.plando.map().room_mask[room_idx] {
-                continue;
+        if self.is_mouse_public {
+            for room_idx in 0..self.room_data.len() {
+                if !self.plando.map().room_mask[room_idx] {
+                    continue;
+                }
+
+                let room_bounds = self.plando.map_editor.get_room_bounds(room_idx);
+
+                if !room_bounds.contains2(mouse_tile_x as i32, mouse_tile_y as i32) {
+                    continue;
+                }
+
+                let room_geometry = &self.plando.game_data.room_geometry[room_idx];
+                let (room_x, room_y) = self.plando.map().rooms[room_idx];
+                let room_width = room_geometry.map[0].len() as i32;
+                let room_height = room_geometry.map.len() as i32;
+                let local_tile_x = mouse_tile_x as i32 - room_x as i32;
+                let local_tile_y = mouse_tile_y as i32 - room_y as i32;
+                if local_tile_x < 0 || local_tile_y < 0 || local_tile_x >= room_width || local_tile_y >= room_height
+                        || room_geometry.map[local_tile_y as usize][local_tile_x as usize] == 0 {
+                    continue;
+                }
+
+                let room_name = self.plando.game_data.room_geometry[room_idx].name.clone();
+                info_overlay = Some(room_name);
+                last_hovered_room_idx = Some(room_idx);
             }
-
-            let room_bounds = self.plando.map_editor.get_room_bounds(room_idx);
-
-            if !room_bounds.contains2(mouse_tile_x as i32, mouse_tile_y as i32) {
-                continue;
-            }
-
-            let room_geometry = &self.plando.game_data.room_geometry[room_idx];
-            let (room_x, room_y) = self.plando.map().rooms[room_idx];
-            let room_width = room_geometry.map[0].len() as i32;
-            let room_height = room_geometry.map.len() as i32;
-            let local_tile_x = mouse_tile_x as i32 - room_x as i32;
-            let local_tile_y = mouse_tile_y as i32 - room_y as i32;
-            if local_tile_x < 0 || local_tile_y < 0 || local_tile_x >= room_width || local_tile_y >= room_height
-                    || room_geometry.map[local_tile_y as usize][local_tile_x as usize] == 0 {
-                continue;
-            }
-
-            let room_name = self.plando.game_data.room_geometry[room_idx].name.clone();
-            info_overlay = Some(room_name);
-            last_hovered_room_idx = Some(room_idx);
         }
 
         if let Some(pt) = self.map_editor.selection_start {
@@ -2122,7 +2124,7 @@ impl PlandoApp {
         let mut should_redraw = self.map_editor.move_dragged_rooms(&mut self.plando.map_editor, mouse_tile_x, mouse_tile_y, &self.plando.game_data);
 
         // Start and stop drags
-        if self.is_mouse_public && !self.click_consumed && self.mouse_state.is_button_pressed(mouse::Button::Left) {
+        if self.is_mouse_public && self.mouse_state.is_button_pressed(mouse::Button::Left) {
             self.map_editor.start_drag(self.plando.map(), last_hovered_room_idx, mouse_tile_x, mouse_tile_y, &self.plando.game_data);
             self.spoiler_type = SpoilerType::None;
         }
@@ -2333,15 +2335,14 @@ impl PlandoApp {
 
                 if sprite_helm.global_bounds().contains2(self.local_mouse_x, self.local_mouse_y) {
                     sprite_helm.scale(1.2);
-                    if let Some(bt) = self.mouse_state.button_clicked {
-                        if bt == mouse::Button::Left {
-                            self.plando.place_start_location(self.plando.game_data.start_locations[i].clone());
-                        } else if bt == mouse::Button::Right {
-                            self.plando.place_start_location(Plando::get_ship_start());
-                        }
+                    if self.mouse_state.consume_click(mouse::Button::Left) {
+                        self.plando.place_start_location(self.plando.game_data.start_locations[i].clone());
                         should_update = true;
-                        self.click_consumed = true;
+                    } else if self.mouse_state.consume_click(mouse::Button::Right) {
+                        self.plando.place_start_location(Plando::get_ship_start());
+                        should_update = true;
                     }
+                    self.is_mouse_public = false;
                 }
 
                 rt.draw_with_renderstates(&sprite_helm, &states);
@@ -2358,9 +2359,8 @@ impl PlandoApp {
         sprite_helm.set_position(Vector2f::new(room_x as f32 + start_tile_x, room_y as f32 + start_tile_y) * 8.0);
         if sidebar_selection.is_none() && sprite_helm.global_bounds().contains2(self.local_mouse_x, self.local_mouse_y) {
             sprite_helm.scale(1.2);
-            if self.mouse_state.button_clicked.is_some_and(|x| x == mouse::Button::Left) {
+            if self.mouse_state.consume_click(mouse::Button::Left) {
                 self.spoiler_type = SpoilerType::Hub;
-                self.click_consumed = true;
             }
         }
         rt.draw_with_renderstates(&sprite_helm, &states);
@@ -2492,32 +2492,29 @@ impl PlandoApp {
                     };
                     info_overlay = Some(item_name.clone());
 
-                    if let Some(bt) = self.mouse_state.button_clicked {
-                        if bt == mouse::Button::Left {
-                            if sidebar_selection.is_some_and(|x| x.to_item().is_some()) {
-                                let item_to_place = sidebar_selection.unwrap().to_item().unwrap();
-                                let as_placeable = Placeable::from_item(item_to_place);
-                                let max_count = self.plando.get_max_placeable_count(as_placeable).unwrap_or(999);
-                                if self.plando.placed_item_count[as_placeable as usize] < max_count {
-                                    self.plando.place_item(i, item_to_place);
-                                    if self.settings.spoiler_auto_update {
-                                        if let Err(err) = self.update_spoiler_data_async() {
-                                            self.modal_type = ModalType::Error(err.to_string());
-                                        }
+                    if self.mouse_state.consume_click(mouse::Button::Left) {
+                        if sidebar_selection.is_some_and(|x| x.to_item().is_some()) {
+                            let item_to_place = sidebar_selection.unwrap().to_item().unwrap();
+                            let as_placeable = Placeable::from_item(item_to_place);
+                            let max_count = self.plando.get_max_placeable_count(as_placeable).unwrap_or(999);
+                            if self.plando.placed_item_count[as_placeable as usize] < max_count {
+                                self.plando.place_item(i, item_to_place);
+                                if self.settings.spoiler_auto_update {
+                                    if let Err(err) = self.update_spoiler_data_async() {
+                                        self.modal_type = ModalType::Error(err.to_string());
                                     }
                                 }
-                            } else {
-                                self.spoiler_type = SpoilerType::Item(i);
                             }
-                        } else if bt == mouse::Button::Right {
-                            self.plando.place_item(i, Item::Nothing);
-                            if self.settings.spoiler_auto_update {
-                                if let Err(err) = self.update_spoiler_data_async() {
-                                    self.modal_type = ModalType::Error(err.to_string());
-                                }
+                        } else {
+                            self.spoiler_type = SpoilerType::Item(i);
+                        }
+                    } else if self.mouse_state.consume_click(mouse::Button::Right) {
+                        self.plando.place_item(i, Item::Nothing);
+                        if self.settings.spoiler_auto_update {
+                            if let Err(err) = self.update_spoiler_data_async() {
+                                self.modal_type = ModalType::Error(err.to_string());
                             }
                         }
-                        self.click_consumed = true;
                     }
 
                     self.is_mouse_public = false;
@@ -2561,9 +2558,8 @@ impl PlandoApp {
 
                 info_overlay = Some(flag_str.to_string());
 
-                if sidebar_selection.is_none() && self.mouse_state.button_clicked.is_some_and(|bt| bt == mouse::Button::Left) {
+                if sidebar_selection.is_none() && self.mouse_state.consume_click(mouse::Button::Left) {
                     self.spoiler_type = SpoilerType::Flag(i);
-                    self.click_consumed = true;
                 }
 
                 self.is_mouse_public = false;
@@ -2631,7 +2627,7 @@ impl PlandoApp {
                             self.modal_type = ModalType::Error(err.to_string());
                         }
                     }
-                    self.click_consumed = true;
+                    self.mouse_state.button_clicked = None;
                     if let Err(err) = res {
                         self.modal_type = ModalType::Error(err.to_string());
                     }
