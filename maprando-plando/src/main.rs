@@ -2000,11 +2000,21 @@ impl PlandoApp {
                             false => None
                         };
                         self.plando.creator_name = self.logic_customization.creator_name.clone();
+                        // Remove placed major items that are also starting items
+                        self.plando.item_locations.retain(|item| {
+                            !item.is_unique() || !self.logic_customization.settings.item_progression_settings.starting_items.iter().any(|start| {
+                                start.item == *item && start.count > 0
+                            })
+                        });
                         self.plando.load_preset(self.logic_customization.settings.clone());
                         self.settings.last_logic_preset = Some(self.logic_customization.settings.clone());
                         self.settings.creator_name = self.logic_customization.creator_name.clone();
                         self.settings.custom_escape_time = self.plando.custom_escape_time;
-                        self.schedule_redraw();
+                        if self.settings.spoiler_auto_update {
+                            if let Err(err) = self.update_spoiler_data_async() {
+                                self.modal_type = ModalType::Error(err.to_string());
+                            }
+                        }
                     }
                     Err(err) => self.modal_type = ModalType::Error(err.to_string())
                 }
@@ -2362,6 +2372,7 @@ impl PlandoApp {
             if self.mouse_state.consume_click(mouse::Button::Left) {
                 self.spoiler_type = SpoilerType::Hub;
             }
+            self.is_mouse_public = false;
         }
         rt.draw_with_renderstates(&sprite_helm, &states);
         drop(sprite_helm);
