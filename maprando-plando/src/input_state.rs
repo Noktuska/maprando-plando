@@ -96,7 +96,7 @@ impl MouseState {
         self.buttons_down.contains(&button)
     }
 
-    pub fn get_mouse_pos(&self) -> Vector2f {
+    pub fn _get_mouse_pos(&self) -> Vector2f {
         Vector2f::new(self.mouse_x, self.mouse_y)
     }
 }
@@ -139,7 +139,7 @@ impl KeyState {
         self.keys_pressed.contains(&key)
     }
 
-    pub fn is_key_released(&self, key: Key) -> bool {
+    pub fn _is_key_released(&self, key: Key) -> bool {
         self.keys_released.contains(&key)
     }
 

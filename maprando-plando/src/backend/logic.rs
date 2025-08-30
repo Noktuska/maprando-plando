@@ -58,7 +58,7 @@ impl Logic {
         *lock = None;
     }
 
-    pub fn update_randomization(
+    pub fn _update_randomization(
         &self,
         initial_global_state: GlobalState,
         initial_local_state: LocalState,
@@ -111,7 +111,7 @@ impl Logic {
         })
     }
 
-    pub fn update_hub_location(
+    pub fn _update_hub_location(
         &self,
         start_location: StartLocation,
         initial_global_state: GlobalState,

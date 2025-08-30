@@ -11,7 +11,6 @@ pub struct Asset {
 
 #[derive(Clone)]
 pub struct Release {
-    pub tag_name: String,
     pub version: String,
     pub assets: Vec<Asset>
 }
@@ -35,7 +34,7 @@ impl Release {
         }
 
         Some(Release {
-            tag_name, version, assets
+            version, assets
         })
     }
 }

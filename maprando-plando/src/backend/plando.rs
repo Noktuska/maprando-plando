@@ -311,7 +311,7 @@ impl Plando {
         self.game_data.room_idx_by_ptr[&room_ptr]
     }
 
-    pub fn get_door_idx(&self, room_idx: usize, tile_x: usize, tile_y: usize, direction: String) -> Option<usize> {
+    pub fn _get_door_idx(&self, room_idx: usize, tile_x: usize, tile_y: usize, direction: String) -> Option<usize> {
         let door_opt = self.game_data.room_geometry[room_idx].doors.iter().position(|x| {
             x.direction == direction && x.x == tile_x && x.y == tile_y
         });

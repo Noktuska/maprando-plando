@@ -52,10 +52,6 @@ impl Layout {
         })
     }
 
-    pub fn is_open_any(&self) -> bool {
-        !self.window_stack.is_empty()
-    }
-
     pub fn render(&mut self, ctx: &Context) {
         let mut windows_to_close = Vec::new();
         for window_type in self.window_stack.iter().cloned() {
