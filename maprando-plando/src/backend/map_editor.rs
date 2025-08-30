@@ -1,8 +1,9 @@
-use std::{fs::File, i32, io::{Read, Write}, path::Path};
+use std::{fs::File, i32, io::{Read, Write}, path::Path, sync::Arc};
 
 use anyhow::Result;
 use hashbrown::{HashMap, HashSet};
-use maprando_game::{GameData, Map};
+use maprando::randomize::LockedDoor;
+use maprando_game::{DoorType, GameData, Map};
 use serde_json::Value;
 use sfml::{graphics::{Color, IntRect}, system::Vector2i};
 
@@ -186,6 +187,7 @@ impl MapErrorType {
 
 pub struct MapEditor {
     map: Map,
+    game_data: Arc<GameData>,
 
     toilet_patch_map: HashMap<usize, Vec<(i32, i32)>>,
 
@@ -199,9 +201,10 @@ impl MapEditor {
     pub const AREA_MAX_TRANSITIONS: usize = 23;
     pub const MAP_MAX_SIZE: usize = 72;
 
-    pub fn new(map: Map) -> MapEditor {
+    pub fn new(map: Map, game_data: Arc<GameData>) -> MapEditor {
         MapEditor {
             map,
+            game_data,
             toilet_patch_map: Self::generate_toilet_map().unwrap_or_default(),
             error_list: Vec::new(),
             invalid_doors: HashSet::new(),
@@ -251,12 +254,12 @@ impl MapEditor {
         self.map.rooms[room_idx] = (x, y);
     }
 
-    pub fn get_room_at(&self, x: usize, y: usize, game_data: &GameData) -> Option<usize> {
+    pub fn get_room_at(&self, x: usize, y: usize) -> Option<usize> {
         self.map.rooms.iter().enumerate().position(|(room_idx, &(room_x, room_y))| {
             if !self.map.room_mask[room_idx] {
                 return false;
             }
-            let room_geometry = &game_data.room_geometry[room_idx];
+            let room_geometry = &self.game_data.room_geometry[room_idx];
             let room_width = room_geometry.map[0].len();
             let room_height = room_geometry.map.len();
             x >= room_x && y >= room_y && x < room_x + room_width && y < room_y + room_height
@@ -270,13 +273,13 @@ impl MapEditor {
         Ok(())
     }
 
-    pub fn load_map(&mut self, map: Map, game_data: &GameData) {
+    pub fn load_map(&mut self, map: Map) {
         self.reset();
         self.map = map;
-        self.is_valid(game_data);
+        self.is_valid(&vec![]);
     }
 
-    pub fn load_map_from_file(&mut self, game_data: &GameData, path: &Path) -> Result<()> {
+    pub fn load_map_from_file(&mut self, path: &Path) -> Result<()> {
         let mut file = File::open(path)?;
         let mut data_str = String::new();
         file.read_to_string(&mut data_str)?;
@@ -296,25 +299,27 @@ impl MapEditor {
 
         self.reset();
 
+        let empty_vec = vec![];
         for room in missing_rooms {
-            self.erase_room(room, game_data);
+            self.erase_room(room, &empty_vec);
         }
 
-        self.is_valid(game_data);
+        self.is_valid(&empty_vec);
 
         Ok(())
     }
 
-    pub fn is_valid(&mut self, game_data: &GameData) -> bool {
-        self.error_list.retain(|err| if let MapErrorType::RoomOverlap(_, _) = err { true } else { false });
-        for &(room_idx, door_idx) in &self.invalid_doors {
-            self.error_list.push(MapErrorType::DoorDisconnected(room_idx, door_idx));
-        }
-        self.check_area_bounds(game_data);
-        self.check_map_bounds(game_data);
-        self.check_area_transitions(game_data);
-        self.check_toilet(game_data);
-        self.check_map_connections(game_data);
+    pub fn is_valid(&mut self, locked_doors: &Vec<LockedDoor>) -> bool {
+        self.error_list.retain(|err| match err {
+            MapErrorType::RoomOverlap(_, _) => true,
+            _ => false
+        });
+        self.check_door_connections(locked_doors);
+        self.check_area_bounds();
+        self.check_map_bounds();
+        self.check_area_transitions();
+        self.check_toilet();
+        self.check_map_connections();
         self.error_list.is_empty()
     }
 
@@ -323,15 +328,15 @@ impl MapEditor {
         self.error_list.clear();
     }
 
-    pub fn apply_area(&mut self, room_idx: usize, area_value: Area, game_data: &GameData) {
+    pub fn apply_area(&mut self, room_idx: usize, area_value: Area, locked_doors: &Vec<LockedDoor>) {
         let (area, sub_area, sub_sub_area) = area_value.to_tuple();
         self.map.area[room_idx] = area;
         self.map.subarea[room_idx] = sub_area;
         self.map.subsubarea[room_idx] = sub_sub_area;
-        self.is_valid(game_data);
+        self.is_valid(locked_doors);
     }
 
-    pub fn swap_areas(&mut self, area1: usize, area2: usize, game_data: &GameData) {
+    pub fn swap_areas(&mut self, area1: usize, area2: usize, locked_doors: &Vec<LockedDoor>) {
         if area1 == area2 {
             return;
         }
@@ -352,7 +357,7 @@ impl MapEditor {
             self.map.subarea[room_idx] = sub_area;
             self.map.subsubarea[room_idx] = sub_sub_area;
         }
-        self.is_valid(game_data);
+        self.is_valid(locked_doors);
     }
 
     pub fn get_area_value(&self, room_idx: usize) -> Area {
@@ -362,41 +367,41 @@ impl MapEditor {
         Area::from_tuple((area, sub_area, sub_sub_area))
     }
 
-    pub fn erase_room(&mut self, room_idx: usize, game_data: &GameData) {
+    pub fn erase_room(&mut self, room_idx: usize, locked_doors: &Vec<LockedDoor>) {
         if !self.map.room_mask[room_idx] {
             return;
         }
         self.map.room_mask[room_idx] = false;
-        let room_geometry = &game_data.room_geometry[room_idx];
+        let room_geometry = &self.game_data.room_geometry[room_idx];
         for (door_idx, door) in room_geometry.doors.iter().enumerate() {
             self.invalid_doors.remove(&(room_idx, door_idx));
-            if let Some(other_door_conn_idx) = self.get_door_conn_idx(room_idx, door_idx, game_data) {
+            if let Some(other_door_conn_idx) = self.get_door_conn_idx(room_idx, door_idx) {
                 let door_ptr_pair = (door.exit_ptr, door.entrance_ptr);
                 let prev_door_conn = self.map.doors.remove(other_door_conn_idx);
                 let other_door_ptr_pair = if prev_door_conn.0 == door_ptr_pair { prev_door_conn.1 } else { prev_door_conn.0 };
-                let invalid_door = game_data.room_and_door_idxs_by_door_ptr_pair[&other_door_ptr_pair];
+                let invalid_door = self.game_data.room_and_door_idxs_by_door_ptr_pair[&other_door_ptr_pair];
                 self.invalid_doors.insert(invalid_door);
             }
         }
-        self.is_valid(game_data);
+        self.is_valid(locked_doors);
     }
 
-    pub fn spawn_room(&mut self, room_idx: usize, game_data: &GameData) {
+    pub fn spawn_room(&mut self, room_idx: usize, locked_doors: &Vec<LockedDoor>) {
         if !self.map.room_mask[room_idx] {
             self.map.room_mask[room_idx] = true;
-            self.snap_room(room_idx, game_data);
+            self.snap_room(room_idx, locked_doors);
         }
     }
 
-    pub fn get_room_bounds(&self, room_idx: usize, game_data: &GameData) -> IntRect {
+    pub fn get_room_bounds(&self, room_idx: usize) -> IntRect {
         let (room_x, room_y) = self.map.rooms[room_idx];
-        let room_geometry = &game_data.room_geometry[room_idx];
+        let room_geometry = &self.game_data.room_geometry[room_idx];
         let room_width = room_geometry.map[0].len();
         let room_height = room_geometry.map.len();
         IntRect::new(room_x as i32, room_y as i32, room_width as i32, room_height as i32)
     }
 
-    fn update_overlaps(&mut self, room_idx: usize, game_data: &GameData) {
+    fn update_overlaps(&mut self, room_idx: usize) {
         // Remove all overlaps with this room_idx
         self.error_list.retain(|&err| {
             if let MapErrorType::RoomOverlap(l, r) = err {
@@ -412,7 +417,7 @@ impl MapEditor {
             if other_idx == room_idx || !self.map.room_mask[other_idx] {
                 continue;
             }
-            if self.check_overlap(room_idx, other_idx, game_data) {
+            if self.check_overlap(room_idx, other_idx) {
                 let smaller_idx = room_idx.min(other_idx);
                 let bigger_idx = room_idx.max(other_idx);
                 self.error_list.push(MapErrorType::RoomOverlap(smaller_idx, bigger_idx));
@@ -421,18 +426,18 @@ impl MapEditor {
         }
     }
 
-    fn check_overlap(&self, room_idx: usize, other_idx: usize, game_data: &GameData) -> bool {
-        let bbox = self.get_room_bounds(room_idx, game_data);
+    fn check_overlap(&self, room_idx: usize, other_idx: usize) -> bool {
+        let bbox = self.get_room_bounds(room_idx);
         if other_idx == room_idx {
             return true;
         }
-        let other_bbox = self.get_room_bounds(other_idx, game_data);
+        let other_bbox = self.get_room_bounds(other_idx);
         if let Some(intersect) = bbox.intersection(&other_bbox) {
             let (room_x, room_y) = self.map.rooms[room_idx];
             let (other_x, other_y) = self.map.rooms[other_idx];
 
-            let map = &game_data.room_geometry[room_idx].map;
-            let other_map = &game_data.room_geometry[other_idx].map;
+            let map = &self.game_data.room_geometry[room_idx].map;
+            let other_map = &self.game_data.room_geometry[other_idx].map;
             for y in intersect.top..(intersect.top + intersect.height) {
                 for x in intersect.left..(intersect.left + intersect.width) {
                     let tile_x = x as usize - room_x;
@@ -448,20 +453,20 @@ impl MapEditor {
         false
     }
 
-    pub fn snap_room(&mut self, room_idx: usize, game_data: &GameData) {
-        self.update_overlaps(room_idx, game_data);
+    pub fn snap_room(&mut self, room_idx: usize, locked_doors: &Vec<LockedDoor>) {
+        self.update_overlaps(room_idx);
 
         let mut orphaned_doors = HashSet::new();
 
-        let room_geometry = &game_data.room_geometry[room_idx];
+        let room_geometry = &self.game_data.room_geometry[room_idx];
         // Invalidate all doors of moved room and all orphaned doors that were created by moving the room
         for (door_idx, door) in room_geometry.doors.iter().enumerate() {
             let cur_door_ptr_pair = (door.exit_ptr, door.entrance_ptr);
-            if let Some(prev_door_conn_idx) = self.get_door_conn_idx(room_idx, door_idx, game_data) {
+            if let Some(prev_door_conn_idx) = self.get_door_conn_idx(room_idx, door_idx) {
                 let prev_door_conn = self.map.doors[prev_door_conn_idx];
                 self.map.doors.remove(prev_door_conn_idx);
                 let other_door_ptr_pair = if prev_door_conn.0 == cur_door_ptr_pair { prev_door_conn.1 } else { prev_door_conn.0 };
-                let (other_room_idx, other_door_idx) = game_data.room_and_door_idxs_by_door_ptr_pair[&other_door_ptr_pair];
+                let (other_room_idx, other_door_idx) = self.game_data.room_and_door_idxs_by_door_ptr_pair[&other_door_ptr_pair];
                 orphaned_doors.insert((other_room_idx, other_door_idx));
                 self.invalid_doors.insert((other_room_idx, other_door_idx));
             }
@@ -472,17 +477,17 @@ impl MapEditor {
         // Validate all orphaned doors
         while !orphaned_doors.is_empty() {
             let (room_idx, door_idx) = orphaned_doors.iter().next().unwrap().clone();
-            if let Some((other_room_idx, other_door_idx)) = self.validate_door(room_idx, door_idx, game_data) {
+            if let Some((other_room_idx, other_door_idx)) = self.validate_door(room_idx, door_idx) {
                 orphaned_doors.remove(&(other_room_idx, other_door_idx));
             }
             orphaned_doors.remove(&(room_idx, door_idx));
         }
 
-        self.is_valid(game_data);
+        self.is_valid(locked_doors);
     }
 
-    fn validate_door(&mut self, room_idx: usize, door_idx: usize, game_data: &GameData) -> Option<(usize, usize)> {
-        let door = &game_data.room_geometry[room_idx].doors[door_idx];
+    fn validate_door(&mut self, room_idx: usize, door_idx: usize) -> Option<(usize, usize)> {
+        let door = &self.game_data.room_geometry[room_idx].doors[door_idx];
         let (dx, dy) = match door.direction.as_str() {
             "up" => (0, -1),
             "down" => (0, 1),
@@ -506,7 +511,7 @@ impl MapEditor {
         let target_y = target_y as usize;
 
         for &(other_room_idx, other_door_idx) in &self.invalid_doors {
-            let other_door = &game_data.room_geometry[other_room_idx].doors[other_door_idx];
+            let other_door = &self.game_data.room_geometry[other_room_idx].doors[other_door_idx];
             if other_door.direction != dir_opposite || other_door.subtype != door.subtype {
                 continue;
             }
@@ -536,15 +541,29 @@ impl MapEditor {
         None
     }
 
-    fn get_door_conn_idx(&self, room_idx: usize, door_idx: usize, game_data: &GameData) -> Option<usize> {
-        let door = &game_data.room_geometry[room_idx].doors[door_idx];
+    fn get_door_conn_idx(&self, room_idx: usize, door_idx: usize) -> Option<usize> {
+        let door = &self.game_data.room_geometry[room_idx].doors[door_idx];
         let door_ptr_pair = (door.exit_ptr, door.entrance_ptr);
         self.map.doors.iter().position(
             |&(src, dst, _)| src == door_ptr_pair || dst == door_ptr_pair
         )
     }
 
-    fn check_area_bounds(&mut self, game_data: &GameData) {
+    fn check_door_connections(&mut self, locked_doors: &Vec<LockedDoor>) {
+        self.error_list.retain(|x| if let MapErrorType::DoorDisconnected(_, _) = x { false } else { true });
+        for door in &self.invalid_doors {
+            let lock_opt = locked_doors.iter().find(|lock| {
+                let lock_idx = self.game_data.room_and_door_idxs_by_door_ptr_pair[&lock.src_ptr_pair];
+                *door == lock_idx
+            });
+
+            if lock_opt.is_none_or(|lock| lock.door_type != DoorType::Wall) {
+                self.error_list.push(MapErrorType::DoorDisconnected(door.0, door.1));
+            }
+        }
+    }
+
+    fn check_area_bounds(&mut self) {
         let mut area_min = [Vector2i::new(i32::MAX, i32::MAX); 6];
         let mut area_max = [Vector2i::new(0, 0); 6];
 
@@ -553,7 +572,7 @@ impl MapEditor {
             area_min[area].x = area_min[area].x.min(room_x as i32);
             area_min[area].y = area_min[area].y.min(room_y as i32);
 
-            let room_geometry = &game_data.room_geometry[room_idx];
+            let room_geometry = &self.game_data.room_geometry[room_idx];
             let room_width = room_geometry.map[0].len();
             let room_height = room_geometry.map.len();
 
@@ -571,12 +590,12 @@ impl MapEditor {
         }
     }
 
-    fn check_map_bounds(&mut self, game_data: &GameData) {
+    fn check_map_bounds(&mut self) {
         let mut max_x = 0;
         let mut max_y = 0;
 
         for (room_idx, &(room_x, room_y)) in self.map.rooms.iter().enumerate() {
-            let room_geometry = &game_data.room_geometry[room_idx];
+            let room_geometry = &self.game_data.room_geometry[room_idx];
             let room_width = room_geometry.map[0].len();
             let room_height = room_geometry.map.len();
 
@@ -592,18 +611,18 @@ impl MapEditor {
         }
     }
 
-    fn check_area_transitions(&mut self, game_data: &GameData) {
+    fn check_area_transitions(&mut self) {
         let mut connection_count = 0;
-        for (room_idx, room_geometry) in game_data.room_geometry.iter().enumerate() {
+        for (room_idx, room_geometry) in self.game_data.room_geometry.iter().enumerate() {
             for (door_idx, door) in room_geometry.doors.iter().enumerate() {
                 let door_ptr_pair = (door.exit_ptr, door.entrance_ptr);
-                let door_conn_idx = match self.get_door_conn_idx(room_idx, door_idx, game_data) {
+                let door_conn_idx = match self.get_door_conn_idx(room_idx, door_idx) {
                     Some(idx) => idx,
                     None => continue
                 };
                 let door_conn = self.map.doors[door_conn_idx];
                 let other_door_ptr_pair = if door_conn.0 == door_ptr_pair { door_conn.1 } else { door_conn.0 };
-                let (other_room_idx, _) = game_data.room_and_door_idxs_by_door_ptr_pair[&other_door_ptr_pair];
+                let (other_room_idx, _) = self.game_data.room_and_door_idxs_by_door_ptr_pair[&other_door_ptr_pair];
 
                 let area = self.map.area[room_idx];
                 let other_area = self.map.area[other_room_idx];
@@ -618,15 +637,15 @@ impl MapEditor {
         }
     }
 
-    fn check_toilet(&mut self, game_data: &GameData) {
-        let (room_x, room_y) = self.map.rooms[game_data.toilet_room_idx];
+    fn check_toilet(&mut self) {
+        let (room_x, room_y) = self.map.rooms[self.game_data.toilet_room_idx];
         let toilet_bbox = IntRect::new(room_x as i32, room_y as i32 + 2, 1, 6);
 
         let cross_rooms: Vec<usize> = (0..self.map.rooms.len()).filter_map(|idx| {
-            if idx == game_data.toilet_room_idx {
+            if idx == self.game_data.toilet_room_idx {
                 return None;
             }
-            let other_bbox = self.get_room_bounds(idx, game_data);
+            let other_bbox = self.get_room_bounds(idx);
             if other_bbox.intersection(&toilet_bbox).is_none() {
                 return None;
             }
@@ -636,7 +655,7 @@ impl MapEditor {
                 if rel_tile_x < 0 || rel_tile_x >= other_bbox.width || rel_tile_y < 0 || rel_tile_y >= other_bbox.height {
                     continue;
                 }
-                if game_data.room_geometry[idx].map[rel_tile_y as usize][rel_tile_x as usize] == 1 {
+                if self.game_data.room_geometry[idx].map[rel_tile_y as usize][rel_tile_x as usize] == 1 {
                     return Some(idx);
                 }
             }
@@ -649,8 +668,8 @@ impl MapEditor {
         }
         if cross_rooms.len() == 2 {
             // Check for vanilla toilet intersection
-            let idx_aqueduct = game_data.room_idx_by_ptr[&513447];
-            let idx_botwoon_hallway = game_data.room_idx_by_ptr[&513559];
+            let idx_aqueduct = self.game_data.room_idx_by_ptr[&513447];
+            let idx_botwoon_hallway = self.game_data.room_idx_by_ptr[&513559];
 
             if !cross_rooms.contains(&idx_aqueduct) || !cross_rooms.contains(&idx_botwoon_hallway) {
                 self.error_list.push(MapErrorType::ToiletMultipleRooms(cross_rooms[0], cross_rooms[1]));
@@ -672,15 +691,15 @@ impl MapEditor {
         
         let cross_room_idx = cross_rooms[0];
         let cross_room_area = self.map.area[cross_room_idx];
-        let toilet_area = self.map.area[game_data.toilet_room_idx];
+        let toilet_area = self.map.area[self.game_data.toilet_room_idx];
 
         if cross_room_area != toilet_area {
             self.error_list.push(MapErrorType::ToiletArea(cross_room_idx, toilet_area, cross_room_area));
         }
 
         // Check if toilet patch exists
-        let room_ptr = game_data.room_geometry[cross_room_idx].rom_address;
-        let (toilet_x, toilet_y) = self.map.rooms[game_data.toilet_room_idx];
+        let room_ptr = self.game_data.room_geometry[cross_room_idx].rom_address;
+        let (toilet_x, toilet_y) = self.map.rooms[self.game_data.toilet_room_idx];
         let (room_x, room_y) = self.map.rooms[cross_room_idx];
         let x_offset = toilet_x as i32 - room_x as i32;
         let y_offset = toilet_y as i32 - room_y as i32;
@@ -702,9 +721,9 @@ impl MapEditor {
         }
     }
 
-    fn check_map_connections(&mut self, game_data: &GameData) {
+    fn check_map_connections(&mut self) {
         let mut area_maps = [false; 6];
-        let map_room_idxs: Vec<usize> = game_data.room_geometry.iter().enumerate().filter_map(
+        let map_room_idxs: Vec<usize> = self.game_data.room_geometry.iter().enumerate().filter_map(
             |(idx, room)| if room.name.contains(" Map Room") { Some(idx) } else { None }
         ).collect();
         // Check every area has exactly one map station
@@ -717,17 +736,17 @@ impl MapEditor {
         }
 
         // Check Phantoon Map is connected to Phantoon through one room in a singular area
-        let phantoon_map_idx = game_data.room_idx_by_ptr[&511179];
-        let phantoon_room_idx = game_data.room_idx_by_ptr[&511251];
+        let phantoon_map_idx = self.game_data.room_idx_by_ptr[&511179];
+        let phantoon_room_idx = self.game_data.room_idx_by_ptr[&511251];
         let area_phantoon = self.map.area[phantoon_room_idx];
 
-        let phantoon_map_door = &game_data.room_geometry[phantoon_map_idx].doors[0];
-        let phantoon_room_door = &game_data.room_geometry[phantoon_room_idx].doors[0];
+        let phantoon_map_door = &self.game_data.room_geometry[phantoon_map_idx].doors[0];
+        let phantoon_room_door = &self.game_data.room_geometry[phantoon_room_idx].doors[0];
         let phantoon_map_ptr_pair = (phantoon_map_door.exit_ptr, phantoon_map_door.entrance_ptr);
         let phantoon_room_ptr_pair = (phantoon_room_door.exit_ptr, phantoon_room_door.entrance_ptr);
 
-        let phantoon_map_conn_idx = self.get_door_conn_idx(phantoon_map_idx, 0, game_data);
-        let phantoon_room_conn_idx = self.get_door_conn_idx(phantoon_room_idx, 0, game_data);
+        let phantoon_map_conn_idx = self.get_door_conn_idx(phantoon_map_idx, 0);
+        let phantoon_room_conn_idx = self.get_door_conn_idx(phantoon_room_idx, 0);
         if phantoon_map_conn_idx.is_some() && phantoon_room_conn_idx.is_some() {
             let phantoon_map_conn = self.map.doors[phantoon_map_conn_idx.unwrap()];
             let phantoon_room_conn = self.map.doors[phantoon_room_conn_idx.unwrap()];
@@ -735,8 +754,8 @@ impl MapEditor {
             let other_map_ptr_pair = if phantoon_map_conn.0 == phantoon_map_ptr_pair { phantoon_map_conn.1 } else { phantoon_map_conn.0 };
             let other_room_ptr_pair = if phantoon_room_conn.0 == phantoon_room_ptr_pair { phantoon_room_conn.1 } else { phantoon_room_conn.0 };
 
-            let other_map_room = game_data.room_and_door_idxs_by_door_ptr_pair[&other_map_ptr_pair];
-            let other_room_room = game_data.room_and_door_idxs_by_door_ptr_pair[&other_room_ptr_pair];
+            let other_map_room = self.game_data.room_and_door_idxs_by_door_ptr_pair[&other_map_ptr_pair];
+            let other_room_room = self.game_data.room_and_door_idxs_by_door_ptr_pair[&other_room_ptr_pair];
 
             if other_map_room.0 != other_room_room.0 {
                 self.error_list.push(MapErrorType::PhantoonMap);
@@ -751,7 +770,7 @@ impl MapEditor {
         }
 
         // Check if Phantoon's Save is in the same Area as Phantoon
-        let phantoon_save_idx = game_data.room_idx_by_ptr[&511626];
+        let phantoon_save_idx = self.game_data.room_idx_by_ptr[&511626];
         let area_save = self.map.area[phantoon_save_idx];
         if area_save != area_phantoon {
             self.error_list.push(MapErrorType::PhantoonSave);

@@ -230,8 +230,10 @@ impl Plando {
         
         let mut rng = rand::rngs::StdRng::from_entropy();
 
+        let game_data = Arc::new(game_data);
+
         let map = maps_vanilla.roll_map(&mut rng, &game_data)?;
-        let map_editor = MapEditor::new(map);
+        let map_editor = MapEditor::new(map, game_data.clone());
 
         let objectives = maprando::randomize::get_objectives(&randomizer_settings, Some(map_editor.get_map()), &game_data, &mut rng);
         let randomizable_doors = get_randomizable_doors(&game_data, &objectives);
@@ -248,8 +250,6 @@ impl Plando {
             implicit_tech: preset_data.tech_by_difficulty["Implicit"].clone(),
             implicit_notables: preset_data.notables_by_difficulty["Implicit"].clone()
         };
-
-        let game_data = Arc::new(game_data);
 
         let mut plando = Plando {
             game_data: game_data.clone(),
@@ -339,7 +339,7 @@ impl Plando {
     }
 
     pub fn load_map(&mut self, map: Map) {
-        self.map_editor.load_map(map, &self.game_data);
+        self.map_editor.load_map(map);
         self.clear_item_locations();
         self.clear_doors();
         self.start_location = Plando::get_ship_start();
@@ -348,7 +348,7 @@ impl Plando {
     }
 
     pub fn load_map_from_file(&mut self, path: &Path) -> Result<()> {
-        self.map_editor.load_map_from_file(&self.game_data, path)?;
+        self.map_editor.load_map_from_file(path)?;
         self.clear_item_locations();
         self.clear_doors();
         self.start_location = Plando::get_ship_start();
@@ -495,7 +495,7 @@ impl Plando {
             self.place_start_location(Self::get_ship_start());
         }
 
-        self.map_editor.erase_room(room_idx, &self.game_data);
+        self.map_editor.erase_room(room_idx, &self.locked_doors);
     }
 
     pub fn place_start_location(&mut self, start_loc: StartLocation) {
@@ -570,6 +570,8 @@ impl Plando {
 
             self.locked_doors.retain(|x| x.src_ptr_pair != src_ptr_pair || x.dst_ptr_pair != dst_ptr_pair);
 
+            self.map_editor.is_valid(&self.locked_doors);
+
             return Ok(());
         }
         let door_type = door_type_opt.unwrap();
@@ -628,6 +630,7 @@ impl Plando {
         };
 
         self.locked_doors.push(locked_door);
+        self.map_editor.is_valid(&self.locked_doors);
 
         self.placed_item_count[placeable as usize] += 1;
         if door_type != DoorType::Wall {

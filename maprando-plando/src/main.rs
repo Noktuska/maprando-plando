@@ -1394,10 +1394,14 @@ impl PlandoApp {
                     let mut color_div = 1;
                     if !self.settings.disable_logic && !draw_subareas {
                         if let Some((_r, spoiler_log)) = &self.plando.get_randomization().as_ref() {
-                            if spoiler_log.all_rooms[data.room_idx].map_bireachable_step[local_y][local_x] > self.spoiler_step as u8 {
+                            let spoiler_room_loc = spoiler_log.all_rooms.iter().find(|x| {
+                                x.room_id == data.room_id
+                            }).unwrap();
+
+                            if spoiler_room_loc.map_bireachable_step[local_y][local_x] > self.spoiler_step as u8 {
                                 color_div *= 2;
                             }
-                            if spoiler_log.all_rooms[data.room_idx].map_reachable_step[local_y][local_x] > self.spoiler_step as u8 {
+                            if spoiler_room_loc.map_reachable_step[local_y][local_x] > self.spoiler_step as u8 {
                                 color_div *= 3;
                             }
                         }
@@ -2065,7 +2069,7 @@ impl PlandoApp {
                 continue;
             }
 
-            let room_bounds = self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data);
+            let room_bounds = self.plando.map_editor.get_room_bounds(room_idx);
 
             if !room_bounds.contains2(mouse_tile_x as i32, mouse_tile_y as i32) {
                 continue;
@@ -2097,7 +2101,7 @@ impl PlandoApp {
             }
         } else if let Some(room_idx) = last_hovered_room_idx {
             if self.map_editor.dragged_room_idx.is_empty() {
-                let bbox = self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data);
+                let bbox = self.plando.map_editor.get_room_bounds(room_idx);
                 self.draw_room_outline(rt, states, vec![bbox]);
             }
         }
@@ -2110,7 +2114,7 @@ impl PlandoApp {
             };
 
             let bbox_list: Vec<IntRect> = idx_list.iter().map(
-                |&idx| self.plando.map_editor.get_room_bounds(idx, &self.plando.game_data)
+                |&idx| self.plando.map_editor.get_room_bounds(idx)
             ).collect();
             self.draw_room_outline(rt, states, bbox_list);
         }
@@ -2127,7 +2131,7 @@ impl PlandoApp {
         if self.mouse_state.is_button_released(mouse::Button::Left) {
             should_redraw = !self.map_editor.dragged_room_idx.is_empty();
 
-            self.map_editor.stop_drag(&mut self.plando.map_editor, mouse_tile_x, mouse_tile_y, &self.plando.game_data);
+            self.map_editor.stop_drag(&mut self.plando.map_editor, mouse_tile_x, mouse_tile_y, &self.plando.game_data, &self.plando.locked_doors);
 
             if should_redraw {
                 // Fix any potential issues that may come up such as syncing up door locks
@@ -2176,26 +2180,26 @@ impl PlandoApp {
                 (0..self.plando.map().rooms.len()).filter(|&room_idx| {
                     self.plando.map().area[room_idx] == area
                 }).map(|room_idx| {
-                    self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data)
+                    self.plando.map_editor.get_room_bounds(room_idx)
                 }).collect()
             },
             MapErrorType::AreaTransitions(_) => { // TODO: Some way to visualize this?
                 vec![]
             },
             MapErrorType::RoomOverlap(idx1, idx2) => {
-                let bbox1 = self.plando.map_editor.get_room_bounds(idx1, &self.plando.game_data);
-                let bbox2 = self.plando.map_editor.get_room_bounds(idx2, &self.plando.game_data);
+                let bbox1 = self.plando.map_editor.get_room_bounds(idx1);
+                let bbox2 = self.plando.map_editor.get_room_bounds(idx2);
                 if let Some(overlap) = bbox1.intersection(&bbox2) {
                     return vec![overlap];
                 }
                 vec![bbox1, bbox2]
             },
             MapErrorType::MapPerArea(room_idx) => {
-                vec![self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data)]
+                vec![self.plando.map_editor.get_room_bounds(room_idx)]
             },
             MapErrorType::MapBounds(_, _, _, _) => {
                 (0..self.plando.map().rooms.len()).filter_map(|room_idx| {
-                    let bbox = self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data);
+                    let bbox = self.plando.map_editor.get_room_bounds(room_idx);
                     if bbox.left + bbox.width > MapEditor::MAP_MAX_SIZE as i32 || bbox.top + bbox.height > MapEditor::MAP_MAX_SIZE as i32 {
                         return Some(bbox);
                     }
@@ -2204,28 +2208,28 @@ impl PlandoApp {
             }
             MapErrorType::PhantoonMap => {
                 let room_idx = self.plando.game_data.room_idx_by_ptr[&511179];
-                vec![self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data)]
+                vec![self.plando.map_editor.get_room_bounds(room_idx)]
             },
             MapErrorType::PhantoonSave => {
                 let room_idx = self.plando.game_data.room_idx_by_ptr[&511626];
-                vec![self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data)]
+                vec![self.plando.map_editor.get_room_bounds(room_idx)]
             },
             MapErrorType::ToiletNoRoom => {
                 let room_idx = self.plando.game_data.toilet_room_idx;
-                vec![self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data)]
+                vec![self.plando.map_editor.get_room_bounds(room_idx)]
             },
             MapErrorType::ToiletMultipleRooms(room_idx1, room_idx2) => {
                 let room_idx = self.plando.game_data.toilet_room_idx;
-                vec![self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data),
-                self.plando.map_editor.get_room_bounds(room_idx1, &self.plando.game_data),
-                self.plando.map_editor.get_room_bounds(room_idx2, &self.plando.game_data)]
+                vec![self.plando.map_editor.get_room_bounds(room_idx),
+                self.plando.map_editor.get_room_bounds(room_idx1),
+                self.plando.map_editor.get_room_bounds(room_idx2)]
             },
             MapErrorType::ToiletArea(room_idx, _, _) => {
-                vec![self.plando.map_editor.get_room_bounds(self.plando.game_data.toilet_room_idx, &self.plando.game_data),
-                self.plando.map_editor.get_room_bounds(room_idx, &self.plando.game_data)]
+                vec![self.plando.map_editor.get_room_bounds(self.plando.game_data.toilet_room_idx),
+                self.plando.map_editor.get_room_bounds(room_idx)]
             },
             MapErrorType::ToiletNoPatch(_, _, _, _) => {
-                vec![self.plando.map_editor.get_room_bounds(self.plando.game_data.toilet_room_idx, &self.plando.game_data)]
+                vec![self.plando.map_editor.get_room_bounds(self.plando.game_data.toilet_room_idx)]
             },
         }
     }
@@ -2570,7 +2574,7 @@ impl PlandoApp {
         let tile_x = (self.local_mouse_x / 8.0).floor().max(0.0) as usize;
         let tile_y = (self.local_mouse_y / 8.0).floor().max(0.0) as usize;
         
-        let room_idx = match self.plando.map_editor.get_room_at(tile_x, tile_y, &self.plando.game_data) {
+        let room_idx = match self.plando.map_editor.get_room_at(tile_x, tile_y) {
             None => return,
             Some(room_idx) => room_idx
         };
@@ -2881,7 +2885,7 @@ impl PlandoApp {
                 }
                 if ui.add(btn).clicked() {
                     if is_missing {
-                        self.plando.map_editor.spawn_room(room_idx, &self.plando.game_data);
+                        self.plando.map_editor.spawn_room(room_idx, &self.plando.locked_doors);
                     }
                     let (room_x, room_y) = self.plando.map().rooms[room_idx];
                     let room_width = room_geometry.map[0].len() as f32 * 8.0;
@@ -2921,7 +2925,7 @@ impl PlandoApp {
                         let room_idx = self.map_editor.selected_room_idx[i];
                         let sub_area = self.plando.map().subarea[room_idx];
                         let sub_sub_area = self.plando.map().subsubarea[room_idx];
-                        self.plando.map_editor.apply_area(room_idx, map_editor::Area::from_tuple((idx, sub_area, sub_sub_area)), &self.plando.game_data);
+                        self.plando.map_editor.apply_area(room_idx, map_editor::Area::from_tuple((idx, sub_area, sub_sub_area)), &self.plando.locked_doors);
                     }
                     self.schedule_redraw();
                 }
@@ -2937,7 +2941,7 @@ impl PlandoApp {
                 let btn = egui::Button::new(RichText::new(area_value.to_string()).color(stroke_col.clone())).fill(col32).min_size(Vec2 { x: 256.0, y: 1.0 });
                 if ui.add(btn).clicked() && !self.map_editor.selected_room_idx.is_empty() {
                     for i in 0..self.map_editor.selected_room_idx.len() {
-                        self.plando.map_editor.apply_area(self.map_editor.selected_room_idx[i], area_value, &self.plando.game_data);
+                        self.plando.map_editor.apply_area(self.map_editor.selected_room_idx[i], area_value, &self.plando.locked_doors);
                     }
                     self.schedule_redraw();
                 }
@@ -2951,7 +2955,7 @@ impl PlandoApp {
                 }
             });
             if ui.button("Swap!").clicked() {
-                self.plando.map_editor.swap_areas(self.map_editor.swap_first, self.map_editor.swap_second, &self.plando.game_data);
+                self.plando.map_editor.swap_areas(self.map_editor.swap_first, self.map_editor.swap_second, &self.plando.locked_doors);
                 self.schedule_redraw();
             }
             egui::ComboBox::from_id_salt("combo_swap_area_second").selected_text(areas[self.map_editor.swap_second]).show_ui(ui, |ui| {

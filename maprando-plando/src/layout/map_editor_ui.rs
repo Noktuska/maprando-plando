@@ -1,3 +1,4 @@
+use maprando::randomize::LockedDoor;
 use maprando_game::{GameData, Map};
 use sfml::{graphics::IntRect, system::Vector2i, window::Key};
 
@@ -45,11 +46,11 @@ impl MapEditorUi {
         }
     }
 
-    pub fn stop_drag(&mut self, map_editor: &mut MapEditor, mouse_tile_x: usize, mouse_tile_y: usize, game_data: &GameData) {
+    pub fn stop_drag(&mut self, map_editor: &mut MapEditor, mouse_tile_x: usize, mouse_tile_y: usize, game_data: &GameData, locked_doors: &Vec<LockedDoor>) {
         if !self.dragged_room_idx.is_empty() {
             // If we are dragging rooms, snap them into place
             for i in 0..self.dragged_room_idx.len() {
-                map_editor.snap_room(self.dragged_room_idx[i], game_data);
+                map_editor.snap_room(self.dragged_room_idx[i], locked_doors);
             }
             self.selected_room_idx.append(&mut self.dragged_room_idx);
         } else if self.selection_start.is_some() && (self.selected_room_idx.is_empty() || Key::LControl.is_pressed() || Key::RControl.is_pressed()) {
