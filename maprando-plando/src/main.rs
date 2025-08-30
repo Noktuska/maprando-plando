@@ -2175,6 +2175,14 @@ impl PlandoApp {
             MapErrorType::EscapeNotLogical => {
                 vec![]
             }
+            MapErrorType::AreaNoMap(_) => vec![],
+            MapErrorType::ItemNotReachable(idx) => {
+                let (room_id, node_id) = self.plando.game_data.item_locations[idx];
+                let room_idx = self.plando.room_id_to_idx(room_id);
+                let (tile_x, tile_y) = self.plando.game_data.node_coords[&(room_id, node_id)];
+                let (room_x, room_y) = self.plando.map().rooms[room_idx];
+                vec![IntRect::new((room_x + tile_x) as i32, (room_y + tile_y) as i32, 1, 1)]
+            }
             MapErrorType::AreaBounds(area, _, _) => {
                 (0..self.plando.map().rooms.len()).filter(|&room_idx| {
                     self.plando.map().area[room_idx] == area

@@ -60,6 +60,18 @@ impl Area {
         }.to_string()
     }
 
+    pub fn to_string_major(&self) -> String {
+        let area_idx = self.to_tuple().0;
+        match area_idx {
+            0 => "Crateria",
+            1 => "Brinstar",
+            2 => "Norfair",
+            3 => "Wrecked Ship",
+            4 => "Maridia",
+            _ => "Tourian",
+        }.to_string()
+    }
+
     pub fn to_tuple(&self) -> (usize, usize, usize) {
         use Area::*;
         match self {
@@ -123,6 +135,8 @@ pub enum MapErrorType {
     // Warnings
     DoorDisconnected(usize, usize), // (room_idx, door_idx) of door which is not connected
     EscapeNotLogical,
+    AreaNoMap(usize), // area idx which has no map
+    ItemNotReachable(usize), // item idx which is not reachable
 
     // Errors
     AreaBounds(usize, usize, usize), // Area idx which exceeds boundary limits followed by current (width, height)
@@ -141,8 +155,20 @@ pub enum MapErrorType {
 impl MapErrorType {
     pub fn to_string(&self, game_data: &GameData) -> String {
         match self {
-            MapErrorType::DoorDisconnected(_, _) => format!("Door is not connected"),
-            MapErrorType::EscapeNotLogical => format!("Escape is not logically clearable. Consider settings a custom escape timer in the logic settings"),
+            MapErrorType::DoorDisconnected(_, _) => format!("Door is not connected. Consider placing a wall door. Otherwise wall doors will be automatically placed upon patching a ROM"),
+            MapErrorType::EscapeNotLogical => format!("Escape is not logically clearable. Consider settings a custom escape timer in the logic settings. Otherwise the escape will not be possible"),
+            MapErrorType::AreaNoMap(idx) => {
+                let area = Area::from_tuple((*idx, 0, 0));
+                format!("{} has no map. Consider placing a map into the area. No issues will arise if an area has no map", area.to_string_major())
+            }
+            MapErrorType::ItemNotReachable(idx) => {
+                let (room_id, node_id) = game_data.item_locations[*idx];
+                let room_idx = game_data.room_idx_by_id[&room_id];
+                let room_geometry = &game_data.room_geometry[room_idx];
+                let room_name = &room_geometry.name;
+                let node_name = game_data.node_json_map[&(room_id, node_id)]["name"].as_str().unwrap();
+                format!("Item is not logically reachable. Consider configuring a Spoiler Override. Otherwise the item will not logically appear in the credits. {room_name}: {node_name}")
+            }
             MapErrorType::AreaBounds(_, w, h) =>
                 format!("Area exceeds maximum size: Currently ({w}, {h}), Maximum: ({}, {})", MapEditor::AREA_MAX_WIDTH, MapEditor::AREA_MAX_HEIGHT),
             MapErrorType::AreaTransitions(t) =>
