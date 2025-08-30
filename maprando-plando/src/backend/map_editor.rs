@@ -568,6 +568,10 @@ impl MapEditor {
         let mut area_max = [Vector2i::new(0, 0); 6];
 
         for (room_idx, &(room_x, room_y)) in self.map.rooms.iter().enumerate() {
+            if !self.map.room_mask[room_idx] {
+                continue;
+            }
+
             let area = self.map.area[room_idx];
             area_min[area].x = area_min[area].x.min(room_x as i32);
             area_min[area].y = area_min[area].y.min(room_y as i32);
@@ -594,13 +598,19 @@ impl MapEditor {
         let mut max_x = 0;
         let mut max_y = 0;
 
-        for (room_idx, &(room_x, room_y)) in self.map.rooms.iter().enumerate() {
+        for (room_idx, (room_x, room_y)) in self.map.rooms.iter_mut().enumerate() {
+            if !self.map.room_mask[room_idx] {
+                *room_x = (*room_x).min(Self::MAP_MAX_SIZE);
+                *room_y = (*room_y).min(Self::MAP_MAX_SIZE);
+                continue;
+            }
+
             let room_geometry = &self.game_data.room_geometry[room_idx];
             let room_width = room_geometry.map[0].len();
             let room_height = room_geometry.map.len();
 
-            let room_right = room_x + room_width;
-            let room_bottom = room_y + room_height;
+            let room_right = *room_x + room_width;
+            let room_bottom = *room_y + room_height;
 
             max_x = max_x.max(room_right);
             max_y = max_y.max(room_bottom);
@@ -638,11 +648,15 @@ impl MapEditor {
     }
 
     fn check_toilet(&mut self) {
+        if !self.map.room_mask[self.game_data.toilet_room_idx] {
+            return;
+        }
+
         let (room_x, room_y) = self.map.rooms[self.game_data.toilet_room_idx];
         let toilet_bbox = IntRect::new(room_x as i32, room_y as i32 + 2, 1, 6);
 
         let cross_rooms: Vec<usize> = (0..self.map.rooms.len()).filter_map(|idx| {
-            if idx == self.game_data.toilet_room_idx {
+            if !self.map.room_mask[idx] || idx == self.game_data.toilet_room_idx {
                 return None;
             }
             let other_bbox = self.get_room_bounds(idx);
@@ -728,6 +742,10 @@ impl MapEditor {
         ).collect();
         // Check every area has exactly one map station
         for room_idx in map_room_idxs {
+            if !self.map.room_mask[room_idx] {
+                continue;
+            }
+
             let area = self.map.area[room_idx];
             if area_maps[area] {
                 self.error_list.push(MapErrorType::MapPerArea(room_idx));
