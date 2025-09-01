@@ -2197,7 +2197,7 @@ impl PlandoApp {
             }
             MapErrorType::AreaBounds(area, _, _) => {
                 (0..self.plando.map().rooms.len()).filter(|&room_idx| {
-                    self.plando.map().area[room_idx] == area
+                    self.plando.map().area[room_idx] == area && self.plando.map().room_mask[room_idx]
                 }).map(|room_idx| {
                     self.plando.map_editor.get_room_bounds(room_idx)
                 }).collect()
@@ -2218,6 +2218,9 @@ impl PlandoApp {
             },
             MapErrorType::MapBounds(_, _, _, _) => {
                 (0..self.plando.map().rooms.len()).filter_map(|room_idx| {
+                    if !self.plando.map().room_mask[room_idx] {
+                        return None;
+                    }
                     let bbox = self.plando.map_editor.get_room_bounds(room_idx);
                     if bbox.left + bbox.width > MapEditor::MAP_MAX_SIZE as i32 || bbox.top + bbox.height > MapEditor::MAP_MAX_SIZE as i32 {
                         return Some(bbox);
