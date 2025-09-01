@@ -2000,7 +2000,16 @@ impl PlandoApp {
                             false => None
                         };
                         self.plando.creator_name = self.logic_customization.creator_name.clone();
-                        // Remove placed major items that are also starting items
+                        // Remove placed starting items
+                        for item_idx in 0..self.plando.item_locations.len() {
+                            let item = self.plando.item_locations[item_idx];
+                            let placeable = Placeable::from_item(item);
+                            if let Some(max) = self.plando.get_max_placeable_count(placeable) {
+                                if self.plando.placed_item_count[placeable as usize] > max {
+                                    self.plando.place_item(item_idx, Item::Nothing);
+                                }
+                            }
+                        }
                         self.plando.item_locations.retain(|item| {
                             !item.is_unique() || !self.logic_customization.settings.item_progression_settings.starting_items.iter().any(|start| {
                                 start.item == *item && start.count > 0
