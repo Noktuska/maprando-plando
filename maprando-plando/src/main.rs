@@ -2000,6 +2000,7 @@ impl PlandoApp {
                             false => None
                         };
                         self.plando.creator_name = self.logic_customization.creator_name.clone();
+                        self.plando.load_preset(self.logic_customization.settings.clone());
                         // Remove placed starting items
                         for item_idx in 0..self.plando.item_locations.len() {
                             let item = self.plando.item_locations[item_idx];
@@ -2010,7 +2011,6 @@ impl PlandoApp {
                                 }
                             }
                         }
-                        self.plando.load_preset(self.logic_customization.settings.clone());
                         self.settings.last_logic_preset = Some(self.logic_customization.settings.clone());
                         self.settings.creator_name = self.logic_customization.creator_name.clone();
                         self.settings.custom_escape_time = self.plando.custom_escape_time;
