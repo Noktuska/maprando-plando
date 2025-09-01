@@ -304,6 +304,7 @@ impl MapEditor {
     pub fn load_map(&mut self, map: Map) {
         self.reset();
         self.map = map;
+        self.update_invalid_doors();
         self.is_valid(&vec![]);
     }
 
@@ -332,6 +333,7 @@ impl MapEditor {
             self.erase_room(room, &empty_vec);
         }
 
+        self.update_invalid_doors();
         self.is_valid(&empty_vec);
 
         Ok(())
@@ -828,6 +830,24 @@ impl MapEditor {
         let area_save = self.map.area[phantoon_save_idx];
         if self.map.room_mask[phantoon_save_idx] && area_save != area_phantoon {
             self.error_list.push(MapErrorType::PhantoonSave);
+        }
+    }
+
+    fn update_invalid_doors(&mut self) {
+        self.invalid_doors.clear();
+
+        for room_idx in 0..self.map.rooms.len() {
+            if !self.map.room_mask[room_idx] {
+                continue;
+            }
+
+            let room_geometry = &self.game_data.room_geometry[room_idx];
+            for door_idx in 0..room_geometry.doors.len() {
+                let door_conn_opt = self.get_door_conn_idx(room_idx, door_idx);
+                if door_conn_opt.is_none() {
+                    self.invalid_doors.insert((room_idx, door_idx));
+                }
+            }
         }
     }
 }
