@@ -290,7 +290,12 @@ impl MapEditor {
             let room_geometry = &self.game_data.room_geometry[room_idx];
             let room_width = room_geometry.map[0].len();
             let room_height = room_geometry.map.len();
-            x >= room_x && y >= room_y && x < room_x + room_width && y < room_y + room_height
+            if x < room_x || y < room_y || x >= room_x + room_width || y >= room_y + room_height {
+                return false;
+            }
+            let tile_x = x - room_x;
+            let tile_y = y - room_y;
+            room_geometry.map[tile_y][tile_x] == 1
         })
     }
 
