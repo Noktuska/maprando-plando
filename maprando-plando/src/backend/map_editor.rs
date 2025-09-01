@@ -206,6 +206,8 @@ impl MapErrorType {
         match self {
             MapErrorType::DoorDisconnected(_, _) => false,
             MapErrorType::EscapeNotLogical => false,
+            MapErrorType::AreaNoMap(_) => false,
+            MapErrorType::ItemNotReachable(_) => false,
             _ => true
         }
     }
@@ -777,6 +779,12 @@ impl MapEditor {
                 self.error_list.push(MapErrorType::MapPerArea(room_idx));
             }
             area_maps[area] = true;
+        }
+        // Check that every area has at least one map
+        for (idx, &has_map) in area_maps.iter().enumerate() {
+            if !has_map {
+                self.error_list.push(MapErrorType::AreaNoMap(idx));
+            }
         }
 
         // Check Phantoon Map is connected to Phantoon through one room in a singular area

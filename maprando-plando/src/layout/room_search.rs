@@ -116,7 +116,7 @@ impl RoomSearch {
             }
 
             let room_geometry = &game_data.room_geometry[idx];
-            let room_name = game_data.room_json_map[&idx]["name"].as_str().unwrap();
+            let room_name = game_data.room_json_map[&room_geometry.room_id]["name"].as_str().unwrap();
             if !self.name.is_empty() && !room_name.to_ascii_lowercase().contains(&self.name.to_ascii_lowercase()) {
                 return false;
             }

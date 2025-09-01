@@ -2096,7 +2096,7 @@ impl PlandoApp {
                     continue;
                 }
 
-                let room_name = self.plando.game_data.room_json_map[&room_idx]["name"].as_str().unwrap().to_string();
+                let room_name = self.plando.game_data.room_json_map[&room_geometry.room_id]["name"].as_str().unwrap().to_string();
                 info_overlay = Some(room_name);
                 last_hovered_room_idx = Some(room_idx);
             }
@@ -2859,7 +2859,7 @@ impl PlandoApp {
             for room_idx in room_idxs {
                 let is_missing = !self.plando.map().room_mask[room_idx];
                 let room_geometry = &self.plando.game_data.room_geometry[room_idx];
-                let room_name = self.plando.game_data.room_json_map[&room_idx]["name"].as_str().unwrap();
+                let room_name = self.plando.game_data.room_json_map[&room_geometry.room_id]["name"].as_str().unwrap();
                 let mut btn = egui::Button::new(room_name).min_size(Vec2 { x: 256.0, y: 1.0 });
                 if is_missing {
                     btn = btn.fill(Color32::RED);
