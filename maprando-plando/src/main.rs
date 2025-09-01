@@ -2010,11 +2010,6 @@ impl PlandoApp {
                                 }
                             }
                         }
-                        self.plando.item_locations.retain(|item| {
-                            !item.is_unique() || !self.logic_customization.settings.item_progression_settings.starting_items.iter().any(|start| {
-                                start.item == *item && start.count > 0
-                            })
-                        });
                         self.plando.load_preset(self.logic_customization.settings.clone());
                         self.settings.last_logic_preset = Some(self.logic_customization.settings.clone());
                         self.settings.creator_name = self.logic_customization.creator_name.clone();
