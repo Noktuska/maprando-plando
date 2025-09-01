@@ -1,4 +1,4 @@
-use crate::{backend::{map_editor::{self, MapEditor, MapErrorType}, plando::{get_double_item_offset, DoubleItemPlacement, MapRepositoryType, Placeable, Plando, SpoilerOverride, ITEM_VALUES}, randomize::get_vertex_info}, benchmark::{Benchmark, BenchmarkResult}, egui_sfml::DrawInput, input_state::KeyState, layout::{hotkey_settings::Keybind, map_editor_ui::MapEditorUi, room_search::{RoomSearch, SearchOpt}, settings_customize::{Customization, SettingsCustomize, SettingsCustomizeResult}, settings_logic::LogicCustomization, Layout, SidebarPanel, WindowType}, texture_manager::TextureManager, update::{Asset, Release}};
+use crate::{backend::{map_editor::{self, MapEditor, MapErrorType}, plando::{get_double_item_offset, DoubleItemPlacement, MapRepositoryType, Placeable, Plando, SpoilerOverride, ITEM_VALUES}, randomize::get_vertex_info}, benchmark::{Benchmark, BenchmarkResult}, egui_sfml::DrawInput, input_state::KeyState, layout::{hotkey_settings::Keybind, map_editor_ui::MapEditorUi, room_search::RoomSearch, settings_customize::{Customization, SettingsCustomize, SettingsCustomizeResult}, settings_logic::LogicCustomization, Layout, SidebarPanel, WindowType}, texture_manager::TextureManager, update::{Asset, Release}};
 use anyhow::{anyhow, bail, Result};
 use egui::{self, style::default_text_styles, Color32, Context, FontDefinitions, Id, RichText, Sense, Ui, Vec2};
 use egui_sfml::{SfEgui, UserTexSource};
@@ -2096,7 +2096,7 @@ impl PlandoApp {
                     continue;
                 }
 
-                let room_name = self.plando.game_data.room_geometry[room_idx].name.clone();
+                let room_name = self.plando.game_data.room_json_map[&room_idx]["name"].as_str().unwrap().to_string();
                 info_overlay = Some(room_name);
                 last_hovered_room_idx = Some(room_idx);
             }
@@ -2847,52 +2847,16 @@ impl PlandoApp {
     }
 
     fn draw_sidebar_room_select(&mut self, ui: &mut Ui) {
-        ui.text_edit_singleline(&mut self.room_search.name);
-        ui.collapsing("Advanced Search", |ui| {
-            egui::ComboBox::from_label("Heated").selected_text(self.room_search.is_heated.to_string()).show_ui(ui, |ui| {
-                ui.selectable_value(&mut self.room_search.is_heated, SearchOpt::Any, "Any");
-                ui.selectable_value(&mut self.room_search.is_heated, SearchOpt::Yes, "Yes");
-                ui.selectable_value(&mut self.room_search.is_heated, SearchOpt::No, "No");
-            });
-
-            egui::Grid::new("grid_adv_search").striped(true).num_columns(3).show(ui, |ui| {
-                ui.label("");
-                ui.label("Min");
-                ui.label("Max");
-                ui.end_row();
-
-                ui.label("Width");
-                ui.add(egui::DragValue::new(&mut self.room_search.min_width).range(0..=self.room_search.max_width));
-                ui.add(egui::DragValue::new(&mut self.room_search.max_width).range(self.room_search.min_width..=99));
-                ui.end_row();
-                
-                ui.label("Height");
-                ui.add(egui::DragValue::new(&mut self.room_search.min_height).range(0..=self.room_search.max_height));
-                ui.add(egui::DragValue::new(&mut self.room_search.max_height).range(self.room_search.min_height..=99));
-                ui.end_row();
-
-                let door_order = ["Right", "Down", "Left", "Up"];
-                for i in 0..4 {
-                    ui.label(format!("{} Door", door_order[i]));
-                    ui.add(egui::DragValue::new(&mut self.room_search.min_door_count[i]).range(0..=self.room_search.max_door_count[i]));
-                    ui.add(egui::DragValue::new(&mut self.room_search.max_door_count[i]).range(self.room_search.min_door_count[i]..=9));
-                    ui.end_row();
-                }
-            });
-        });
-
-        if ui.button("Clear filters").clicked() {
-            self.room_search.reset();
-        }
+        self.room_search.render(ui);
 
         ui.separator();
 
         egui::ScrollArea::vertical().show(ui, |ui| {
-            let room_idxs = self.room_search.filter(&self.plando.game_data);
+            let room_idxs = self.room_search.filter(&self.plando.game_data, self.plando.map());
             for room_idx in room_idxs {
                 let is_missing = !self.plando.map().room_mask[room_idx];
                 let room_geometry = &self.plando.game_data.room_geometry[room_idx];
-                let room_name = &room_geometry.name;
+                let room_name = self.plando.game_data.room_json_map[&room_idx]["name"].as_str().unwrap();
                 let mut btn = egui::Button::new(room_name).min_size(Vec2 { x: 256.0, y: 1.0 });
                 if is_missing {
                     btn = btn.fill(Color32::RED);
