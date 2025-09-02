@@ -101,6 +101,7 @@ fn perform_update() -> Result<()> {
     // If a new updater was shipped, replace the old one
     if std::fs::exists(&new_updater_path)? {
         self_update::self_replace::self_replace(&new_updater_path)?;
+        std::fs::remove_file(new_updater_path)?;
     }
 
     println!("Deleting tmp directory...");
