@@ -1292,6 +1292,7 @@ impl PlandoApp {
                     None => self.logic_customization.preset_data.default_preset.clone()
                 };
                 self.plando.load_preset(preset);
+                self.schedule_redraw();
                 self.reset_after_patch = false;
             }
         }
