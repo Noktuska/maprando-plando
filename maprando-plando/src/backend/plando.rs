@@ -780,11 +780,6 @@ impl Plando {
         settings.item_progression_settings.preset = Some(self.creator_name.clone());
         settings.map_layout = self.creator_name.clone();
 
-        settings.other_settings.wall_jump = if self.item_locations.iter().any(|item| *item == Item::WallJump) {
-            WallJump::Collectible
-        } else {
-            WallJump::Vanilla
-        };
         settings.doors_mode = DoorsMode::Beam;
     }
 
