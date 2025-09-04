@@ -1890,7 +1890,7 @@ impl PlandoApp {
                             self.logic_customization.open = true;
                             self.logic_customization.load(
                                 self.plando.randomizer_settings.clone(),
-                                self.plando.custom_escape_time.unwrap_or(0),
+                                self.plando.custom_escape_time.clone(),
                                 self.plando.creator_name.clone()
                             );
                             ui.close_menu();

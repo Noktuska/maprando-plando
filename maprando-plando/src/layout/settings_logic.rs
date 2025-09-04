@@ -45,10 +45,11 @@ impl LogicCustomization {
         }
     }
 
-    pub fn load(&mut self, settings: RandomizerSettings, custom_escape_time: usize, creator_name: String) {
+    pub fn load(&mut self, settings: RandomizerSettings, custom_escape_time: Option<usize>, creator_name: String) {
         self.settings = settings.clone();
         self.cur_settings = settings;
-        self.custom_escape_time = custom_escape_time;
+        self.custom_escape_time = custom_escape_time.unwrap_or(0);
+        self.use_custom_escape_time = custom_escape_time.is_some();
         self.creator_name = creator_name;
     }
 
