@@ -200,9 +200,6 @@ impl LogicCustomization {
                 }
             });
             // Save preset
-            if self.cur_settings.name.is_none() {
-                self.cur_settings.name = Some(String::new());
-            }
             ui.horizontal(|ui| {
                 ui.label("Save preset as");
                 ui.text_edit_singleline(&mut self.custom_preset_name);
@@ -212,6 +209,7 @@ impl LogicCustomization {
             // Apply / Save / Cancel
             ui.horizontal(|ui| {
                 if ui.button("Apply").clicked() {
+                    self.apply_presets();
                     self.settings = self.cur_settings.clone();
                     self.customize_window_open = false;
                     should_close = Ok(true);
@@ -537,6 +535,22 @@ impl LogicCustomization {
         self.preset_data.full_presets.push(self.cur_settings.clone());
 
         Ok(())
+    }
+
+    fn apply_presets(&mut self) {
+        match self.preset_data.skill_presets.iter().find(|x| **x == self.cur_settings.skill_assumption_settings) {
+            Some(preset) => self.cur_settings.skill_assumption_settings.preset = preset.preset.clone(),
+            None => self.cur_settings.skill_assumption_settings.preset = None
+        }
+        self.cur_settings.item_progression_settings.preset = None;
+        match self.preset_data.quality_of_life_presets.iter().find(|x| **x == self.cur_settings.quality_of_life_settings) {
+            Some(preset) => self.cur_settings.quality_of_life_settings.preset = preset.preset.clone(),
+            None => self.cur_settings.quality_of_life_settings.preset = None
+        }
+        match self.preset_data.objective_presets.iter().find(|x| **x == self.cur_settings.objective_settings) {
+            Some(preset) => self.cur_settings.objective_settings.preset = preset.preset.clone(),
+            None => self.cur_settings.objective_settings.preset = None
+        }
     }
 }
 

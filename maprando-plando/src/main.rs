@@ -4,7 +4,7 @@ use egui::{self, style::default_text_styles, Color32, Context, FontDefinitions, 
 use egui_sfml::{SfEgui, UserTexSource};
 use hashbrown::{HashMap, HashSet};
 use input_state::MouseState;
-use maprando::{patch::Rom, preset::PresetData, randomize::{LockedDoor, SpoilerRouteEntry}, settings::{Objective, RandomizerSettings}};
+use maprando::{patch::Rom, preset::PresetData, randomize::{LockedDoor, SpoilerRouteEntry}, settings::{try_upgrade_settings, Objective, RandomizerSettings}};
 use maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType};
 use rand::RngCore;
 use rfd::FileDialog;
@@ -151,7 +151,7 @@ fn load_settings(path: &Path, preset_data: &PresetData) -> Result<Settings> {
     if let Some(last_logic_preset) = v.get_mut("last_logic_preset") {
         if !last_logic_preset.is_null() {
             let preset_string = last_logic_preset.take().to_string();
-            preset_opt = Some(utils::try_upgrade_settings(preset_string, preset_data, true)?.1);
+            preset_opt = Some(try_upgrade_settings(preset_string, preset_data, true)?.1);
         }
     }
 
@@ -1130,7 +1130,7 @@ impl PlandoApp {
         if let Some(settings) = v.get_mut("settings") {
             if !settings.is_null() {
                 let preset_string = settings.take().to_string();
-                let preset_string = utils::try_upgrade_settings(preset_string, preset_data, true)?.0;
+                let preset_string = try_upgrade_settings(preset_string, preset_data, true)?.0;
                 let preset: Value = serde_json::from_str(&preset_string)?;
                 *settings = preset;
             }
