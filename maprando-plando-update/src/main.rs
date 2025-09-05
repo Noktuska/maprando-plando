@@ -11,6 +11,10 @@ fn main() {
 }
 
 fn perform_update() -> Result<()> {
+    let exe_path = std::env::current_exe()?;
+    let parent_dir = exe_path.parent().unwrap();
+    std::env::set_current_dir(parent_dir)?;
+
     let args: Vec<String> = std::env::args().collect();
 
     let mut args_map = HashMap::new();
