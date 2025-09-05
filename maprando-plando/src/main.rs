@@ -2351,7 +2351,7 @@ impl PlandoApp {
                 sprite_helm.set_position(Vector2f::new(room_x as f32 + tile_x, room_y as f32 + tile_y) * 8.0);
                 sprite_helm.set_scale(8.0 / tex_helm_w);
 
-                if sprite_helm.global_bounds().contains2(self.local_mouse_x, self.local_mouse_y) {
+                if self.is_mouse_public && sprite_helm.global_bounds().contains2(self.local_mouse_x, self.local_mouse_y) {
                     sprite_helm.scale(1.2);
                     if self.mouse_state.consume_click(mouse::Button::Left) {
                         self.plando.place_start_location(self.plando.game_data.start_locations[i].clone());
