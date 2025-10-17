@@ -365,7 +365,14 @@ impl Plando {
         // Place any remaining wall doors
         for door in self.map_editor.error_list.clone() {
             if let MapErrorType::DoorDisconnected(room_idx, door_idx) = door {
-                let _ = self.place_door(room_idx, door_idx, Some(DoorType::Wall), false);
+                if let Err(e) = self.place_door(room_idx, door_idx, Some(DoorType::Wall), false) {
+                    let door = &self.game_data.room_geometry[room_idx].doors[door_idx];
+                    let ptr_pair = (door.exit_ptr, door.entrance_ptr);
+                    let (room_id, node_id) = self.game_data.door_ptr_pair_map[&ptr_pair];
+                    let room_name = self.game_data.room_json_map[&room_id]["name"].as_str().unwrap();
+                    let node_name = self.game_data.node_json_map[&(room_id, node_id)]["name"].as_str().unwrap();
+                    bail!("Could not place wall door: {room_name}: {node_name} - {e}");
+                }
             }
         }
 
