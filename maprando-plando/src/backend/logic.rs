@@ -371,6 +371,12 @@ async fn update_randomization_impl(
         &mut rng
     ).unwrap();
 
+    // Maximize escape timer by default so people can test for a custom escape time
+    if r.escape_time_seconds == 0.0 {
+        r.escape_time_seconds = 5995.0;
+        s.escape.final_time_seconds = 5995.0;
+    }
+
     // Apply custom escape time
     if let Some(custom_escape_time) = custom_escape_time {
         let base_igt_frames = custom_escape_time * 60;
