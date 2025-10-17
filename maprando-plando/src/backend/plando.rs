@@ -829,6 +829,16 @@ impl Plando {
         Ok(handle)
     }
 
+    pub fn check_warnings(&mut self) {
+        self.map_editor.error_list.retain(|x| *x != MapErrorType::EscapeNotLogical);
+
+        if let Some((r, _)) = self.logic.get_randomization().as_ref() {
+            if r.escape_time_seconds == 5995.0 || r.escape_time_seconds == 0.0 {
+                self.map_editor.error_list.push(MapErrorType::EscapeNotLogical);
+            }
+        }
+    }
+
     /* COPY FROM maprando::randomize::get_initial_states */
     fn get_initial_states(&self) -> (GlobalState, LocalState) {
         let items = vec![false; self.game_data.item_isv.keys.len()];

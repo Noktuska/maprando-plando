@@ -1161,6 +1161,8 @@ impl PlandoApp {
                 }
             }
 
+            self.plando.check_warnings();
+
             self.schedule_redraw();
         }
 
@@ -2084,7 +2086,8 @@ impl PlandoApp {
                 vec![IntRect::new((room_x + door.x) as i32, (room_y + door.y) as i32, 1, 1)]
             },
             MapErrorType::EscapeNotLogical => {
-                vec![]
+                let motherbrain_idx = self.plando.game_data.room_idx_by_id[&238];
+                vec![self.plando.map_editor.get_room_bounds(motherbrain_idx)]
             }
             MapErrorType::AreaNoMap(_) => vec![],
             MapErrorType::ItemNotReachable(idx) => {

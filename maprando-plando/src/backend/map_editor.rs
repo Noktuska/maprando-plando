@@ -156,7 +156,7 @@ impl MapErrorType {
     pub fn to_string(&self, game_data: &GameData) -> String {
         match self {
             MapErrorType::DoorDisconnected(_, _) => format!("Door is not connected. Consider placing a wall door. Otherwise wall doors will be automatically placed upon patching a ROM"),
-            MapErrorType::EscapeNotLogical => format!("Escape is not logically clearable. Consider settings a custom escape timer in the logic settings. Otherwise the escape will not be possible"),
+            MapErrorType::EscapeNotLogical => format!("Escape is not logically clearable. Consider settings a custom escape timer in the logic settings. Escape Timer will maximize by default."),
             MapErrorType::AreaNoMap(idx) => {
                 let area = Area::from_tuple((*idx, 0, 0));
                 format!("{} has no map. Consider placing a map into the area. No issues will arise if an area has no map", area.to_string_major())
