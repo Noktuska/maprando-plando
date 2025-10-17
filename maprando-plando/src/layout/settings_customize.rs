@@ -164,14 +164,8 @@ impl Customization {
             1 => TileTheme::AreaThemed,
             2 => TileTheme::Scrambled,
             i => {
-                let idx = i - 2;
-                if idx == themes.len() {
-                    TileTheme::Constant("Outline".to_string())
-                } else if idx > themes.len() {
-                    TileTheme::Constant("Invisible".to_string())
-                } else {
-                    TileTheme::Constant(themes[idx].name.clone())
-                }
+                let idx = i - 3;
+                TileTheme::Constant(themes[idx].name.clone())
             }
         };
         let door_theme = match self.door_theme {
@@ -242,6 +236,8 @@ impl SettingsCustomize {
             ("YellowMaridia", "Yellow Maridia"),
             ("MechaTourian", "Mecha Tourian"),
             ("MetroidHabitat", "Metroid Habitat"),
+            ("Outline", "Practice Outlines"),
+            ("Invisible", "Invisible")
         ]
         .into_iter()
         .map(|(x, y)| MosaicTheme {
@@ -365,8 +361,6 @@ impl SettingsCustomize {
                 ui.label("Tile theme");
                 let mut tile_theme_strs: Vec<String> = vec!["Vanilla", "Area-themed", "Scrambled"].iter().map(|x| x.to_string()).collect();
                 self.mosaic_themes.iter().for_each(|x| tile_theme_strs.push(x.display_name.clone()));
-                tile_theme_strs.push("Practice Outlines".to_string());
-                tile_theme_strs.push("Invisible".to_string());
                 egui::ComboBox::from_id_salt("combo_customize_tile").selected_text(&tile_theme_strs[self.customization.tile_theme]).show_ui(ui, |ui| {
                     for (i, theme) in tile_theme_strs.iter().enumerate() {
                         ui.selectable_value(&mut self.customization.tile_theme, i, theme);
