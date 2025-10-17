@@ -108,7 +108,7 @@ impl MouseState {
         false
     }
 
-    pub fn consume_click_any(&mut self) -> Option<Button> {
+    pub fn _consume_click_any(&mut self) -> Option<Button> {
         self.button_clicked.take()
     }
 }

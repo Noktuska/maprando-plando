@@ -1,11 +1,11 @@
-use crate::{backend::{map_editor::{self, MapEditor, MapErrorType}, plando::{get_double_item_offset, DoubleItemPlacement, MapRepositoryType, Placeable, Plando, SpoilerOverride, ITEM_VALUES}, randomize::get_vertex_info}, benchmark::{Benchmark, BenchmarkResult}, egui_sfml::DrawInput, input_state::KeyState, layout::{hotkey_settings::Keybind, map_editor_ui::MapEditorUi, room_search::RoomSearch, settings_customize::{Customization, SettingsCustomize, SettingsCustomizeResult}, settings_logic::LogicCustomization, Layout, SidebarPanel, WindowType}, texture_manager::TextureManager, update::{Asset, Release}};
+use crate::{backend::{map_editor::{self, MapEditor, MapErrorType}, plando::{get_double_item_offset, DoubleItemPlacement, MapRepositoryType, Placeable, Plando, SpoilerOverride, ITEM_VALUES}, randomize::get_vertex_info}, benchmark::{Benchmark, BenchmarkResult}, egui_sfml::DrawInput, input_state::KeyState, layout::{hotkey_settings::Keybind, map_editor_ui::MapEditorUi, room_search::RoomSearch, settings_customize::{Customization, SettingsCustomize, SettingsCustomizeResult}, settings_logic::LogicCustomization, Layout, SidebarPanel, WindowType}, seed_data::SeedData, texture_manager::TextureManager, update::{Asset, Release}};
 use anyhow::{anyhow, bail, Result};
 use egui::{self, style::default_text_styles, Color32, Context, FontDefinitions, Id, RichText, Sense, Ui, Vec2};
 use egui_sfml::{SfEgui, UserTexSource};
 use hashbrown::{HashMap, HashSet};
 use input_state::MouseState;
-use maprando::{patch::Rom, preset::PresetData, randomize::{LockedDoor, SpoilerRouteEntry}, settings::{try_upgrade_settings, Objective, RandomizerSettings}};
-use maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType};
+use maprando::{patch::Rom, preset::PresetData, randomize::SpoilerRouteEntry, settings::{try_upgrade_settings, Objective, RandomizerSettings}};
+use maprando_game::{BeamType, DoorType, GameData, Item, MapTileEdge, MapTileInterior, MapTileSpecialType};
 use rand::RngCore;
 use rfd::FileDialog;
 use serde::{Deserialize, Serialize};
@@ -29,6 +29,7 @@ mod input_state;
 mod update;
 mod utils;
 mod egui_sfml;
+mod seed_data;
 mod texture_manager;
 
 #[derive(Clone)]
@@ -101,38 +102,6 @@ fn load_vanilla_rom(rom_path: &Path) -> Result<Rom> {
     Ok(rom)
 }
 
-#[derive(Serialize, Deserialize)]
-struct SeedData {
-    map: Map,
-    start_location: (usize, usize), // RoomId, NodeId
-    item_placements: Vec<Item>,
-    door_locks: Vec<LockedDoor>,
-    settings: RandomizerSettings,
-    #[serde(default = "Vec::new")]
-    spoiler_overrides: Vec<SpoilerOverride>,
-    #[serde(default)]
-    custom_escape_time: Option<usize>,
-    #[serde(default)]
-    creator_name: String
-}
-
-impl SeedData {
-    fn new(plando: &Plando) -> Self {
-        let start_loc = &plando.start_location;
-
-        SeedData {
-            map: plando.map().clone(),
-            start_location: (start_loc.room_id, start_loc.node_id),
-            item_placements: plando.item_locations.clone(),
-            door_locks: plando.locked_doors.clone(),
-            settings: plando.randomizer_settings.clone(),
-            spoiler_overrides: plando.spoiler_overrides.clone(),
-            custom_escape_time: plando.custom_escape_time.clone(),
-            creator_name: plando.creator_name.clone()
-        }
-    }
-}
-
 fn save_settings(settings: &Settings, path: &Path) -> Result<()> {
     let mut file = File::create(path)?;
     let data = serde_json::to_string_pretty(&settings)?;
@@ -151,7 +120,7 @@ fn load_settings(path: &Path, preset_data: &PresetData) -> Result<Settings> {
     if let Some(last_logic_preset) = v.get_mut("last_logic_preset") {
         if !last_logic_preset.is_null() {
             let preset_string = last_logic_preset.take().to_string();
-            preset_opt = Some(try_upgrade_settings(preset_string, preset_data, true)?.1);
+            preset_opt = Some(try_upgrade_settings(preset_string, preset_data, false)?.1);
         }
     }
 
@@ -1102,13 +1071,8 @@ impl PlandoApp {
     }
 
     fn save_seed(&mut self, path: &Path) -> Result<()> {
-        let mut file = File::create(path)?;
-
-        let seed_data = SeedData::new(&self.plando);
-
-        let out = serde_json::to_string(&seed_data)?;
-
-        file.write_all(out.as_bytes())?;
+        let seed_data = SeedData::from_plando(&self.plando);
+        seed_data.save_to_file(path, &self.logic_customization.preset_data)?;
 
         self.push_recent_seed(path.to_str().unwrap().to_string());
 
@@ -1116,80 +1080,9 @@ impl PlandoApp {
     }
 
     fn load_seed(&mut self, path: &Path) -> Result<()> {
-        let mut file = File::open(path)?;
+        let seed_data = SeedData::from_file(path, &self.plando.game_data, &self.logic_customization.preset_data)?;
 
-        let mut str = String::new();
-        file.read_to_string(&mut str)?;
-
-        let preset_data = &self.logic_customization.preset_data;
         let plando = &mut self.plando;
-
-        // Keep seed data somewhat backwards compatible
-        // Upgrade randomizer settings
-        let mut v: Value = serde_json::from_str(&str)?;
-        if let Some(settings) = v.get_mut("settings") {
-            if !settings.is_null() {
-                let preset_string = settings.take().to_string();
-                let preset_string = try_upgrade_settings(preset_string, preset_data, true)?.0;
-                let preset: Value = serde_json::from_str(&preset_string)?;
-                *settings = preset;
-            }
-        }
-        // Start Location was stored as the vec idx in previous editions
-        if let Some(start_loc_idx) = v.get_mut("start_location") {
-            if let Some(idx) = start_loc_idx.as_u64() {
-                let start_loc = if idx as usize >= plando.game_data.start_locations.len() {
-                    &Plando::get_ship_start()
-                } else {
-                    &plando.game_data.start_locations[idx as usize]
-                };
-                *start_loc_idx = serde_json::to_value((start_loc.room_id, start_loc.node_id))?;
-            }
-        }
-        // Locked doors were put in a serializable wrapper
-        let map: Map = serde_json::from_value(v["map"].clone())?;
-        if let Some(v_door_locks) = v.get_mut("door_locks") {
-            if let Some(vec) = v_door_locks.as_array_mut() {
-                if !vec.is_empty() && serde_json::from_value::<LockedDoor>(vec[0].clone()).is_err() {
-                    for old_value in vec {
-                        let room_id = old_value["room_id"].as_u64().ok_or(anyhow!("Expected room_id"))? as usize;
-                        let node_id = old_value["node_id"].as_u64().ok_or(anyhow!("Expected node_id"))? as usize;
-                        let door_type = match old_value["door_type"].as_u64().ok_or(anyhow!("Expected door_type"))? {
-                            2 => DoorType::Red,
-                            3 => DoorType::Green,
-                            4 => DoorType::Yellow,
-                            5 => DoorType::Beam(BeamType::Charge),
-                            6 => DoorType::Beam(BeamType::Ice),
-                            7 => DoorType::Beam(BeamType::Wave),
-                            8 => DoorType::Beam(BeamType::Spazer),
-                            9 => DoorType::Beam(BeamType::Plasma),
-                            _ => DoorType::Red
-                        };
-
-                        let ptr_pair = plando.game_data.reverse_door_ptr_pair_map[&(room_id, node_id)];
-                        let conn = map.doors.iter().find(|door_conn| {
-                            door_conn.0 == ptr_pair || door_conn.1 == ptr_pair
-                        }).ok_or(anyhow!("Door connection not defined in map"))?;
-
-                        let locked_door = LockedDoor {
-                            src_ptr_pair: conn.0,
-                            dst_ptr_pair: conn.1,
-                            door_type,
-                            bidirectional: conn.2
-                        };
-                        
-                        *old_value = serde_json::to_value(&locked_door)?;
-                    }
-                }
-            }
-        }
-
-        let mut seed_data: SeedData = serde_json::from_value(v)?;
-
-        // Upgrade map to include the room_mask
-        if seed_data.map.room_mask.is_empty() {
-            seed_data.map.room_mask = vec![true; seed_data.map.rooms.len()];
-        }
 
         plando.load_preset(seed_data.settings);
 
@@ -1711,7 +1604,7 @@ impl PlandoApp {
                             let file_opt = FileDialog::new()
                                 .set_title("Save Seed as JSON file")
                                 .set_directory("/")
-                                .add_filter("JSON File", &["json"])
+                                .add_filter("Plando File", &["smmrp"])
                                 .save_file();
                             if let Some(file) = file_opt {
                                 if let Err(err) = self.save_seed(file.as_path()) {
@@ -1724,6 +1617,7 @@ impl PlandoApp {
                             let file_opt = FileDialog::new()
                                 .set_title("Load seed from JSON file")
                                 .set_directory("/")
+                                .add_filter("Plando File", &["smmrp"])
                                 .add_filter("JSON File", &["json"])
                                 .pick_file();
                             if let Some(file) = file_opt {

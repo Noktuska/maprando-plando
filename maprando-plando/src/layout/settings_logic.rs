@@ -215,6 +215,7 @@ impl LogicCustomization {
                     should_close = Ok(true);
                 }
                 if ui.button("Save to file").clicked() && !self.custom_preset_name.is_empty() {
+                    self.apply_presets();
                     if let Err(err) = self.save_preset() {
                         should_close = Err(err);
                     }
@@ -551,6 +552,7 @@ impl LogicCustomization {
             Some(preset) => self.cur_settings.objective_settings.preset = preset.preset.clone(),
             None => self.cur_settings.objective_settings.preset = None
         }
+        self.cur_settings.name = None;
     }
 }
 
