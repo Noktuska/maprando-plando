@@ -136,7 +136,7 @@ pub enum MapErrorType {
     DoorDisconnected(usize, usize), // (room_idx, door_idx) of door which is not connected
     EscapeNotLogical,
     AreaNoMap(usize), // area idx which has no map
-    ItemNotReachable(usize), // item idx which is not reachable
+    _ItemNotReachable(usize), // item idx which is not reachable
 
     // Errors
     AreaBounds(usize, usize, usize), // Area idx which exceeds boundary limits followed by current (width, height)
@@ -161,7 +161,7 @@ impl MapErrorType {
                 let area = Area::from_tuple((*idx, 0, 0));
                 format!("{} has no map. Consider placing a map into the area. No issues will arise if an area has no map", area.to_string_major())
             }
-            MapErrorType::ItemNotReachable(idx) => {
+            MapErrorType::_ItemNotReachable(idx) => {
                 let (room_id, node_id) = game_data.item_locations[*idx];
                 let room_idx = game_data.room_idx_by_id[&room_id];
                 let room_geometry = &game_data.room_geometry[room_idx];
@@ -207,7 +207,7 @@ impl MapErrorType {
             MapErrorType::DoorDisconnected(_, _) => false,
             MapErrorType::EscapeNotLogical => false,
             MapErrorType::AreaNoMap(_) => false,
-            MapErrorType::ItemNotReachable(_) => false,
+            MapErrorType::_ItemNotReachable(_) => false,
             _ => true
         }
     }

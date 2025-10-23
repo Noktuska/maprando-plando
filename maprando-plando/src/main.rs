@@ -1,12 +1,12 @@
-use crate::{backend::{map_editor::{self, MapEditor, MapErrorType}, plando::{get_double_item_offset, DoubleItemPlacement, MapRepositoryType, Placeable, Plando, SpoilerOverride, ITEM_VALUES}, randomize::get_vertex_info}, benchmark::{Benchmark, BenchmarkResult}, egui_sfml::DrawInput, input_state::KeyState, layout::{hotkey_settings::Keybind, map_editor_ui::MapEditorUi, room_search::RoomSearch, settings_customize::{Customization, SettingsCustomize, SettingsCustomizeResult}, settings_logic::LogicCustomization, Layout, SidebarPanel, WindowType}, seed_data::SeedData, texture_manager::TextureManager, update::{Asset, Release}};
+use crate::{backend::{map_editor::{self, MapEditor, MapErrorType}, plando::{get_double_item_offset, DoubleItemPlacement, Placeable, Plando, SpoilerOverride, ITEM_VALUES}, randomize::get_vertex_info, seed_data::SeedData}, benchmark::{Benchmark, BenchmarkResult}, egui_sfml::DrawInput, input_state::KeyState, layout::{hotkey_settings::Keybind, map_editor_ui::MapEditorUi, room_search::RoomSearch, settings_customize::{Customization, SettingsCustomize, SettingsCustomizeResult}, settings_logic::LogicCustomization, Layout, SidebarPanel, WindowType}, texture_manager::TextureManager, update::{Asset, Release}};
 use anyhow::{anyhow, bail, Result};
 use egui::{self, style::default_text_styles, Color32, Context, FontDefinitions, Id, RichText, Sense, Ui, Vec2};
 use egui_sfml::{SfEgui, UserTexSource};
 use hashbrown::{HashMap, HashSet};
 use input_state::MouseState;
-use maprando::{patch::Rom, preset::PresetData, randomize::SpoilerRouteEntry, settings::{try_upgrade_settings, Objective, RandomizerSettings}};
-use maprando_game::{BeamType, DoorType, GameData, Item, MapTileEdge, MapTileInterior, MapTileSpecialType};
-use rand::RngCore;
+use maprando::{map_repository::MapRepository, patch::Rom, preset::PresetData, randomize::SpoilerRouteEntry, settings::{try_upgrade_settings, Objective, RandomizerSettings}};
+use maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType};
+use rand::{rngs::StdRng, RngCore, SeedableRng};
 use rfd::FileDialog;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -20,7 +20,7 @@ use sfml::{
 use strum::VariantArray;
 use strum_macros::VariantArray;
 use tokio::{sync::mpsc::error::TryRecvError, task::JoinHandle};
-use std::{cmp::{max, min}, collections::VecDeque, ffi::OsStr, fs::File, io::{Read, Write}, path::Path, time::Instant};
+use std::{cmp::{max, min}, collections::VecDeque, ffi::OsStr, fs::File, io::{Read, Write}, path::Path, sync::Arc, time::Instant};
 
 mod backend;
 mod benchmark;
@@ -29,7 +29,6 @@ mod input_state;
 mod update;
 mod utils;
 mod egui_sfml;
-mod seed_data;
 mod texture_manager;
 
 #[derive(Clone)]
@@ -820,6 +819,7 @@ struct WindowContext {
 struct LoadData {
     preset_data: PresetData,
     settings: Settings,
+    map_vanilla: Map,
     plando_core: Plando,
 }
 
@@ -833,8 +833,39 @@ enum Progress {
     LoadPlandoCore,
 }
 
+enum MapRepositoryType {
+    Vanilla, Standard, Wild
+}
+
+struct MapRepositoryWrapper {
+    map_repository: MapRepository,
+    cache: Vec<Map>
+}
+
+impl From<MapRepository> for MapRepositoryWrapper {
+    fn from(value: MapRepository) -> Self {
+        MapRepositoryWrapper {
+            map_repository: value,
+            cache: vec![]
+        }
+    }
+}
+
+impl MapRepositoryWrapper {
+    fn roll_map(&mut self, game_data: &GameData) -> Result<Map> {
+        if self.cache.is_empty() {
+            let mut rng = StdRng::from_entropy();
+            self.cache = self.map_repository.get_map_batch(rng.next_u32() as usize, game_data)?;
+        }
+        self.cache.pop().ok_or(anyhow!("Map Repository is empty"))
+    }
+}
+
 struct PlandoApp {
     plando: Plando,
+    map_vanilla: Map,
+    maps_standard: Option<MapRepositoryWrapper>,
+    maps_wild: Option<MapRepositoryWrapper>,
     settings: Settings,
     rom_vanilla: Option<Rom>,
     obj_room_map: HashMap<usize, Objective>,
@@ -901,9 +932,28 @@ impl PlandoApp {
         }
     }
 
+    fn load_map_repository(map_repo_type: MapRepositoryType) -> Result<MapRepository> {
+        let vanilla_map_path = Path::new("../maps/vanilla");
+        let standard_maps_path = Path::new("../maps/v119-standard-avro");
+        let wild_maps_path = Path::new("../maps/v119-wild-avro");
+
+        match map_repo_type {
+            MapRepositoryType::Vanilla => MapRepository::new("Vanilla", vanilla_map_path),
+            MapRepositoryType::Standard => MapRepository::new("Standard", standard_maps_path),
+            MapRepositoryType::Wild => MapRepository::new("Wild", wild_maps_path)
+        }
+    }
+
+    fn load_map_repositories(&mut self) {
+        self.maps_standard = Self::load_map_repository(MapRepositoryType::Standard).ok().map(|repo| repo.into());
+        self.maps_wild = Self::load_map_repository(MapRepositoryType::Wild).ok().map(|repo| repo.into());
+    }
+
     async fn load_data(mut rx: tokio::sync::mpsc::Receiver<bool>, tx: tokio::sync::mpsc::Sender<Progress>) -> Result<LoadData> {
         tx.send(Progress::LoadGameData).await?;
         let game_data = GameData::load()?;
+        let maps_vanilla = Self::load_map_repository(MapRepositoryType::Vanilla)?;
+
         tx.send(Progress::LoadPresetData).await?;
         let preset_data = load_preset_data(&game_data)?;
 
@@ -926,7 +976,8 @@ impl PlandoApp {
         }
 
         tx.send(Progress::LoadPlandoCore).await?;
-        let mut plando = Plando::new(game_data, preset_data.default_preset.clone(), &preset_data)?;
+        let map = maps_vanilla.get_map_batch(0, &game_data)?.first().ok_or(anyhow!("Vanilla Map Repository is empty"))?.clone();
+        let mut plando = Plando::new(Arc::new(game_data), map.clone(), &preset_data)?;
 
         let preset = match &settings.last_logic_preset {
             Some(preset) => preset.clone(),
@@ -940,6 +991,7 @@ impl PlandoApp {
         Ok(LoadData {
             preset_data,
             settings,
+            map_vanilla: map,
             plando_core: plando
         })
     }
@@ -949,6 +1001,7 @@ impl PlandoApp {
         let plando = load_data.plando_core;
         let preset = plando.randomizer_settings.clone();
         let settings = load_data.settings;
+        let map_vanilla = load_data.map_vanilla;
 
         let logic_customization = LogicCustomization::new(preset_data, preset);
 
@@ -1010,11 +1063,13 @@ impl PlandoApp {
             layout.hotkey_settings.add_keybind(keybind);
         }
 
-        Ok(PlandoApp {
+        let mut app = PlandoApp {
             plando,
+            map_vanilla,
+            maps_standard: None,
+            maps_wild: None,
             settings,
             rom_vanilla,
-            //flag_has_tex,
             obj_room_map,
             room_data,
 
@@ -1049,7 +1104,11 @@ impl PlandoApp {
             handle_map_download: None,
 
             global_timer: 0
-        })
+        };
+
+        app.load_map_repositories();
+
+        Ok(app)
     }
 
     fn update_settings(&mut self) {
@@ -1082,43 +1141,22 @@ impl PlandoApp {
     fn load_seed(&mut self, path: &Path) -> Result<()> {
         let seed_data = SeedData::from_file(path, &self.plando.game_data, &self.logic_customization.preset_data)?;
 
-        let plando = &mut self.plando;
-
-        plando.load_preset(seed_data.settings);
-
-        plando.custom_escape_time = seed_data.custom_escape_time;
-        plando.creator_name = seed_data.creator_name;
-
-        plando.load_map(seed_data.map);
-
-        plando.item_locations = seed_data.item_placements;
-        for item in &plando.item_locations {
-            if *item != Item::Nothing {
-                plando.placed_item_count[*item as usize + Placeable::ETank as usize] += 1;
-            }
-        }
-        
-        for door_data in seed_data.door_locks {
-            let (room_idx, door_idx) = plando.game_data.room_and_door_idxs_by_door_ptr_pair[&door_data.src_ptr_pair];
-
-            plando.place_door(room_idx, door_idx, Some(door_data.door_type), false)?;
-        }
-
-        let ship_start = Plando::get_ship_start();
-        let start_loc = if seed_data.start_location == (ship_start.room_id, ship_start.node_id) {
-            ship_start
-        } else {
-            let start_loc_idx = plando.game_data.start_location_id_map[&seed_data.start_location];
-            plando.game_data.start_locations[start_loc_idx].clone()
-        };
-        plando.place_start_location(start_loc);
-
-        plando.spoiler_overrides = seed_data.spoiler_overrides;
+        seed_data.load_into_plando(&mut self.plando)?;
 
         self.update_spoiler_data_async()?;
 
         self.push_recent_seed(path.to_str().unwrap().to_string());
 
+        Ok(())
+    }
+
+    fn reroll_map(&mut self, map_type: MapRepositoryType) -> Result<()> {
+        let map = match map_type {
+            MapRepositoryType::Vanilla => self.map_vanilla.clone(),
+            MapRepositoryType::Standard => self.maps_standard.as_mut().ok_or(anyhow!("Standard Map Repository is not loaded"))?.roll_map(&self.plando.game_data)?,
+            MapRepositoryType::Wild => self.maps_wild.as_mut().ok_or(anyhow!("Standard Map Repository is not loaded"))?.roll_map(&self.plando.game_data)?,
+        };
+        self.plando.load_map(map);
         Ok(())
     }
 
@@ -1181,7 +1219,7 @@ impl PlandoApp {
             }
 
             if self.reset_after_patch {
-                let _ = self.plando.reroll_map(MapRepositoryType::Vanilla);
+                let _ = self.reroll_map(MapRepositoryType::Vanilla);
                 let preset = match self.settings.last_logic_preset.as_ref() {
                     Some(preset) => preset.clone(),
                     None => self.logic_customization.preset_data.default_preset.clone()
@@ -1198,7 +1236,7 @@ impl PlandoApp {
                 Ok(res) => match res {
                     Ok(_) => {
                         self.modal_type = ModalType::None;
-                        self.plando.reload_map_repositories();
+                        self.load_map_repositories();
                     }
                     Err(err) => bail!(err.to_string())
                 },
@@ -1674,16 +1712,16 @@ impl PlandoApp {
                     });
                     ui.menu_button("Map", |ui| {
                         if ui.button("Reroll Map (Vanilla)").clicked() {
-                            self.plando.reroll_map(MapRepositoryType::Vanilla).unwrap();
+                            self.reroll_map(MapRepositoryType::Vanilla).unwrap();
                             self.schedule_redraw();
                             ui.close_menu();
                         }
-                        if ui.add_enabled(self.plando.does_repo_exist(MapRepositoryType::Standard), egui::Button::new("Reroll Map (Standard)")).clicked() {
-                            self.plando.reroll_map(MapRepositoryType::Standard).unwrap();
+                        if ui.add_enabled(self.maps_standard.is_some(), egui::Button::new("Reroll Map (Standard)")).clicked() {
+                            self.reroll_map(MapRepositoryType::Standard).unwrap();
                             self.schedule_redraw();
                         }
-                        if ui.add_enabled(self.plando.does_repo_exist(MapRepositoryType::Wild), egui::Button::new("Reroll Map (Wild)")).clicked() {
-                            self.plando.reroll_map(MapRepositoryType::Wild).unwrap();
+                        if ui.add_enabled(self.maps_wild.is_some(), egui::Button::new("Reroll Map (Wild)")).clicked() {
+                            self.reroll_map(MapRepositoryType::Wild).unwrap();
                             self.schedule_redraw();
                         }
                         ui.separator();
@@ -2090,7 +2128,7 @@ impl PlandoApp {
                 vec![self.plando.map_editor.get_room_bounds(motherbrain_idx)]
             }
             MapErrorType::AreaNoMap(_) => vec![],
-            MapErrorType::ItemNotReachable(idx) => {
+            MapErrorType::_ItemNotReachable(idx) => {
                 let (room_id, node_id) = self.plando.game_data.item_locations[idx];
                 let room_idx = self.plando.room_id_to_idx(room_id);
                 let (tile_x, tile_y) = self.plando.game_data.node_coords[&(room_id, node_id)];

@@ -1,11 +1,11 @@
 use std::{path::Path, sync::{Arc, MutexGuard}};
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{bail, Result};
 use hashbrown::{HashMap, HashSet};
-use maprando::{customize::{mosaic::MosaicTheme, samus_sprite::SamusSpriteCategory, CustomizeSettings}, map_repository::MapRepository, patch::Rom, preset::PresetData, randomize::{DifficultyConfig, LockedDoor, Randomization, SpoilerLog}, settings::{DoorsMode, ItemCount, Objective, RandomizerSettings, WallJump}, traverse::LockedDoorData};
+use maprando::{customize::{mosaic::MosaicTheme, samus_sprite::SamusSpriteCategory, CustomizeSettings}, patch::Rom, preset::PresetData, randomize::{DifficultyConfig, LockedDoor, Randomization, SpoilerLog}, settings::{DoorsMode, ItemCount, Objective, RandomizerSettings, WallJump}, traverse::LockedDoorData};
 use maprando_game::{BeamType, DoorPtrPair, DoorType, GameData, HubLocation, Item, Map, NodeId, RoomId, StartLocation, VertexKey};
 use maprando_logic::{GlobalState, Inventory, LocalState};
-use rand::{rngs::StdRng, RngCore, SeedableRng};
+use rand::{rngs::StdRng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use strum::VariantArray;
 use strum_macros::VariantArray;
@@ -143,36 +143,6 @@ impl Placeable {
     }
 }
 
-pub enum MapRepositoryType {
-    Vanilla, Standard, Wild
-}
-
-struct MapRepositoryWrapper {
-    repo: MapRepository,
-    cache: Vec<Map>
-}
-
-impl MapRepositoryWrapper {
-    fn roll_map(&mut self, rng: &mut StdRng, game_data: &GameData) -> Result<Map> {
-        if self.cache.is_empty() {
-            let map_seed = (rng.next_u64() & 0xFFFFFFFF) as usize;
-            self.cache = self.repo.get_map_batch(map_seed, game_data)?;
-        }
-
-        let map_idx = (rng.next_u64() % self.cache.len() as u64) as usize;
-        Ok(self.cache[map_idx].clone())
-    }
-}
-
-impl From<MapRepository> for MapRepositoryWrapper {
-    fn from(value: MapRepository) -> Self {
-        MapRepositoryWrapper {
-            repo: value,
-            cache: Vec::new()
-        }
-    }
-}
-
 #[derive(Serialize, Deserialize, Clone)]
 pub struct SpoilerOverride {
     pub step: usize,
@@ -189,9 +159,6 @@ struct ImplicitPresetData {
 pub struct Plando {
     pub game_data: Arc<GameData>,
     pub difficulty_tiers: Vec<DifficultyConfig>,
-    maps_vanilla: MapRepositoryWrapper,
-    maps_standard: Option<MapRepositoryWrapper>,
-    maps_wild: Option<MapRepositoryWrapper>,
     pub map_editor: MapEditor,
     pub randomizer_settings: RandomizerSettings,
     pub objectives: Vec<Objective>,
@@ -216,25 +183,12 @@ pub struct Plando {
 }
 
 impl Plando {
-    pub fn new(game_data: GameData, randomizer_settings: RandomizerSettings, preset_data: &PresetData) -> Result<Self> {
-        let mut maps_vanilla: MapRepositoryWrapper = Plando::load_map_repository(MapRepositoryType::Vanilla).ok_or(anyhow!("Vanilla Map Repository not found"))?.into();
-        let maps_standard = Plando::load_map_repository(MapRepositoryType::Standard).map(|x| x.into());
-        let maps_wild = Plando::load_map_repository(MapRepositoryType::Wild).map(|x| x.into());
-
-        if maps_standard.is_none() {
-            println!("WARN: Standard Map Repository not found");
-        }
-        if maps_wild.is_none() {
-            println!("WARN: Wild Map Repository not found");
-        }
-        
+    pub fn new(game_data: Arc<GameData>, map: Map, preset_data: &PresetData) -> Result<Self> {
         let mut rng = rand::rngs::StdRng::from_entropy();
 
-        let game_data = Arc::new(game_data);
-
-        let map = maps_vanilla.roll_map(&mut rng, &game_data)?;
         let map_editor = MapEditor::new(map, game_data.clone());
 
+        let randomizer_settings = preset_data.default_preset.clone();
         let objectives = maprando::randomize::get_objectives(&randomizer_settings, Some(map_editor.get_map()), &game_data, &mut rng);
         let randomizable_doors = get_randomizable_doors(&game_data, &objectives);
 
@@ -254,9 +208,6 @@ impl Plando {
         let mut plando = Plando {
             game_data: game_data.clone(),
             difficulty_tiers: Vec::new(),
-            maps_vanilla,
-            maps_standard,
-            maps_wild,
             map_editor,
             randomizer_settings,
             objectives,
@@ -319,23 +270,6 @@ impl Plando {
             return Some(door_idx);
         }
         None
-    }
-
-    pub fn load_map_repository(map_repo_type: MapRepositoryType) -> Option<MapRepository> {
-        let vanilla_map_path = Path::new("../maps/vanilla");
-        let standard_maps_path = Path::new("../maps/v119-standard-avro");
-        let wild_maps_path = Path::new("../maps/v119-wild-avro");
-
-        match map_repo_type {
-            MapRepositoryType::Vanilla => MapRepository::new("Vanilla", vanilla_map_path).ok(),
-            MapRepositoryType::Standard => MapRepository::new("Standard", standard_maps_path).ok(),
-            MapRepositoryType::Wild => MapRepository::new("Wild", wild_maps_path).ok()
-        }
-    }
-
-    pub fn reload_map_repositories(&mut self) {
-        self.maps_standard = Self::load_map_repository(MapRepositoryType::Standard).map(|x| x.into());
-        self.maps_wild = Self::load_map_repository(MapRepositoryType::Standard).map(|x| x.into());
     }
 
     pub fn load_map(&mut self, map: Map) {
@@ -404,27 +338,6 @@ impl Plando {
         });
 
         Ok(result_handle)
-    }
-
-    pub fn does_repo_exist(&self, repo_type: MapRepositoryType) -> bool {
-        match repo_type {
-            MapRepositoryType::Vanilla => true,
-            MapRepositoryType::Standard => self.maps_standard.is_some(),
-            MapRepositoryType::Wild => self.maps_wild.is_some()
-        }
-    }
-
-    pub fn reroll_map(&mut self, map_repository: MapRepositoryType) -> Result<()> {
-        let repo = match map_repository {
-            MapRepositoryType::Vanilla => &mut self.maps_vanilla,
-            MapRepositoryType::Standard => self.maps_standard.as_mut().unwrap(),
-            MapRepositoryType::Wild => self.maps_wild.as_mut().unwrap()
-        };
-
-        let map = repo.roll_map(&mut self.rng, &self.game_data)?;
-        self.load_map(map);
-        
-        Ok(())
     }
 
     pub fn load_preset(&mut self, preset: RandomizerSettings) {

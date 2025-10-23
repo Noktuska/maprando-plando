@@ -7,7 +7,7 @@ use maprando_game::{BeamType, DoorType, GameData, Item, Map};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::backend::plando::{Plando, SpoilerOverride};
+use crate::backend::plando::{Placeable, Plando, SpoilerOverride};
 
 #[derive(Clone, Deserialize)]
 pub struct SeedData {
@@ -49,6 +49,41 @@ impl SeedData {
         let mut f = std::fs::File::open(path)?;
         f.read_to_end(&mut buf.data)?;
         <SeedData as BufferSerializable>::deserialize(&mut buf)
+    }
+
+    pub fn load_into_plando(self, plando: &mut Plando) -> Result<()> {
+        plando.load_preset(self.settings);
+
+        plando.custom_escape_time = self.custom_escape_time;
+        plando.creator_name = self.creator_name;
+
+        plando.load_map(self.map);
+
+        plando.item_locations = self.item_placements;
+        for item in &plando.item_locations {
+            if *item != Item::Nothing {
+                plando.placed_item_count[*item as usize + Placeable::ETank as usize] += 1;
+            }
+        }
+        
+        for door_data in self.door_locks {
+            let (room_idx, door_idx) = plando.game_data.room_and_door_idxs_by_door_ptr_pair[&door_data.src_ptr_pair];
+
+            plando.place_door(room_idx, door_idx, Some(door_data.door_type), false)?;
+        }
+
+        let ship_start = Plando::get_ship_start();
+        let start_loc = if self.start_location == (ship_start.room_id, ship_start.node_id) {
+            ship_start
+        } else {
+            let start_loc_idx = plando.game_data.start_location_id_map[&self.start_location];
+            plando.game_data.start_locations[start_loc_idx].clone()
+        };
+        plando.place_start_location(start_loc);
+
+        plando.spoiler_overrides = self.spoiler_overrides;
+
+        Ok(())
     }
 
     fn try_from_json_legacy(path: &Path, game_data: &GameData, preset_data: &PresetData) -> Result<SeedData> {
