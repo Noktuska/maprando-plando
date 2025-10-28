@@ -61,11 +61,10 @@ sh setup.sh
 ```
 4. Build the maprando-plando project
 ```sh
-cd maprando-plando
-cargo build
+cargo build --bin maprando-plando
 ```
-5. Download [SFML](https://www.sfml-dev.org/download/sfml/2.6.1/) and copy the DLLs from the SFML-2.6.1/bin/ folder into the maprando-plando/target/debug/ folder next to the executable
+5. Download [SFML](https://www.sfml-dev.org/download/sfml/2.6.1/) and copy the DLLs from the SFML-2.6.1/bin/ folder into the target/debug/ folder next to the executable
 6. Run the maprando-plando project
 ```sh
-cargo run
+cargo run --bin maprando-plando
 ```
