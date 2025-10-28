@@ -7,7 +7,7 @@ use maprando_game::{BeamType, DoorType, GameData, Item, Map};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::backend::plando::{Placeable, Plando, SpoilerOverride};
+use crate::{Placeable, Plando, SpoilerOverride};
 
 #[derive(Clone, Deserialize)]
 pub struct SeedData {

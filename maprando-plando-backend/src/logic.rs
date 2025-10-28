@@ -9,7 +9,7 @@ use rand::{rngs::StdRng, RngCore, SeedableRng};
 use strum::VariantNames;
 use tokio::task::JoinHandle;
 
-use crate::backend::{plando::{Plando, SpoilerOverride}, randomize::get_vertex_info_by_id};
+use crate::{randomize::get_vertex_info_by_id, Plando, SpoilerOverride};
 
 pub struct HubLocationData {
     pub hub_location: HubLocation,

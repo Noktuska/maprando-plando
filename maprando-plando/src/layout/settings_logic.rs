@@ -5,9 +5,10 @@ use egui::Context;
 use hashbrown::HashMap;
 use maprando::{preset::PresetData, settings::{DoorLocksSize, ETankRefill, Fanfares, InitialMapRevealSettings, ItemMarkers, MapRevealLevel, MapStationReveal, MotherBrainFight, ObjectiveScreen, ObjectiveSetting, RandomizerSettings, SaveAnimals, WallJump}};
 use maprando_game::Item;
+use maprando_plando_backend::Placeable;
 use strum_macros::VariantArray;
 
-use crate::{backend::plando::Placeable, layout::settings_gen::{SettingsGen, SettingsPreset}};
+use crate::layout::settings_gen::{SettingsGen, SettingsPreset};
 
 enum CustomizeLogicWindow {
     None, SkillAssumption, Qol, Objectives

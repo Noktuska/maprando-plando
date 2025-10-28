@@ -1,4 +1,4 @@
-use crate::{backend::{map_editor::{self, MapEditor, MapErrorType}, plando::{get_double_item_offset, DoubleItemPlacement, Placeable, Plando, SpoilerOverride, ITEM_VALUES}, randomize::get_vertex_info, seed_data::SeedData}, benchmark::{Benchmark, BenchmarkResult}, egui_sfml::DrawInput, input_state::KeyState, layout::{hotkey_settings::Keybind, map_editor_ui::MapEditorUi, room_search::RoomSearch, settings_customize::{Customization, SettingsCustomize, SettingsCustomizeResult}, settings_logic::LogicCustomization, Layout, SidebarPanel, WindowType}, texture_manager::TextureManager, update::{Asset, Release}};
+use crate::{benchmark::{Benchmark, BenchmarkResult}, egui_sfml::DrawInput, input_state::KeyState, layout::{hotkey_settings::Keybind, map_editor_ui::MapEditorUi, room_search::RoomSearch, settings_customize::{Customization, SettingsCustomize, SettingsCustomizeResult}, settings_logic::LogicCustomization, Layout, SidebarPanel, WindowType}, texture_manager::TextureManager, update::{Asset, Release}};
 use anyhow::{anyhow, bail, Result};
 use egui::{self, style::default_text_styles, Color32, Context, FontDefinitions, Id, RichText, Sense, Ui, Vec2};
 use egui_sfml::{SfEgui, UserTexSource};
@@ -6,6 +6,7 @@ use hashbrown::{HashMap, HashSet};
 use input_state::MouseState;
 use maprando::{map_repository::MapRepository, patch::Rom, preset::PresetData, randomize::SpoilerRouteEntry, settings::{try_upgrade_settings, Objective, RandomizerSettings}};
 use maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType};
+use maprando_plando_backend::{get_double_item_offset, map_editor::{self, MapEditor, MapErrorType}, randomize::get_vertex_info, seed_data::SeedData, DoubleItemPlacement, Placeable, Plando, SpoilerOverride, ITEM_VALUES};
 use rand::{rngs::StdRng, RngCore, SeedableRng};
 use rfd::FileDialog;
 use serde::{Deserialize, Serialize};
@@ -22,7 +23,6 @@ use strum_macros::VariantArray;
 use tokio::{sync::mpsc::error::TryRecvError, task::JoinHandle};
 use std::{cmp::{max, min}, collections::VecDeque, ffi::OsStr, fs::File, io::{Read, Write}, path::Path, sync::Arc, time::Instant};
 
-mod backend;
 mod benchmark;
 mod layout;
 mod input_state;
@@ -2063,7 +2063,7 @@ impl PlandoApp {
                 &self.map_editor.selected_room_idx
             };
 
-            let bbox_list: Vec<IntRect> = idx_list.iter().map(
+            let bbox_list: Vec<_> = idx_list.iter().map(
                 |&idx| self.plando.map_editor.get_room_bounds(idx)
             ).collect();
             self.draw_room_outline(rt, states, bbox_list);

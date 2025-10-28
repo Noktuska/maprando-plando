@@ -1,29 +1,19 @@
 [package]
-name = "maprando-plando"
-version = "0.2.2"
+name = "maprando-plando-backend"
+version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-maprando-plando-backend = { path = "../maprando-plando-backend" }
 maprando = { path = "../MapRandomizer/rust/maprando" }
 maprando-game = { path = "../MapRandomizer/rust/maprando-game" }
 maprando-logic = { path = "../MapRandomizer/rust/maprando-logic" }
 anyhow = { version = "1.0.68", features = ["backtrace"] }
-crypto-hash = "0.3.4"
-egui = "0.31.1"
-flate2 = "1.1.1"
-glu-sys = "0.1.4"
 hashbrown = { version = "0.14.5", features = ["serde"] }
-open = "5.3.2"
 rand = "0.8.5"
-reqwest = { version = "0.12.15" }
-rfd = "0.15.3"
 serde_json = "1.0.91"
 serde = "1.0.152"
 serde_derive = "1.0.152"
 sfml = { version = "=0.24.0", features = ["serde"] }
 strum = "0.27.2"
 strum_macros = "0.27.2"
-tar = "0.4.44"
 tokio = { version = "1.47.1", features = ["full"] }
-zip = "4.0.0"

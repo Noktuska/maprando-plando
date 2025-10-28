@@ -1,8 +1,9 @@
 use maprando::randomize::LockedDoor;
 use maprando_game::{GameData, Map};
+use maprando_plando_backend::map_editor::MapEditor;
 use sfml::{graphics::IntRect, system::Vector2i, window::Key};
 
-use crate::{backend::map_editor::MapEditor, utils};
+use crate::utils;
 
 #[derive(Default)]
 pub struct MapEditorUi {
