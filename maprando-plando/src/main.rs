@@ -1131,7 +1131,7 @@ impl PlandoApp {
 
     fn save_seed(&mut self, path: &Path) -> Result<()> {
         let seed_data = SeedData::from_plando(&self.plando);
-        seed_data.save_to_file(path, &self.logic_customization.preset_data)?;
+        seed_data.save_to_file(path)?;
 
         self.push_recent_seed(path.to_str().unwrap().to_string());
 
@@ -1644,7 +1644,7 @@ impl PlandoApp {
                             let file_opt = FileDialog::new()
                                 .set_title("Save Seed as JSON file")
                                 .set_directory("/")
-                                .add_filter("Plando File", &["smmrp"])
+                                .add_filter("JSON File", &["json"])
                                 .save_file();
                             if let Some(file) = file_opt {
                                 if let Err(err) = self.save_seed(file.as_path()) {
@@ -1657,7 +1657,6 @@ impl PlandoApp {
                             let file_opt = FileDialog::new()
                                 .set_title("Load seed from JSON file")
                                 .set_directory("/")
-                                .add_filter("Plando File", &["smmrp"])
                                 .add_filter("JSON File", &["json"])
                                 .pick_file();
                             if let Some(file) = file_opt {
