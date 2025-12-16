@@ -3,3 +3,4 @@ debug/
 .vscode/
 data/
 custom-presets/
+.env
