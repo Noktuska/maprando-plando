@@ -1,0 +1,47 @@
+<html>
+    <head>
+        <link rel="stylesheet" href="../css/style.css">
+    </head>
+    <body>
+        <div id="header">
+            <div id="header-left">
+                Logo goes here
+            </div>
+            <div id="header-right">
+                <a href="https://github.com/Noktuska/maprando-plando">Github</a>
+            </div>
+        </div>
+        <div id="body">
+            <div id="upload-wrapper">
+                <h2>Upload Seed:</h2>
+                <form id="upload-form" action="upload-seed" method="POST" onsubmit="submitSeed(); return false;">
+                    <div class="flex-h">
+                        <div class="flex-col-1">Plando Name:</div>
+                        <div class="flex-col-2">
+                            <input id="plando-name" class="input-text" type="text" placeholder="Plando Name">
+                        </div>
+                    </div>
+                    <div class="flex-h">
+                        <div class="flex-col-1">Description:</div>
+                        <div class="flex-col-2">
+                            <textarea id="plando-desc" class="input-text" placeholder="Description" rows="5"></textarea>
+                        </div>
+                    </div>
+                    <div class="flex-h">
+                        <div><input id="plando-file" type="file"></div>
+                    </div>
+                    <div class="flex-h">
+                        <div id="error-out" class="flex-col-1 error-string"></div>
+                        <div class="flex-col-2">
+                            <button class="btn btn-confirm" type="submit">Submit</button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div id="upload-footer">
+                Trying to create a plando? Download the plando tool <a href="https://github.com/Noktuska/maprando-plando/releases">here</a>.
+            </div>
+        </div>
+        <script src="../js/script.js"></script>
+    </body>
+</html>
