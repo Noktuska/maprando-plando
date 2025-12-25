@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use actix_multipart::form::{self, text::Text, MultipartForm};
-use actix_web::{error::{ErrorBadRequest, ErrorInternalServerError, ErrorNotFound}, get, http::header::{ContentDisposition, DispositionParam, DispositionType}, middleware::Logger, post, web, App, HttpResponse, HttpServer, Responder, Scope};
+use actix_multipart::form::{self, MultipartForm, MultipartFormConfig, bytes::Bytes, text::Text};
+use actix_web::{App, HttpResponse, HttpServer, Responder, Scope, error::{ErrorBadRequest, ErrorInternalServerError, ErrorNotFound}, get, http::header::{self, ContentDisposition, DispositionParam, DispositionType}, middleware::Logger, post, web};
 use anyhow::bail;
 use askama::Template;
 use log::info;
-use maprando::{customize::{mosaic::MosaicTheme, parse_controller_button, samus_sprite::SamusSpriteCategory, ControllerButton, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, MusicSettings, PaletteTheme, ShakingSetting, TileTheme}, patch::{ips_write::create_ips_patch, Rom}, preset::PresetData, randomize::Randomization, settings::RandomizerSettings};
+use maprando::{customize::{mosaic::MosaicTheme, parse_controller_button, samus_sprite::SamusSpriteCategory, ControllerButton, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, MusicSettings, PaletteTheme, ShakingSetting, TileTheme}, patch::Rom, preset::PresetData, randomize::Randomization, settings::RandomizerSettings};
 use maprando_game::GameData;
 use maprando_plando_backend::{seed_data::SeedData, Plando};
 use serde::{Deserialize, Serialize};
@@ -16,7 +16,7 @@ mod file_storage;
 mod utils;
 
 #[derive(Template)]
-#[template(path = "home.html")]
+#[template(path = "upload.html")]
 struct TemplateHome {
 
 }
@@ -27,10 +27,12 @@ async fn home() -> impl Responder {
     HttpResponse::Ok().body(template.render().unwrap())
 }
 
-#[derive(Debug, form::MultipartForm)]
+#[derive(Debug, MultipartForm)]
 struct UploadForm {
     name: form::text::Text<String>,
     desc: form::text::Text<String>,
+    allow_spoiler: form::text::Text<bool>,
+    allow_download: form::text::Text<bool>,
     #[multipart(limit = "256KB")]
     file: form::bytes::Bytes
 }
@@ -38,7 +40,10 @@ struct UploadForm {
 #[derive(Serialize, Deserialize)]
 struct FileRandomization {
     name: String,
-    description: String,
+    description: Option<String>,
+    creator: String,
+    allow_spoiler: bool,
+    allow_download: bool,
     randomization: Randomization,
     settings: RandomizerSettings,
     logical: bool
@@ -46,6 +51,13 @@ struct FileRandomization {
 
 #[post("/upload-seed")]
 async fn upload_seed(data: web::Data<AppData>, MultipartForm(form): MultipartForm<UploadForm>) -> Result<impl Responder, actix_web::Error> {
+    if form.name.len() > 32 {
+        return Err(ErrorBadRequest("Plando name too long. Maximum of 32 characters."));
+    }
+    if form.desc.len() > 300 {
+        return Err(ErrorBadRequest("Description too long. Maximum of 300 characters."));
+    }
+
     info!("Received seed: {} ({} bytes)", form.name.0, form.file.data.len());
 
     let mut seed_id;
@@ -94,11 +106,29 @@ async fn upload_seed(data: web::Data<AppData>, MultipartForm(form): MultipartFor
     let logically_clearable = mb_clearable && plando.spoiler_overrides.is_empty();
 
     let r_json = serde_json::to_value(r)?;
-    let s_json = serde_json::to_value(s)?;
+    let s_json = serde_json::json!({
+        "summary": s.summary,
+        "objectives": s.objectives,
+        "escape": s.objectives,
+        "start_location": s.start_location,
+        "hub_location_name": s.hub_location_name,
+        "hub_obtain_route": s.hub_obtain_route,
+        "hub_return_route": s.hub_return_route,
+        "details": s.details
+    });
+
+    let desc = if form.desc.0.is_empty() {
+        None
+    } else {
+        Some(form.desc.0)
+    };
 
     let r_string = serde_json::json!({
         "name": form.name.0,
-        "description": form.desc.0,
+        "description": desc,
+        "creator": plando.creator_name,
+        "allow_spoiler": form.allow_spoiler.0,
+        "allow_download": form.allow_download.0,
         "randomization": r_json,
         "settings": plando.randomizer_settings,
         "logical": logically_clearable
@@ -132,18 +162,58 @@ async fn upload_seed(data: web::Data<AppData>, MultipartForm(form): MultipartFor
 
 #[derive(Template)]
 #[template(path = "seed.html")]
-struct SeedTemplate {
+struct SeedTemplate<'a> {
     name: String,
-    description: String,
+    description: Option<String>,
+    creator: String,
+    diff_str: String,
+    qol_str: String,
+    obj_str: String,
+    logical: bool,
+    allow_spoiler: bool,
+    allow_download: bool,
     settings: RandomizerSettings,
-    logical: bool
+    enabled_tech: Vec<i32>,
+    enabled_notables: Vec<(usize, usize)>,
+    preset_data: &'a PresetData,
+    samus_sprite_categories: Vec<SamusSpriteCategory>,
+    mosaic_themes: Vec<MosaicTheme>
+}
+
+impl<'a> SeedTemplate<'a> {
+    fn percent_enabled(&self, diff_name: &str) -> usize {
+        let tech_settings = &self.settings.skill_assumption_settings.tech_settings;
+        let notable_settings = &self.settings.skill_assumption_settings.notable_settings;
+        let all_techs = &self.preset_data.tech_by_difficulty[diff_name];
+        let all_notables = &self.preset_data.notables_by_difficulty[diff_name];
+
+        let tech_filtered = tech_settings.iter().filter(
+            |tech| tech.enabled && all_techs.contains(&tech.id)
+        ).count();
+        let notables_filtered = notable_settings.iter().filter(
+            |notable| notable.enabled && all_notables.contains(&(notable.room_id, notable.notable_id))
+        ).count();
+
+        let enabled = tech_filtered + notables_filtered;
+        let total = all_techs.len() + all_notables.len();
+        let ratio = enabled as f32 / total as f32;
+        let percent = (ratio * 100.0).floor() as usize;
+        percent
+    }
 }
 
 #[get("/{seed_id}")]
+async fn get_seed_redirect(seed_id: web::Path<String>) -> impl Responder {
+    HttpResponse::Found()
+        .insert_header((header::LOCATION, format!("{}/", seed_id)))
+        .finish()
+}
+
+#[get("/{seed_id}/")]
 async fn get_seed(data: web::Data<AppData>, seed_id: web::Path<String>) -> Result<impl Responder, actix_web::Error> {
     info!("Looking up seed {seed_id}");
 
-    let seed_file_bytes = data.file_storage.get_file(&format!("{seed_id}.json")).map_err(
+    let seed_file_bytes = data.file_storage.get_file(&format!("{seed_id}_randomization.json")).map_err(
         |_| ErrorNotFound("Seed not found")
     )?;
     let seed_file = String::from_utf8(seed_file_bytes).map_err(
@@ -153,11 +223,33 @@ async fn get_seed(data: web::Data<AppData>, seed_id: web::Path<String>) -> Resul
         |_| ErrorInternalServerError("Seed file is not valid JSON")
     )?;
 
+    let enabled_tech = r_data.settings.skill_assumption_settings.tech_settings.iter().filter_map(
+        |tech| if tech.enabled { Some(tech.id) } else { None }
+    ).collect();
+    let enabled_notables = r_data.settings.skill_assumption_settings.notable_settings.iter().filter_map(
+        |notable| if notable.enabled { Some((notable.room_id, notable.notable_id)) } else { None }
+    ).collect();
+
+    let diff_str = r_data.settings.skill_assumption_settings.preset.as_ref().unwrap_or(&"custom".to_string()).clone();
+    let qol_str = r_data.settings.quality_of_life_settings.preset.as_ref().unwrap_or(&"custom".to_string()).clone();
+    let obj_str = r_data.settings.objective_settings.preset.as_ref().unwrap_or(&"custom".to_string()).clone();
+
     let template = SeedTemplate {
         name: r_data.name,
         description: r_data.description,
+        creator: r_data.creator,
+        diff_str,
+        qol_str,
+        obj_str,
+        allow_spoiler: r_data.allow_spoiler,
+        allow_download: r_data.allow_download,
         settings: r_data.settings,
-        logical: r_data.logical
+        enabled_tech,
+        enabled_notables,
+        preset_data: &data.preset_data,
+        logical: r_data.logical,
+        samus_sprite_categories: data.samus_sprites.clone(),
+        mosaic_themes: data.mosaic_themes.clone()
     };
     let render = template.render().map_err(
         |err| ErrorInternalServerError(format!("Error rendering template: {err}"))
@@ -168,6 +260,7 @@ async fn get_seed(data: web::Data<AppData>, seed_id: web::Path<String>) -> Resul
 
 #[derive(MultipartForm)]
 struct FormCustomize {
+    rom: Bytes,
     samus_sprite: Text<String>,
     etank_color: Text<String>,
     item_dot_change: Text<String>,
@@ -271,7 +364,7 @@ fn get_quick_reload_buttons(req: &FormCustomize) -> Vec<ControllerButton> {
 }
 
 
-#[get("/{seed_id}/patch")]
+#[post("/{seed_id}/patch")]
 async fn patch_seed(data: web::Data<AppData>, seed_id: web::Path<String>, MultipartForm(form): MultipartForm<FormCustomize>) -> Result<impl Responder, actix_web::Error> {
     info!("Patching seed {}", seed_id);
 
@@ -285,10 +378,8 @@ async fn patch_seed(data: web::Data<AppData>, seed_id: web::Path<String>, Multip
         |_| ErrorInternalServerError("Seed file is not valid JSON")
     )?;
 
-    let rom_bytes = data.file_storage.get_file("vanilla_rom.sfc").map_err(
-        |_| ErrorInternalServerError("Vanilla ROM not found")
-    )?;
-    let rom_vanilla = Rom::new(rom_bytes.clone());
+    let rom_bytes = form.rom.data.to_vec();
+    let rom_vanilla = Rom::new(rom_bytes);
 
     let customize_settings = CustomizeSettings {
         samus_sprite: if r_data.settings.other_settings.ultra_low_qol
@@ -366,6 +457,9 @@ async fn patch_seed(data: web::Data<AppData>, seed_id: web::Path<String>, Multip
         },
     };
 
+    let cur_dir = std::env::current_dir()?;
+    let data_dir = std::path::Path::new("./data/maprando-data");
+    std::env::set_current_dir(data_dir)?;
     let rom_patched = maprando::patch::make_rom(
         &rom_vanilla,
         &r_data.settings,
@@ -377,8 +471,7 @@ async fn patch_seed(data: web::Data<AppData>, seed_id: web::Path<String>, Multip
     ).map_err(
         |err| ErrorInternalServerError(format!("Failed to patch ROM: {err}"))
     )?;
-
-    let ips_patch = create_ips_patch(&rom_bytes, &rom_patched.data);
+    std::env::set_current_dir(cur_dir)?;
 
     let rom_name = if r_data.name.is_empty() {
         seed_id.to_string()
@@ -391,10 +484,30 @@ async fn patch_seed(data: web::Data<AppData>, seed_id: web::Path<String>, Multip
         .insert_header(ContentDisposition {
             disposition: DispositionType::Attachment,
             parameters: vec![DispositionParam::Filename(
-                format!("maprando-plando-{}.ips", rom_name)
+                format!("maprando-plando-{}.sfc", rom_name)
             )]
         })
-        .body(ips_patch)
+        .body(rom_patched.data)
+    )
+}
+
+#[get("/{seed_id}/download")]
+async fn download_seed(data: web::Data<AppData>, seed_id: web::Path<String>) -> Result<impl Responder, actix_web::Error> {
+    info!("Downloading seed {seed_id}");
+
+    let file = data.file_storage.get_file(&format!("{seed_id}_plando.json")).map_err(
+        |_| ErrorNotFound("Seed not found")
+    )?;
+
+    Ok(HttpResponse::Ok()
+        .content_type("application/octet-stream")
+        .insert_header(ContentDisposition {
+            disposition: DispositionType::Attachment,
+            parameters: vec![DispositionParam::Filename(
+                format!("maprando-plando-{}.json", seed_id)
+            )]
+        })
+        .body(file)
     )
 }
 
@@ -480,15 +593,22 @@ async fn main() -> anyhow::Result<()> {
     HttpServer::new(move || {
         App::new()
             .app_data(data.clone())
+            .app_data(MultipartFormConfig::default()
+                .total_limit(4_000_000)
+                .memory_limit(4_000_000)
+            )
             .wrap(Logger::default())
             .service(home)
             .service(upload_seed)
             .service(Scope::new("seed")
+                .service(get_seed_redirect)
                 .service(get_seed)
+                .service(patch_seed)
+                .service(download_seed)
             )
             .service(actix_files::Files::new("/js", "./maprando-plando-web/js"))
             .service(actix_files::Files::new("/css", "./maprando-plando-web/css"))
-            .service(actix_files::Files::new("/static", "./maprando-plando-web/static"))
+            .service(actix_files::Files::new("/img", "./maprando-plando-web/img"))
     })
     .workers(1)
     .bind(("127.0.0.1", 8080))?

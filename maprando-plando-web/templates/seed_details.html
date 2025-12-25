@@ -1,0 +1,47 @@
+<div id="seed-details-dropdown" class="dropdown box" onclick="toggleDropdown('seed-details')">
+    Details
+</div>
+<div id="seed-details" class="box hidden">
+    <div class="box-header">Skill Assumptions</div>
+    <div id="tech-details" class="box">
+        {% for (diff_idx, diff_name) in preset_data.difficulty_levels.keys.iter().enumerate() %}
+            {% if diff_name == "Implicit" || diff_name == "Ignored" %}
+                {% continue %}
+            {% endif %}
+            {% let name_no_space = diff_name.replace(" ", "") %}
+            <div class="dropdown" onclick="toggleDropdown('tech-{{ name_no_space }}')">
+                {{ diff_name }} ({{ self.percent_enabled(diff_name) }}%)
+            </div>
+            <div id="tech-{{ name_no_space }}" class="seed-table hidden">
+                {% let tech = preset_data.tech_by_difficulty[diff_name] %}
+                {% for tech_id in tech %}
+                    {% let tech_data = preset_data.tech_data_map[tech_id] %}
+                    <div class="seed-row">
+                        <div>{{ tech_data.name }}</div>
+                        <div>{% if enabled_tech.contains(tech_data.tech_id) %}Yes{% else %}No{% endif %}</div>
+                    </div>
+                {% endfor %}
+                <hr>
+                {% let notables = preset_data.notables_by_difficulty[diff_name] %}
+                {% for id_pair in notables %}
+                    {% let notable_data = preset_data.notable_data_map[id_pair] %}
+                    <div class="seed-row">
+                        <div>{{ notable_data.room_name }}: {{ notable_data.name }}</div>
+                        <div>{% if enabled_notables.contains(id_pair) %}Yes{% else %}No{% endif %}</div>
+                    </div>
+                {% endfor %}
+            </div>
+        {% endfor %}
+    </div>
+    {% let diff = settings.skill_assumption_settings %}
+    <div style="padding-bottom: 16px">
+        <div class="seed-row">
+            <div>Heat damage multiplier:</div>
+            <div>{{ diff.resource_multiplier }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Escape timer multiplier:</div>
+            <div>{{ diff.escape_timer_multiplier }}</div>
+        </div>
+    </div>
+</div>

@@ -42,13 +42,13 @@ impl SeedData {
 
     pub fn from_bytes(data: Vec<u8>, game_data: &GameData, preset_data: &PresetData) -> Result<SeedData> {
         let s = String::from_utf8(data)?;
-        let v: Value = serde_json::to_value(&s)?;
+        let v: Value = serde_json::from_str(&s)?;
         Self::from_json(v, game_data, preset_data)
     }
 
     pub fn from_file(path: &Path, game_data: &GameData, preset_data: &PresetData) -> Result<SeedData> {
         let s = std::fs::read_to_string(path)?;
-        let v: Value = serde_json::to_value(&s)?;
+        let v: Value = serde_json::from_str(&s)?;
         Self::from_json(v, game_data, preset_data)
     }
 

@@ -1,0 +1,454 @@
+<html>
+    <head>
+        <link rel="stylesheet" href="/css/style.css">
+    </head>
+    <body>
+        {% include "header.html" %}
+        <div id="body">
+            <div id="seed-info" class="box box-shadow">
+                <div id="seed-info-header" class="box-header">
+                    <h3>{{ name }}</h3>
+                    <div id="seed-creator">
+                        by: {{ creator }}
+                    </div>
+                </div>
+                {% if let Some(desc) = description %}
+                <div id="seed-desc" class="seed-body">
+                    {{ desc }}
+                </div>
+                {% endif %}
+                <div id="seed-summary" class="seed-body">
+                    <div class="seed-summary-elem flex-h">
+                        <img src="/img/diff_{{ diff_str }}.png">
+                    </div>
+                    <div class="seed-summary-elem flex-h">
+                        <img src="/img/qol_{{ qol_str }}.png">
+                    </div>
+                    <div class="seed-summary-elem flex-h">
+                        <img src="/img/obj_{{ obj_str }}.png">
+                    </div>
+                    <div class="seed-summary-elem flex-h">
+                        {% if logical %}
+                        <img src="/img/log_yes.png">
+                        {% else %}
+                        <img src="/img/log_no.png">
+                        {% endif %}
+                    </div>
+                </div>
+                {% include "seed_details.html" %}
+            </div>
+            <div id="seed-form-wrapper" class="box box-shadow">
+                <div class="box-header">
+                    Customize
+                </div>
+                <form id="seed-form" method="POST" enctype="multipart/form-data" action="patch" onchange="saveForm(this)" onsubmit="patchROM(this); return false;">
+                    <div class="customize-row">
+                        <div class="customize-label">Samus Sprite</div>
+                        <div class="customize-value">
+                            <div id="sprite-button" class="btn-modal" onclick="openModal('modal-sprite')">
+                                <img src="/img/samus_sprites/samus_vanilla.png">
+                                <div class="sprite-name">Samus</div>
+                            </div>
+                            <input id="samusSprite" type="hidden" name="samus_sprite" value="samus_vanilla">
+                            <div id="modal-sprite" class="modal hidden">
+                                <div class="modal-dialog box">
+                                    <div class="box-header modal-header">
+                                        <h3>Select your character</h3>
+                                        <div class="modal-close" onclick="closeModal()">Close</div>
+                                    </div>
+                                    {% for category in samus_sprite_categories %}
+                                    <div class="sprite-header">{{ category.category_name }}</div>
+                                    <div class="sprite-list">
+                                        {% for sprite in category.sprites %}
+                                        <div class="sprite" data-name="{{ sprite.name }}" data-display-name="{{ sprite.display_name }}" onclick="selectSprite(this)">
+                                            <div class="sprite-image">
+                                                <img src="/img/samus_sprites/{{ sprite.name }}.png" loading="lazy" class="sprite-image-static">
+                                                <img src="/img/samus_sprites/{{ sprite.name }}.gif" loading="lazy" class="sprite-image-anim">
+                                            </div>
+                                            <div class="sprite-name">{{ sprite.display_name }}</div>
+                                            {% if sprite.authors.len() > 0 %}
+                                            <div class="sprite-author">
+                                                by: 
+                                                {% for author in sprite.authors %}
+                                                    {{+ author +}}
+                                                {% endfor %}
+                                            </div>
+                                            {% endif %}
+                                        </div>
+                                        {% endfor %}
+                                    </div>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="customize-row">
+                        <div class="customize-label">Energy tank color</div>
+                        <div class="customize-value">
+                            <div id="etank-button" style="background-color: #DE3894"></div>
+                            <input id="etankColor" type="text" name="etank_color" value="#DE3894" onchange="pickerValueChanged()">
+                            <div id="etank-vanilla" onclick="colorPickerVanilla()">Vanilla</div>
+                            <div id="etank-picker" class="hidden">
+                                <canvas id="color-picker"></canvas>
+                                <div id="color-picker-cursor"></div>
+                                <div id="color-slider">
+                                    <div id="color-slider-cursor"></div>
+                                </div>
+                                <div id="color-picker-close" onclick="closeColorPicker()">Close</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="customize-row">
+                        <div class="customize-label">Room theming</div>
+                        <div class="customize-value" role="group" onchange="roomThemingChanged()">
+                            <input id="roomThemingVanilla" class="btn-radio" type="radio" name="room_theming" value="vanilla" checked="">
+                            <label for="roomThemingVanilla" class="label-radio">Vanilla</label>
+                            <input id="roomThemingPalettes" class="btn-radio" type="radio" name="room_theming" value="palettes">
+                            <label for="roomThemingPalettes" class="label-radio">Area Palettes</label>
+                            <input id="roomThemingTiling" class="btn-radio" type="radio" name="room_theming" value="tiling">
+                            <label for="roomThemingTiling" class="label-radio">Area Tiling</label>
+                        </div>
+                    </div>
+                    <div class="customize-row">
+                        <div class="customize-label">Door colors</div>
+                        <div class="customize-value">
+                            <input id="doorColorsVanilla" class="btn-radio" type="radio" name="door_theme" value="vanilla" checked="">
+                            <label for="doorColorsVanilla" class="label-radio">Vanilla</label>
+                            <input id="doorColorsAlternate" class="btn-radio" type="radio" name="door_theme" value="alternate">
+                            <label for="doorColorsAlternate" class="label-radio">Alternate</label>
+                        </div>
+                    </div>
+                    <div class="customize-row">
+                        <div class="customize-label">Music</div>
+                        <div class="customize-value">
+                            <input id="musicOn" class="btn-radio" type="radio" name="music" value="area" checked="">
+                            <label for="musicOn" class="label-radio">On</label>
+                            <input id="musicOff" class="btn-radio" type="radio" name="music" value="disabled">
+                            <label for="musicOff" class="label-radio">Off</label>
+                        </div>
+                    </div>
+                    <div class="customize-row">
+                        <div class="customize-label">Screen shaking</div>
+                        <div class="customize-value">
+                            <input id="shakingVanilla" class="btn-radio" type="radio" name="shaking" value="Vanilla">
+                            <label for="shakingVanilla" class="label-radio">Vanilla</label>
+                            <input id="shakingReduced" class="btn-radio" type="radio" name="shaking" value="Reduced" checked="">
+                            <label for="shakingReduced" class="label-radio">Reduced</label>
+                            <input id="shakingDisabled" class="btn-radio" type="radio" name="shaking" value="Disabled">
+                            <label for="shakingDisabled" class="label-radio">Disabled</label>
+                        </div>
+                    </div>
+                    <div class="customize-row">
+                        <div class="customize-label">Screen flashing</div>
+                        <div class="customize-value">
+                            <input id="flashingVanilla" class="btn-radio" type="radio" name="flashing" value="Vanilla">
+                            <label for="flashingVanilla" class="label-radio">Vanilla</label>
+                            <input id="flashingReduced" class="btn-radio" type="radio" name="flashing" value="Reduced" checked="">
+                            <label for="flashingReduced" class="label-radio">Reduced</label>
+                        </div>
+                    </div>
+                    <div class="customize-row">
+                        <div class="customize-label">Low-energy beeping</div>
+                        <div class="customize-value">
+                            <input id="disableBeepingNo" class="btn-radio" type="radio" name="disable_beeping" value="false" checked="">
+                            <label for="disableBeepingNo" class="label-radio">Vanilla</label>
+                            <input id="disableBeepingYes" class="btn-radio" type="radio" name="disable_beeping" value="true">
+                            <label for="disableBeepingYes" class="label-radio">Disabled</label>
+                        </div>
+                    </div>
+                    <hr>
+                    <div class="customize-row">
+                        <div class="customize-label">Room palettes</div>
+                        <div class="customize-value" role="group" onchange="roomThemingSettingChanged()">
+                            <input id="roomPalettesVanilla" class="btn-radio" type="radio" name="room_palettes" value="vanilla" checked="">
+                            <label for="roomPalettesVanilla" class="label-radio">Vanilla</label>
+                            <input id="roomPalettesAreaThemed" class="btn-radio" type="radio" name="room_palettes" value="area-themed">
+                            <label for="roomPalettesAreaThemed" class="label-radio">Area-Themed</label>
+                        </div>
+                    </div>
+                    <div class="customize-row">
+                        <div class="customize-label">Tile theme</div>
+                        <div class="customize-value">
+                            <select id="tileTheme" class="form-select" name="tile_theme" onchange="roomThemingSettingChanged()">
+                                <option value="none" selected>Vanilla</option>
+                                <option value="area_themed">Area Themed</option>
+                                <option value="scrambled">Scrambled</option>
+                                {% for theme in mosaic_themes %}
+                                <option value="{{ theme.name }}">{{ theme.display_name }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </div>
+                    <div class="customize-row">
+                        <div class="customize-label">Item dots after collection</div>
+                        <div class="customize-value">
+                            <input id="itemDotChangeFade" class="btn-radio" type="radio" name="item_dot_change" value="Fade" checked="">
+                            <label for="itemDotChangeFade" class="label-radio">Fade</label>
+                            <input id="itemDotChangeDisappear" class="btn-radio" type="radio" name="item_dot_change" value="Disappear">
+                            <label for="itemDotChangeDisappear" class="label-radio">Disappear</label>
+                        </div>
+                    </div>
+                    <div class="customize-row">
+                        <div class="customize-label">Area transition markers</div>
+                        <div class="customize-value">
+                            <input id="transitionLettersNo" class="btn-radio" type="radio" name="transition_letters" value="false">
+                            <label for="transitionLettersNo" class="label-radio">Arrows</label>
+                            <input id="transitionLettersYes" class="btn-radio" type="radio" name="transition_letters" value="true" checked="">
+                            <label for="transitionLettersYes" class="label-radio">Letters</label>
+                        </div>
+                    </div>
+                    <div class="customize-row">
+                        <div class="customize-label">Reserve tank HUD style</div>
+                        <div class="customize-value">
+                            <input id="reserveHudStyleVanilla" class="btn-radio" type="radio" name="reserve_hud_style" value="false">
+                            <label for="reserveHudStyleVanilla" class="label-radio">Vanilla</label>
+                            <input id="reserveHudStyleRevamped" class="btn-radio" type="radio" name="reserve_hud_style" value="true" checked="">
+                            <label for="reserveHudStyleRevamped" class="label-radio">Revamped</label>
+                        </div>
+                    </div>
+                    <div class="customize-row">
+                        <div class="customize-label">Screw Attack animation</div>
+                        <div class="customize-value">
+                            <input id="screwAttackAnimationVanilla" class="btn-radio" type="radio" name="vanilla_screw_attack_animation" value="true">
+                            <label for="screwAttackAnimationVanilla" class="label-radio">Vanilla</label>
+                            <input id="screwAttackAnimationSplit" class="btn-radio" type="radio" name="vanilla_screw_attack_animation" value="false" checked="">
+                            <label for="screwAttackAnimationSplit" class="label-radio">Split</label>
+                        </div>
+                    </div>
+                    <div class="customize-row">
+                        <div class="customize-label">Room names</div>
+                        <div class="customize-value">
+                            <input id="roomNamesOn" class="btn-radio" type="radio" name="room_names" value="true" checked="">
+                            <label for="roomNamesOn" class="label-radio">On</label>
+                            <input id="roomNamesOff" class="btn-radio" type="radio" name="room_names" value="false">
+                            <label for="roomNamesOff" class="label-radio">Off</label>
+                        </div>
+                    </div>
+                    <div class="box-header" style="border-top: 1px solid black; border-bottom: 1px solid black;">Controller Settings</div>
+                    <div class="customize-row">
+                        <div class="customize-label">Shot</div>
+                        <div class="customize-value">
+                            <input id="controlShotX" class="btn-radio" type="radio" name="control_shot" value="X" checked="">
+                            <label for="controlShotX" class="label-radio" onclick="swapButtonAssignment(this)">X</label>
+                            <input id="controlShotY" class="btn-radio" type="radio" name="control_shot" value="Y">
+                            <label for="controlShotY" class="label-radio" onclick="swapButtonAssignment(this)">Y</label>
+                            <input id="controlShotA" class="btn-radio" type="radio" name="control_shot" value="A">
+                            <label for="controlShotA" class="label-radio" onclick="swapButtonAssignment(this)">A</label>
+                            <input id="controlShotB" class="btn-radio" type="radio" name="control_shot" value="B">
+                            <label for="controlShotB" class="label-radio" onclick="swapButtonAssignment(this)">B</label>
+                            <input id="controlShotL" class="btn-radio" type="radio" name="control_shot" value="L">
+                            <label for="controlShotL" class="label-radio" onclick="swapButtonAssignment(this)">L</label>
+                            <input id="controlShotR" class="btn-radio" type="radio" name="control_shot" value="R">
+                            <label for="controlShotR" class="label-radio" onclick="swapButtonAssignment(this)">R</label>
+                            <input id="controlShotSelect" class="btn-radio" type="radio" name="control_shot" value="Select">
+                            <label for="controlShotSelect" class="label-radio" onclick="swapButtonAssignment(this)">Select</label>
+                        </div>
+                    </div>
+                    <div class="customize-row">
+                        <div class="customize-label">Jump</div>
+                        <div class="customize-value">
+                            <input id="controlJumpX" class="btn-radio" type="radio" name="control_jump" value="X">
+                            <label for="controlJumpX" class="label-radio" onclick="swapButtonAssignment(this)">X</label>
+                            <input id="controlJumpY" class="btn-radio" type="radio" name="control_jump" value="Y">
+                            <label for="controlJumpY" class="label-radio" onclick="swapButtonAssignment(this)">Y</label>
+                            <input id="controlJumpA" class="btn-radio" type="radio" name="control_jump" value="A" checked="">
+                            <label for="controlJumpA" class="label-radio" onclick="swapButtonAssignment(this)">A</label>
+                            <input id="controlJumpB" class="btn-radio" type="radio" name="control_jump" value="B">
+                            <label for="controlJumpB" class="label-radio" onclick="swapButtonAssignment(this)">B</label>
+                            <input id="controlJumpL" class="btn-radio" type="radio" name="control_jump" value="L">
+                            <label for="controlJumpL" class="label-radio" onclick="swapButtonAssignment(this)">L</label>
+                            <input id="controlJumpR" class="btn-radio" type="radio" name="control_jump" value="R">
+                            <label for="controlJumpR" class="label-radio" onclick="swapButtonAssignment(this)">R</label>
+                            <input id="controlJumpSelect" class="btn-radio" type="radio" name="control_jump" value="Select">
+                            <label for="controlJumpSelect" class="label-radio" onclick="swapButtonAssignment(this)">Select</label>
+                        </div>
+                    </div>
+                    <div class="customize-row">
+                        <div class="customize-label">Dash</div>
+                        <div class="customize-value">
+                            <input id="controlDashX" class="btn-radio" type="radio" name="control_dash" value="X">
+                            <label for="controlDashX" class="label-radio" onclick="swapButtonAssignment(this)">X</label>
+                            <input id="controlDashY" class="btn-radio" type="radio" name="control_dash" value="Y">
+                            <label for="controlDashY" class="label-radio" onclick="swapButtonAssignment(this)">Y</label>
+                            <input id="controlDashA" class="btn-radio" type="radio" name="control_dash" value="A">
+                            <label for="controlDashA" class="label-radio" onclick="swapButtonAssignment(this)">A</label>
+                            <input id="controlDashB" class="btn-radio" type="radio" name="control_dash" value="B" checked="">
+                            <label for="controlDashB" class="label-radio" onclick="swapButtonAssignment(this)">B</label>
+                            <input id="controlDashL" class="btn-radio" type="radio" name="control_dash" value="L">
+                            <label for="controlDashL" class="label-radio" onclick="swapButtonAssignment(this)">L</label>
+                            <input id="controlDashR" class="btn-radio" type="radio" name="control_dash" value="R">
+                            <label for="controlDashR" class="label-radio" onclick="swapButtonAssignment(this)">R</label>
+                            <input id="controlDashSelect" class="btn-radio" type="radio" name="control_dash" value="Select">
+                            <label for="controlDashSelect" class="label-radio" onclick="swapButtonAssignment(this)">Select</label>
+                        </div>
+                    </div>
+                    <div class="customize-row">
+                        <div class="customize-label">Item Select</div>
+                        <div class="customize-value">
+                            <input id="controlItemSelectX" class="btn-radio" type="radio" name="control_item_select" value="X">
+                            <label for="controlItemSelectX" class="label-radio" onclick="swapButtonAssignment(this)">X</label>
+                            <input id="controlItemSelectY" class="btn-radio" type="radio" name="control_item_select" value="Y">
+                            <label for="controlItemSelectY" class="label-radio" onclick="swapButtonAssignment(this)">Y</label>
+                            <input id="controlItemSelectA" class="btn-radio" type="radio" name="control_item_select" value="A">
+                            <label for="controlItemSelectA" class="label-radio" onclick="swapButtonAssignment(this)">A</label>
+                            <input id="controlItemSelectB" class="btn-radio" type="radio" name="control_item_select" value="B">
+                            <label for="controlItemSelectB" class="label-radio" onclick="swapButtonAssignment(this)">B</label>
+                            <input id="controlItemSelectL" class="btn-radio" type="radio" name="control_item_select" value="L">
+                            <label for="controlItemSelectL" class="label-radio" onclick="swapButtonAssignment(this)">L</label>
+                            <input id="controlItemSelectR" class="btn-radio" type="radio" name="control_item_select" value="R">
+                            <label for="controlItemSelectR" class="label-radio" onclick="swapButtonAssignment(this)">R</label>
+                            <input id="controlItemSelectSelect" class="btn-radio" type="radio" name="control_item_select" value="Select" checked="">
+                            <label for="controlItemSelectSelect" class="label-radio" onclick="swapButtonAssignment(this)">Select</label>
+                        </div>
+                    </div>
+                    <div class="customize-row">
+                        <div class="customize-label">Item Cancel</div>
+                        <div class="customize-value">
+                            <input id="controlItemCancelX" class="btn-radio" type="radio" name="control_item_cancel" value="X">
+                            <label for="controlItemCancelX" class="label-radio" onclick="swapButtonAssignment(this)">X</label>
+                            <input id="controlItemCancelY" class="btn-radio" type="radio" name="control_item_cancel" value="Y" checked="">
+                            <label for="controlItemCancelY" class="label-radio" onclick="swapButtonAssignment(this)">Y</label>
+                            <input id="controlItemCancelA" class="btn-radio" type="radio" name="control_item_cancel" value="A">
+                            <label for="controlItemCancelA" class="label-radio" onclick="swapButtonAssignment(this)">A</label>
+                            <input id="controlItemCancelB" class="btn-radio" type="radio" name="control_item_cancel" value="B">
+                            <label for="controlItemCancelB" class="label-radio" onclick="swapButtonAssignment(this)">B</label>
+                            <input id="controlItemCancelL" class="btn-radio" type="radio" name="control_item_cancel" value="L">
+                            <label for="controlItemCancelL" class="label-radio" onclick="swapButtonAssignment(this)">L</label>
+                            <input id="controlItemCancelR" class="btn-radio" type="radio" name="control_item_cancel" value="R">
+                            <label for="controlItemCancelR" class="label-radio" onclick="swapButtonAssignment(this)">R</label>
+                            <input id="controlItemCancelSelect" class="btn-radio" type="radio" name="control_item_cancel" value="Select">
+                            <label for="controlItemCancelSelect" class="label-radio" onclick="swapButtonAssignment(this)">Select</label>
+                        </div>
+                    </div>
+                    <div class="customize-row">
+                        <div class="customize-label">Angle Up</div>
+                        <div class="customize-value">
+                            <input id="controlAngleUpX" class="btn-radio" type="radio" name="control_angle_up" value="X">
+                            <label for="controlAngleUpX" class="label-radio" onclick="swapButtonAssignment(this)">X</label>
+                            <input id="controlAngleUpY" class="btn-radio" type="radio" name="control_angle_up" value="Y">
+                            <label for="controlAngleUpY" class="label-radio" onclick="swapButtonAssignment(this)">Y</label>
+                            <input id="controlAngleUpA" class="btn-radio" type="radio" name="control_angle_up" value="A">
+                            <label for="controlAngleUpA" class="label-radio" onclick="swapButtonAssignment(this)">A</label>
+                            <input id="controlAngleUpB" class="btn-radio" type="radio" name="control_angle_up" value="B">
+                            <label for="controlAngleUpB" class="label-radio" onclick="swapButtonAssignment(this)">B</label>
+                            <input id="controlAngleUpL" class="btn-radio" type="radio" name="control_angle_up" value="L">
+                            <label for="controlAngleUpL" class="label-radio" onclick="swapButtonAssignment(this)">L</label>
+                            <input id="controlAngleUpR" class="btn-radio" type="radio" name="control_angle_up" value="R" checked="">
+                            <label for="controlAngleUpR" class="label-radio" onclick="swapButtonAssignment(this)">R</label>
+                            <input id="controlAngleUpSelect" class="btn-radio" type="radio" name="control_angle_up" value="Select">
+                            <label for="controlAngleUpSelect" class="label-radio" onclick="swapButtonAssignment(this)">Select</label>
+                        </div>
+                    </div>
+                    <div class="customize-row">
+                        <div class="customize-label">Angle Down</div>
+                        <div class="customize-value">
+                            <input id="controlAngleDownX" class="btn-radio" type="radio" name="control_angle_down" value="X">
+                            <label for="controlAngleDownX" class="label-radio" onclick="swapButtonAssignment(this)">X</label>
+                            <input id="controlAngleDownY" class="btn-radio" type="radio" name="control_angle_down" value="Y">
+                            <label for="controlAngleDownY" class="label-radio" onclick="swapButtonAssignment(this)">Y</label>
+                            <input id="controlAngleDownA" class="btn-radio" type="radio" name="control_angle_down" value="A">
+                            <label for="controlAngleDownA" class="label-radio" onclick="swapButtonAssignment(this)">A</label>
+                            <input id="controlAngleDownB" class="btn-radio" type="radio" name="control_angle_down" value="B">
+                            <label for="controlAngleDownB" class="label-radio" onclick="swapButtonAssignment(this)">B</label>
+                            <input id="controlAngleDownL" class="btn-radio" type="radio" name="control_angle_down" value="L" checked="">
+                            <label for="controlAngleDownL" class="label-radio" onclick="swapButtonAssignment(this)">L</label>
+                            <input id="controlAngleDownR" class="btn-radio" type="radio" name="control_angle_down" value="R">
+                            <label for="controlAngleDownR" class="label-radio" onclick="swapButtonAssignment(this)">R</label>
+                            <input id="controlAngleDownSelect" class="btn-radio" type="radio" name="control_angle_down" value="Select">
+                            <label for="controlAngleDownSelect" class="label-radio" onclick="swapButtonAssignment(this)">Select</label>
+                        </div>
+                    </div>
+                    <div class="customize-row">
+                        <div class="customize-label">Quick reload</div>
+                        <div class="customize-value">
+                            <input id="controlQuickReloadX" class="btn-radio" type="checkbox" name="quick_reload_x">
+                            <label for="controlQuickReloadX" class="label-radio">X</label>
+                            <input id="controlQuickReloadY" class="btn-radio" type="checkbox" name="quick_reload_y">
+                            <label for="controlQuickReloadY" class="label-radio">Y</label>
+                            <input id="controlQuickReloadA" class="btn-radio" type="checkbox" name="quick_reload_a">
+                            <label for="controlQuickReloadA" class="label-radio">A</label>
+                            <input id="controlQuickReloadB" class="btn-radio" type="checkbox" name="quick_reload_b">
+                            <label for="controlQuickReloadB" class="label-radio">B</label>
+                            <input id="controlQuickReloadL" class="btn-radio" type="checkbox" name="quick_reload_l" checked="">
+                            <label for="controlQuickReloadL" class="label-radio">L</label>
+                            <input id="controlQuickReloadR" class="btn-radio" type="checkbox" name="quick_reload_r" checked="">
+                            <label for="controlQuickReloadR" class="label-radio">R</label>
+                            <input id="controlQuickReloadSelect" class="btn-radio" type="checkbox" name="quick_reload_select" checked="">
+                            <label for="controlQuickReloadSelect" class="label-radio">Select</label>
+                            <input id="controlQuickReloadStart" class="btn-radio" type="checkbox" name="quick_reload_start" checked="">
+                            <label for="controlQuickReloadStart" class="label-radio">Start</label>
+                            <input id="controlQuickReloadUp" class="btn-radio" type="checkbox" name="quick_reload_up">
+                            <label for="controlQuickReloadUp" class="label-radio">Up</label>
+                            <input id="controlQuickReloadDown" class="btn-radio" type="checkbox" name="quick_reload_down">
+                            <label for="controlQuickReloadDown" class="label-radio">Down</label>
+                            <input id="controlQuickReloadLeft" class="btn-radio" type="checkbox" name="quick_reload_left">
+                            <label for="controlQuickReloadLeft" class="label-radio">Left</label>
+                            <input id="controlQuickReloadRight" class="btn-radio" type="checkbox" name="quick_reload_right">
+                            <label for="controlQuickReloadRight" class="label-radio">Right</label>
+                        </div>
+                    </div>
+                    <div class="customize-row">
+                        <div class="customize-label">Spin lock</div>
+                        <div class="customize-value">
+                            <input id="controlSpinlockX" class="btn-radio" type="checkbox" name="spin_lock_x" checked="">
+                            <label for="controlSpinlockX" class="label-radio">X</label>
+                            <input id="controlSpinlockY" class="btn-radio" type="checkbox" name="spin_lock_y">
+                            <label for="controlSpinlockY" class="label-radio">Y</label>
+                            <input id="controlSpinlockA" class="btn-radio" type="checkbox" name="spin_lock_a">
+                            <label for="controlSpinlockA" class="label-radio">A</label>
+                            <input id="controlSpinlockB" class="btn-radio" type="checkbox" name="spin_lock_b">
+                            <label for="controlSpinlockB" class="label-radio">B</label>
+                            <input id="controlSpinlockL" class="btn-radio" type="checkbox" name="spin_lock_l" checked="">
+                            <label for="controlSpinlockL" class="label-radio">L</label>
+                            <input id="controlSpinlockR" class="btn-radio" type="checkbox" name="spin_lock_r" checked="">
+                            <label for="controlSpinlockR" class="label-radio">R</label>
+                            <input id="controlSpinlockSelect" class="btn-radio" type="checkbox" name="spin_lock_select">
+                            <label for="controlSpinlockSelect" class="label-radio">Select</label>
+                            <input id="controlSpinlockStart" class="btn-radio" type="checkbox" name="spin_lock_start">
+                            <label for="controlSpinlockStart" class="label-radio">Start</label>
+                            <input id="controlSpinlockUp" class="btn-radio" type="checkbox" name="spin_lock_up" checked="">
+                            <label for="controlSpinlockUp" class="label-radio">Up</label>
+                            <input id="controlSpinlockDown" class="btn-radio" type="checkbox" name="spin_lock_down">
+                            <label for="controlSpinlockDown" class="label-radio">Down</label>
+                            <input id="controlSpinlockLeft" class="btn-radio" type="checkbox" name="spin_lock_left">
+                            <label for="controlSpinlockLeft" class="label-radio">Left</label>
+                            <input id="controlSpinlockRight" class="btn-radio" type="checkbox" name="spin_lock_right">
+                            <label for="controlSpinlockRight" class="label-radio">Right</label>
+                        </div>
+                    </div>
+                    <div class="customize-row">
+                        <div class="customize-label">Moonwalk</div>
+                        <div class="customize-value">
+                            <input id="moonwalkNo" class="btn-radio" type="radio" name="moonwalk" value="false" checked="">
+                            <label for="moonwalkNo" class="label-radio">No</label>
+                            <input id="moonwalkYes" class="btn-radio" type="radio" name="moonwalk" value="true">
+                            <label for="moonwalkYes" class="label-radio">Yes</label>
+                        </div>
+                    </div>
+                    <hr>
+                    <div class="customize-row">
+                        <div class="customize-label">Vanilla ROM</div>
+                        <div class="customize-value">
+                            <input id="rom" type="file" name="rom" onchange="saveROM(this)">
+                        </div>
+                    </div>
+                    <hr>
+                    <div id="patch">
+                        <input id="patch-rom" class="btn patch-btn" type="submit" value="Patch ROM">
+                    </div>
+                </form>
+            </div>
+            <div id="seed-links">
+                {% if allow_spoiler %}
+                <a href="./spoiler" id="seed-spoiler" class="btn btn-success">Interactive Spoiler Map</a>
+                {% endif %}
+                {% if allow_download %}
+                <a href="./download" id="seed-download" class="btn btn-confirm">Download Plando JSON</a>
+                {% endif %}
+            </div>
+        </div>
+        <div id="modal-backdrop" class="hidden"></div>
+        <script src="/js/localforage.js"></script>
+        <script src="/js/script.js"></script>
+    </body>
+</html>

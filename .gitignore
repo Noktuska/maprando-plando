@@ -4,3 +4,5 @@ debug/
 data/
 custom-presets/
 .env
+test_storage/
+template_examples/

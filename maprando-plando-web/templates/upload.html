@@ -18,17 +18,27 @@
                     <div class="flex-h">
                         <div class="flex-col-1">Plando Name:</div>
                         <div class="flex-col-2">
-                            <input id="plando-name" class="input-text" type="text" placeholder="Plando Name">
+                            <input id="plando-name" name="name" class="input-text" type="text" placeholder="Plando Name">
                         </div>
                     </div>
                     <div class="flex-h">
                         <div class="flex-col-1">Description:</div>
                         <div class="flex-col-2">
-                            <textarea id="plando-desc" class="input-text" placeholder="Description" rows="5"></textarea>
+                            <textarea id="plando-desc" name="desc" class="input-text" placeholder="Description" rows="5"></textarea>
                         </div>
                     </div>
                     <div class="flex-h">
-                        <div><input id="plando-file" type="file"></div>
+                        <div>
+                            <input id="allowSpoiler" name="allow_spoiler" class="btn-radio" type="checkbox" value="true">
+                            <label for="allowSpoiler" class="btn label-radio">Unlock Spoiler Log</label>
+                        </div>
+                        <div>
+                            <input id="allowDownload" name="allow_download" class="btn btn-radio" type="checkbox" value="true">
+                            <label for="allowDownload" class="btn label-radio">Allow JSON Download</label>
+                        </div>
+                    </div>
+                    <div class="flex-h">
+                        <div><input id="plando-file" name="file" type="file"></div>
                     </div>
                     <div class="flex-h">
                         <div id="error-out" class="flex-col-1 error-string"></div>
