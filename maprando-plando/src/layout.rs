@@ -5,6 +5,7 @@ pub mod render_selection;
 
 pub mod room_search;
 
+pub mod upload;
 pub mod settings_logic;
 pub mod settings_customize;
 

@@ -1,4 +1,4 @@
-use crate::{benchmark::{Benchmark, BenchmarkResult}, egui_sfml::DrawInput, input_state::KeyState, layout::{hotkey_settings::Keybind, map_editor_ui::MapEditorUi, room_search::RoomSearch, settings_customize::{Customization, SettingsCustomize, SettingsCustomizeResult}, settings_logic::LogicCustomization, Layout, SidebarPanel, WindowType}, texture_manager::TextureManager, update::{Asset, Release}};
+use crate::{benchmark::{Benchmark, BenchmarkResult}, egui_sfml::DrawInput, input_state::KeyState, layout::{Layout, SidebarPanel, WindowType, hotkey_settings::Keybind, map_editor_ui::MapEditorUi, room_search::RoomSearch, settings_customize::{Customization, SettingsCustomize, SettingsCustomizeResult}, settings_logic::LogicCustomization, upload::Upload}, texture_manager::TextureManager, update::{Asset, Release}};
 use anyhow::{anyhow, bail, Result};
 use egui::{self, style::default_text_styles, Color32, Context, FontDefinitions, Id, RichText, Sense, Ui, Vec2};
 use egui_sfml::{SfEgui, UserTexSource};
@@ -889,6 +889,7 @@ struct PlandoApp {
     layout: Layout,
     logic_customization: LogicCustomization,
     settings_customization: SettingsCustomize,
+    upload_window: Upload,
     map_editor: MapEditorUi,
     room_search: RoomSearch,
     hide_warnings: bool,
@@ -1095,6 +1096,7 @@ impl PlandoApp {
             layout,
             logic_customization,
             settings_customization,
+            upload_window: Upload::new(),
             map_editor: MapEditorUi::default(),
             room_search: RoomSearch::default(),
             hide_warnings: false,
@@ -1231,6 +1233,14 @@ impl PlandoApp {
                 self.plando.load_preset(preset);
                 self.schedule_redraw();
                 self.reset_after_patch = false;
+            }
+        }
+
+        if self.upload_window.upload_handle.as_ref().is_some_and(|handle| handle.is_finished()) {
+            let handle = self.upload_window.upload_handle.take().unwrap();
+            let resp = handle.await??;
+            if open::that(format!("{}/seed/{}/", Upload::PLANDO_WEB_URL, resp.seed_id)).is_err() {
+                bail!("Failed to open seed in browser. You can open it manually under {}/seed/{}/", Upload::PLANDO_WEB_URL, resp.seed_id);
             }
         }
 
@@ -1694,6 +1704,15 @@ impl PlandoApp {
                             });
                         });
                         ui.separator();
+                        if ui.button("Upload Seed").clicked() {
+                            let tmp_path = Path::new(Upload::TMP_FILE_PATH);
+                            match self.save_seed(tmp_path) {
+                                Ok(_) => self.upload_window.is_open = true,
+                                Err(err) => self.modal_type = ModalType::Error(err.to_string())
+                            };
+                            ui.close_menu();
+                        }
+                        ui.separator();
                         if ui.button("Patch ROM").clicked() {
                             self.settings_customization.open = true;
                             ui.close_menu();
@@ -1845,7 +1864,7 @@ impl PlandoApp {
             });
             self.benchmark.split("Draw main menu bar");
 
-            if self.handle_spoiler.is_some() || self.handle_patch.is_some() {
+            if self.handle_spoiler.is_some() || self.handle_patch.is_some() || self.upload_window.upload_handle.is_some() {
                 egui::Window::new("Updating Async Handle")
                 .resizable(false).movable(false).title_bar(false).min_width(320.0)
                 .fixed_pos(Vec2::new(rt.size().x as f32 - *sidebar_width - 320.0, 32.0).to_pos2()).show(ctx, |ui| {
@@ -1854,6 +1873,8 @@ impl PlandoApp {
                             "Updating Spoiler Data..."
                         } else if self.handle_patch.is_some() {
                             "Patching ROM..."
+                        } else if self.upload_window.upload_handle.is_some() {
+                            "Uploading seed..."
                         } else {
                             panic!("How???");
                         };
@@ -1961,6 +1982,11 @@ impl PlandoApp {
                     Err(err) => self.modal_type = ModalType::Error(err.to_string())
                 }
                 self.benchmark.split("Draw logic customization window");
+            }
+
+            if self.upload_window.is_open {
+                self.upload_window.draw(ctx);
+                self.benchmark.split("Draw upload window");
             }
 
             match self.modal_type.clone() {
