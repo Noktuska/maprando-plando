@@ -521,18 +521,15 @@ struct AppData {
 }
 
 async fn build_app_data() -> anyhow::Result<AppData> {
-    let cur_dir = std::env::current_dir()?;
     let load_path = std::path::Path::new("./data/maprando-data/");
-    std::env::set_current_dir(load_path)?;
+    let game_data = GameData::load(load_path)?;
 
-    let game_data = GameData::load()?;
-
-    let tech_path = std::path::Path::new("./data/tech_data.json");
-    let notable_path = std::path::Path::new("./data/notable_data.json");
-    let presets_path = std::path::Path::new("./data/presets");
+    let tech_path = std::path::Path::new("./data/maprando-data/data/tech_data.json");
+    let notable_path = std::path::Path::new("./data/maprando-data/data/notable_data.json");
+    let presets_path = std::path::Path::new("./data/maprando-data/data/presets");
     let preset_data = PresetData::load(tech_path, notable_path, presets_path, &game_data)?;
 
-    let samus_sprite_path = std::path::Path::new("../MapRandoSprites/samus_sprites/manifest.json");
+    let samus_sprite_path = std::path::Path::new("./data/MapRandoSprites/samus_sprites/manifest.json");
     let samus_sprites: Vec<SamusSpriteCategory> = serde_json::from_str(&std::fs::read_to_string(samus_sprite_path)?)?;
 
     let mosaic_themes = vec![
@@ -556,8 +553,6 @@ async fn build_app_data() -> anyhow::Result<AppData> {
             name: x.to_string(),
             display_name: y.to_string(),
         }).collect();
-
-    std::env::set_current_dir(cur_dir)?;
 
     let file_storage_url = std::env::var("FILE_STORAGE")?;
     let file_storage = if let Some(path) = file_storage_url.strip_prefix("file:") {

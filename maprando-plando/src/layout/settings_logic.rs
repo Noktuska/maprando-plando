@@ -175,12 +175,6 @@ impl LogicCustomization {
                 ui.selectable_value(&mut self.cur_settings.other_settings.door_locks_size, DoorLocksSize::Large, "Large");
                 ui.end_row();
 
-                // Maps revealed from start
-                ui.label("Maps revealed from start");
-                ui.selectable_value(&mut self.cur_settings.other_settings.map_station_reveal, MapStationReveal::Partial, "Partial");
-                ui.selectable_value(&mut self.cur_settings.other_settings.map_station_reveal, MapStationReveal::Full, "Full");
-                ui.end_row();
-
                 // Map station reveal
                 ui.label("Map station activation reveal");
                 ui.selectable_value(&mut self.cur_settings.other_settings.map_station_reveal, MapStationReveal::Partial, "Partial");
@@ -310,7 +304,7 @@ impl LogicCustomization {
             ui.label("Leniencies");
             egui::Grid::new("skill_general_leniency").num_columns(2).show(ui, |ui| {
                 ui.label("Heat damage multiplier");
-                ui.add(egui::DragValue::new(&mut self.cur_settings.skill_assumption_settings.resource_multiplier).speed(0.05).max_decimals(2).range(1.0..=10.0));
+                ui.add(egui::DragValue::new(&mut self.cur_settings.skill_assumption_settings.resource_multiplier).speed(0.05).max_decimals(2).range(0.0..=10.0));
                 ui.end_row();
 
                 ui.label("Escape time multiplier");
@@ -357,8 +351,24 @@ impl LogicCustomization {
                 ui.add(egui::DragValue::new(&mut self.cur_settings.skill_assumption_settings.jump_into_cf_leniency).speed(0.1).range(0..=1000));
                 ui.end_row();
 
+                ui.label("Spikesuit leniency");
+                ui.add(egui::DragValue::new(&mut self.cur_settings.skill_assumption_settings.spike_suit_leniency).speed(0.1).range(0..=1000));
+                ui.end_row();
+
+                ui.label("Flash suit carrying distance");
+                ui.add(egui::DragValue::new(&mut self.cur_settings.skill_assumption_settings.flash_suit_distance).speed(0.1).range(0..=255));
+                ui.end_row();
+
                 ui.label("Spike X-Mode setup leniency");
                 ui.add(egui::DragValue::new(&mut self.cur_settings.skill_assumption_settings.spike_xmode_leniency).speed(0.1).range(0..=1000));
+                ui.end_row();
+
+                ui.label("Spike speed keep leniency");
+                ui.add(egui::DragValue::new(&mut self.cur_settings.skill_assumption_settings.spike_speed_keep_leniency).speed(0.1).range(0..=1000));
+                ui.end_row();
+
+                ui.label("Elevator Crystal Flash leniency");
+                ui.add(egui::DragValue::new(&mut self.cur_settings.skill_assumption_settings.elevator_cf_leniency).speed(0.1).range(0..=1000));
                 ui.end_row();
             });
 
@@ -490,6 +500,8 @@ impl LogicCustomization {
             ui.label("Other");
             egui::Grid::new("grid_qol_other").num_columns(2).show(ui, |ui| {
                 qol.buffed_drops.generate("Enemy drops are buffed", ui);
+                qol.persist_flash_suit.generate("Flash suit persists across save/load", ui);
+                qol.persist_blue_suit.generate("Blue suit persists across save/load", ui);
             });
         });
     }

@@ -7,8 +7,8 @@ use std::{path::Path, sync::{Arc, MutexGuard}};
 
 use anyhow::{bail, Result};
 use hashbrown::{HashMap, HashSet};
-use maprando::{customize::{mosaic::MosaicTheme, samus_sprite::SamusSpriteCategory, CustomizeSettings}, patch::Rom, preset::PresetData, randomize::{DifficultyConfig, LockedDoor, Randomization, SpoilerLog}, settings::{DoorsMode, ItemCount, Objective, RandomizerSettings, WallJump}, traverse::LockedDoorData};
-use maprando_game::{BeamType, DoorPtrPair, DoorType, GameData, HubLocation, Item, Map, NodeId, RoomId, StartLocation, VertexKey};
+use maprando::{customize::{CustomizeSettings, mosaic::MosaicTheme, samus_sprite::SamusSpriteCategory}, patch::Rom, preset::PresetData, randomize::{DifficultyConfig, LockedDoor, Randomization}, settings::{DoorsMode, ItemCount, Objective, RandomizerSettings, WallJump}, spoiler_log::SpoilerLog, traverse::LockedDoorData};
+use maprando_game::{BeamType, Capacity, DoorPtrPair, DoorType, GameData, HubLocation, Item, Map, NodeId, RoomId, StartLocation, VertexKey};
 use maprando_logic::{GlobalState, Inventory, LocalState};
 use rand::{rngs::StdRng, SeedableRng};
 use serde::{Deserialize, Serialize};
@@ -774,12 +774,14 @@ impl Plando {
                 collectible_missile_packs: 0,
                 collectible_super_packs: 0,
                 collectible_power_bomb_packs: 0,
+                collectible_reserve_tanks: 0,
             },
+            pool_inventory: self.get_pool_inventory(),
             flags: self.get_initial_flag_vec(),
             doors_unlocked: vec![false; self.locked_doors.len()],
             weapon_mask: weapon_mask,
         };
-        let mut local = LocalState::empty(&global);
+        let local = LocalState::empty();
         for x in &self.randomizer_settings.item_progression_settings.starting_items {
             for _ in 0..x.count {
                 global.collect(
@@ -788,12 +790,32 @@ impl Plando {
                     self.randomizer_settings
                         .item_progression_settings
                         .ammo_collect_fraction,
-                    &self.difficulty_tiers[0].tech,
-                    &mut local
+                    &self.difficulty_tiers[0].tech
                 );
             }
         }
         (global, local)
+    }
+
+    fn get_pool_inventory(&self) -> Inventory {
+        let acf = self.randomizer_settings.item_progression_settings.ammo_collect_fraction;
+        let missile_packs = self.placed_item_count[Item::Missile as usize];
+        let super_packs = self.placed_item_count[Item::Super as usize];
+        let pb_packs = self.placed_item_count[Item::PowerBomb as usize];
+        let etanks = self.placed_item_count[Item::ETank as usize];
+        let reserve_tanks = self.placed_item_count[Item::ReserveTank as usize];
+        Inventory {
+            items: self.placed_item_count.iter().map(|&x| x > 0).collect(),
+            max_energy: (99 + etanks * 100) as Capacity,
+            max_reserves: (reserve_tanks * 100) as Capacity,
+            max_missiles: (acf * missile_packs as f32).round() as Capacity * 5,
+            max_supers: (acf * super_packs as f32).round() as Capacity * 5,
+            max_power_bombs: (acf * pb_packs as f32).round() as Capacity * 5,
+            collectible_missile_packs: missile_packs as Capacity,
+            collectible_super_packs: super_packs as Capacity,
+            collectible_power_bomb_packs: pb_packs as Capacity,
+            collectible_reserve_tanks: reserve_tanks as Capacity
+        }
     }
 
     fn get_initial_flag_vec(&self) -> Vec<bool> {

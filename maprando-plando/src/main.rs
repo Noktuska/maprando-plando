@@ -4,7 +4,7 @@ use egui::{self, style::default_text_styles, Color32, Context, FontDefinitions, 
 use egui_sfml::{SfEgui, UserTexSource};
 use hashbrown::{HashMap, HashSet};
 use input_state::MouseState;
-use maprando::{map_repository::MapRepository, patch::Rom, preset::PresetData, randomize::SpoilerRouteEntry, settings::{try_upgrade_settings, Objective, RandomizerSettings}};
+use maprando::{difficulty::{get_full_global, get_link_difficulty_length}, map_repository::MapRepository, patch::Rom, preset::PresetData, settings::{Objective, RandomizerSettings, try_upgrade_settings}, spoiler_log::SpoilerRouteEntry};
 use maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType};
 use maprando_plando_backend::{get_double_item_offset, map_editor::{self, MapEditor, MapErrorType}, randomize::get_vertex_info, seed_data::SeedData, DoubleItemPlacement, Placeable, Plando, SpoilerOverride, ITEM_VALUES};
 use rand::{rngs::StdRng, RngCore, SeedableRng};
@@ -156,9 +156,9 @@ fn load_preset_data(game_data: &GameData) -> Result<PresetData> {
         }
 
         let preset_str = std::fs::read_to_string(entry.path())?;
-        let preset = serde_json::from_str::<RandomizerSettings>(&preset_str)?;
+        let preset_upgrade = try_upgrade_settings(preset_str, &preset_data, false)?.1;
 
-        preset_data.full_presets.push(preset);
+        preset_data.full_presets.push(preset_upgrade);
     }
 
     Ok(preset_data)
@@ -951,11 +951,15 @@ impl PlandoApp {
 
     async fn load_data(mut rx: tokio::sync::mpsc::Receiver<bool>, tx: tokio::sync::mpsc::Sender<Progress>) -> Result<LoadData> {
         tx.send(Progress::LoadGameData).await?;
-        let game_data = GameData::load()?;
+        let mut game_data = GameData::load(Path::new("."))?;
         let maps_vanilla = Self::load_map_repository(MapRepositoryType::Vanilla)?;
 
         tx.send(Progress::LoadPresetData).await?;
         let preset_data = load_preset_data(&game_data)?;
+        let global = get_full_global(&game_data);
+        game_data.make_links_data(&|link, game_data| {
+            get_link_difficulty_length(link, game_data, &preset_data, &global)
+        });
 
         tx.send(Progress::LoadSettings).await?;
         let settings_path = Path::new(PlandoApp::SETTINGS_PATH);
@@ -3240,19 +3244,19 @@ impl PlandoApp {
                             }
                             ui.label(str);
                         }
-                        if let Some(x) = entry.missiles_used {
+                        if let Some(x) = entry.missiles {
                             ui.label(format!("Missiles used: {}", x));
                         }
-                        if let Some(x) = entry.supers_used {
+                        if let Some(x) = entry.supers {
                             ui.label(format!("Supers used: {}", x));
                         }
-                        if let Some(x) = entry.power_bombs_used {
+                        if let Some(x) = entry.power_bombs {
                             ui.label(format!("Power Bombs used: {}", x));
                         }
-                        if let Some(x) = entry.energy_used {
+                        if let Some(x) = entry.energy {
                             ui.label(format!("Energy used: {}", x));
                         }
-                        if let Some(x) = entry.reserves_used {
+                        if let Some(x) = entry.reserves {
                             ui.label(format!("Reserves used: {}", x));
                         }
                     }
@@ -3271,19 +3275,19 @@ impl PlandoApp {
                             }
                             ui.label(str);
                         }
-                        if let Some(x) = entry.missiles_used {
+                        if let Some(x) = entry.missiles {
                             ui.label(format!("Missiles used: {}", x));
                         }
-                        if let Some(x) = entry.supers_used {
+                        if let Some(x) = entry.supers {
                             ui.label(format!("Supers used: {}", x));
                         }
-                        if let Some(x) = entry.power_bombs_used {
+                        if let Some(x) = entry.power_bombs {
                             ui.label(format!("Power Bombs used: {}", x));
                         }
-                        if let Some(x) = entry.energy_used {
+                        if let Some(x) = entry.energy {
                             ui.label(format!("Energy used: {}", x));
                         }
-                        if let Some(x) = entry.reserves_used {
+                        if let Some(x) = entry.reserves {
                             ui.label(format!("Reserves used: {}", x));
                         }
                     }
