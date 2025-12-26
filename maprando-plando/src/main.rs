@@ -3231,39 +3231,75 @@ impl PlandoApp {
                         }
                     }
 
+                    let mut last_room = "";
+                    let mut last_node = "";
                     ui.label("OBTAIN ROUTE");
                     for entry in details_obtain_route {
+                        if entry.room == last_room && entry.node == last_node && entry.strat_id.is_none() {
+                            continue;
+                        }
+                        last_room = &entry.room;
+                        last_node = &entry.node;
                         ui.label(entry.room.clone() + ": " + &entry.node);
                         if !entry.strat_name.is_empty() && !entry.strat_name.starts_with("Base") {
-                            ui.label("Strat: ".to_string() + &entry.strat_name);
+                            ui.label("  Strat: ".to_string() + &entry.strat_name);
                         }
                         if !entry.relevant_flags.is_empty() {
-                            let mut str = "Relevant flags: ".to_string();
+                            let mut str = "  Relevant flags: ".to_string();
                             for flag in &entry.relevant_flags {
                                 str += flag;
                             }
                             ui.label(str);
                         }
-                        if let Some(x) = entry.missiles {
-                            ui.label(format!("Missiles used: {}", x));
-                        }
-                        if let Some(x) = entry.supers {
-                            ui.label(format!("Supers used: {}", x));
-                        }
-                        if let Some(x) = entry.power_bombs {
-                            ui.label(format!("Power Bombs used: {}", x));
-                        }
+
                         if let Some(x) = entry.energy {
-                            ui.label(format!("Energy used: {}", x));
+                            if x >= 0 {
+                                ui.label(format!("   Energy remaining: {}", x));
+                            } else {
+                                ui.label(format!("   Energy consumed: {}", -x - 1));
+                            }
                         }
                         if let Some(x) = entry.reserves {
-                            ui.label(format!("Reserves used: {}", x));
+                            if x >= 0 {
+                                ui.label(format!("   Reserves remaining: {}", x));
+                            } else {
+                                ui.label(format!("   Reserves consumed: {}", -x - 1));
+                            }
+                        }
+                        if let Some(x) = entry.missiles {
+                            if x >= 0 {
+                                ui.label(format!("   Missiles remaining: {}", x));
+                            } else {
+                                ui.label(format!("   Missiles consumed: {}", -x - 1));
+                            }
+                        }
+                        if let Some(x) = entry.supers {
+                            if x >= 0 {
+                                ui.label(format!("   Supers remaining: {}", x));
+                            } else {
+                                ui.label(format!("   Supers consumed: {}", -x - 1));
+                            }
+                        }
+                        if let Some(x) = entry.power_bombs {
+                            if x >= 0 {
+                                ui.label(format!("   Power Bombs remaining: {}", x));
+                            } else {
+                                ui.label(format!("   Power Bombs consumed: {}", -x - 1));
+                            }
+                        }
+                        if let Some(x) = entry.flash_suit {
+                            ui.label(format!("   Flash suit: {x}"));
                         }
                     }
 
                     ui.separator();
                     ui.label("RETURN ROUTE");
                     for entry in details_return_route {
+                        if entry.room == last_room && entry.node == last_node && entry.strat_id.is_none() {
+                            continue;
+                        }
+                        last_room = &entry.room;
+                        last_node = &entry.node;
                         ui.label(entry.room.clone() + ": " + &entry.node);
                         if !entry.strat_name.is_empty() && !entry.strat_name.starts_with("Base") {
                             ui.label("Strat: ".to_string() + &entry.strat_name);
@@ -3275,20 +3311,43 @@ impl PlandoApp {
                             }
                             ui.label(str);
                         }
-                        if let Some(x) = entry.missiles {
-                            ui.label(format!("Missiles used: {}", x));
-                        }
-                        if let Some(x) = entry.supers {
-                            ui.label(format!("Supers used: {}", x));
-                        }
-                        if let Some(x) = entry.power_bombs {
-                            ui.label(format!("Power Bombs used: {}", x));
-                        }
                         if let Some(x) = entry.energy {
-                            ui.label(format!("Energy used: {}", x));
+                            if x >= 0 {
+                                ui.label(format!("   Energy remaining: {}", x));
+                            } else {
+                                ui.label(format!("   Energy consumed: {}", -x - 1));
+                            }
                         }
                         if let Some(x) = entry.reserves {
-                            ui.label(format!("Reserves used: {}", x));
+                            if x >= 0 {
+                                ui.label(format!("   Reserves remaining: {}", x));
+                            } else {
+                                ui.label(format!("   Reserves consumed: {}", -x - 1));
+                            }
+                        }
+                        if let Some(x) = entry.missiles {
+                            if x >= 0 {
+                                ui.label(format!("   Missiles remaining: {}", x));
+                            } else {
+                                ui.label(format!("   Missiles consumed: {}", -x - 1));
+                            }
+                        }
+                        if let Some(x) = entry.supers {
+                            if x >= 0 {
+                                ui.label(format!("   Supers remaining: {}", x));
+                            } else {
+                                ui.label(format!("   Supers consumed: {}", -x - 1));
+                            }
+                        }
+                        if let Some(x) = entry.power_bombs {
+                            if x >= 0 {
+                                ui.label(format!("   Power Bombs remaining: {}", x));
+                            } else {
+                                ui.label(format!("   Power Bombs consumed: {}", -x - 1));
+                            }
+                        }
+                        if let Some(x) = entry.flash_suit {
+                            ui.label(format!("   Flash suit: {x}"));
                         }
                     }
 
