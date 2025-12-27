@@ -1,19 +1,21 @@
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
 use actix_multipart::form::{self, MultipartForm, MultipartFormConfig, bytes::Bytes, text::Text};
 use actix_web::{App, HttpResponse, HttpServer, Responder, Scope, error::{ErrorBadRequest, ErrorInternalServerError, ErrorNotFound}, get, http::header::{self, ContentDisposition, DispositionParam, DispositionType}, middleware::Logger, post, web};
-use anyhow::bail;
+use anyhow::Context;
 use askama::Template;
 use log::info;
-use maprando::{customize::{mosaic::MosaicTheme, parse_controller_button, samus_sprite::SamusSpriteCategory, ControllerButton, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, MusicSettings, PaletteTheme, ShakingSetting, TileTheme}, patch::Rom, preset::PresetData, randomize::Randomization, settings::RandomizerSettings};
+use maprando::{customize::{ControllerButton, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, MusicSettings, PaletteTheme, ShakingSetting, TileTheme, mosaic::MosaicTheme, parse_controller_button, samus_sprite::SamusSpriteCategory}, difficulty::{get_full_global, get_link_difficulty_length}, patch::Rom, preset::PresetData, randomize::Randomization, settings::{DoorLocksSize, RandomizerSettings}, spoiler_map};
 use maprando_game::GameData;
 use maprando_plando_backend::{seed_data::SeedData, Plando};
 use serde::{Deserialize, Serialize};
 
-use crate::file_storage::{FileStorage, LocalFileStorage};
+use crate::file_storage::{FileStorage, Seed, SeedFile};
 
 mod file_storage;
 mod utils;
+
+const VISUALIZER_PATH: &'static str = "./data/visualizer";
 
 #[derive(Template)]
 #[template(path = "upload.html")]
@@ -29,10 +31,10 @@ async fn home() -> impl Responder {
 
 #[derive(Debug, MultipartForm)]
 struct UploadForm {
-    name: form::text::Text<String>,
-    desc: form::text::Text<String>,
-    allow_spoiler: form::text::Text<bool>,
-    allow_download: form::text::Text<bool>,
+    name: Text<String>,
+    desc: Text<String>,
+    allow_spoiler: Option<Text<String>>,
+    allow_download: Option<Text<String>>,
     #[multipart(limit = "256KB")]
     file: form::bytes::Bytes
 }
@@ -54,7 +56,7 @@ async fn upload_seed(data: web::Data<AppData>, MultipartForm(form): MultipartFor
     if form.name.len() > 32 {
         return Err(ErrorBadRequest("Plando name too long. Maximum of 32 characters."));
     }
-    if form.desc.len() > 300 {
+    if form.desc.len() > 600 {
         return Err(ErrorBadRequest("Description too long. Maximum of 300 characters."));
     }
 
@@ -64,7 +66,7 @@ async fn upload_seed(data: web::Data<AppData>, MultipartForm(form): MultipartFor
     loop {
         seed_id = utils::generate_seed_id(8);
         info!("Generated seed_id: {seed_id}");
-        if data.file_storage.get_file(&format!("{seed_id}_randomization.json")).is_err() {
+        if data.file_storage.get_file(format!("{seed_id}/metadata.json")).await.is_err() {
             break;
         }
     }
@@ -106,16 +108,10 @@ async fn upload_seed(data: web::Data<AppData>, MultipartForm(form): MultipartFor
     let logically_clearable = mb_clearable && plando.spoiler_overrides.is_empty();
 
     let r_json = serde_json::to_value(r)?;
-    let s_json = serde_json::json!({
-        "summary": s.summary,
-        "objectives": s.objectives,
-        "escape": s.objectives,
-        "start_location": s.start_location,
-        "hub_location_name": s.hub_location_name,
-        "hub_obtain_route": s.hub_obtain_route,
-        "hub_return_route": s.hub_return_route,
-        "details": s.details
-    });
+    let mut s_json = serde_json::to_value(s)?;
+    let s_json_map = s_json.as_object_mut().unwrap();
+    s_json_map.retain(|k, _| k != "forward_traversal" && k != "reverse_traversal");
+    s_json_map.insert("spoiler_overrides".to_string(), serde_json::to_value(&plando.spoiler_overrides)?);
 
     let desc = if form.desc.0.is_empty() {
         None
@@ -123,41 +119,101 @@ async fn upload_seed(data: web::Data<AppData>, MultipartForm(form): MultipartFor
         Some(form.desc.0)
     };
 
-    let r_string = serde_json::json!({
+    let allow_spoiler = form.allow_spoiler.is_some_and(|x| x.0 == "on");
+    let allow_download = form.allow_download.is_some_and(|x| x.0 == "on");
+
+    let metadata = serde_json::json!({
         "name": form.name.0,
         "description": desc,
         "creator": plando.creator_name,
-        "allow_spoiler": form.allow_spoiler.0,
-        "allow_download": form.allow_download.0,
-        "randomization": r_json,
+        "allow_spoiler": allow_spoiler,
+        "allow_download": allow_download,
         "settings": plando.randomizer_settings,
+        "randomization": r_json,
         "logical": logically_clearable
     }).to_string();
-    let s_string = serde_json::json!({
-        "spoiler": s_json,
-        "spoiler_overrides": plando.spoiler_overrides
-    }).to_string();
 
-    info!("Storing seed files");
-    data.file_storage.put_file(&format!("{seed_id}_randomization.json"), r_string.as_bytes()).map_err(
-        |_| ErrorInternalServerError(format!("Error when trying to store seed file"))
-    )?;
-    data.file_storage.put_file(&format!("{seed_id}_spoiler.json"), s_string.as_bytes()).map_err(
-        |_| ErrorInternalServerError(format!("Error when trying to store seed file"))
-    )?;
     let seed_data_str = serde_json::to_string_pretty(&seed_data.to_json().map_err(
         |_| ErrorInternalServerError(format!("Failed to parse seed data back into JSON"))
     )?).map_err(
         |_| ErrorInternalServerError(format!("Failed to parse seed data into a JSON string"))
     )?;
-    data.file_storage.put_file(&format!("{seed_id}_plando.json"), seed_data_str.as_bytes()).map_err(
-        |_| ErrorInternalServerError(format!("Error when trying to store seed file"))
+
+    let mut seed = Seed {
+        seed_id: seed_id.clone(),
+        files: Vec::new()
+    };
+
+    seed.files.push(SeedFile {
+        name: "randomization.json".to_string(),
+        data: metadata.as_bytes().to_vec()
+    });
+
+    // Spoiler Data
+    let prefix = if allow_spoiler { "public/" } else { "private/" };
+    let mut door_settings = plando.randomizer_settings.clone();
+    door_settings.other_settings.door_locks_size = DoorLocksSize::Large;
+    let spoiler_map = spoiler_map::get_spoiler_map(r, &data.game_data, &door_settings, false).unwrap();
+    door_settings.other_settings.door_locks_size = DoorLocksSize::Small;
+    let spoiler_map_small = spoiler_map::get_spoiler_map(r, &data.game_data, &door_settings, false).unwrap();
+
+    seed.files.push(SeedFile {
+        name: format!("{prefix}spoiler.json"),
+        data: s_json.to_string().as_bytes().to_vec()
+    });
+    seed.files.push(SeedFile {
+        name: format!("{prefix}map-explored.png"),
+        data: spoiler_map.explored
+    });
+    seed.files.push(SeedFile {
+        name: format!("{prefix}map-outline.png"),
+        data: spoiler_map.outline
+    });
+    seed.files.push(SeedFile {
+        name: format!("{prefix}map-explored-small.png"),
+        data: spoiler_map_small.explored
+    });
+
+    // Plando file
+    seed.files.push(SeedFile {
+        name: if allow_download { "public/plando.json" } else { "private/plando.json" }.to_string(),
+        data: seed_data_str.as_bytes().to_vec()
+    });
+
+    info!("Storing seed files");
+    data.file_storage.put_seed(seed).await.map_err(
+        |_| ErrorInternalServerError("Failed storing seed files")
     )?;
 
     info!("Seed stored successfully");
     Ok(HttpResponse::Ok().json(serde_json::json!({
         "seed_id": seed_id
     })))
+}
+
+#[get("/{seed_id}/data/{filename:.*}")]
+async fn get_seed_file(data: web::Data<AppData>, path: web::Path<(String, String)>) -> Result<impl Responder, actix_web::Error> {
+    let seed_id = &path.0;
+    let filename = &path.1;
+
+    info!("get_seed_file: {seed_id}/{filename}");
+
+    let res = if let Some(filepath) = filename.strip_prefix("visualizer/") {
+        let path = Path::new(VISUALIZER_PATH).join(filepath);
+        std::fs::read(&path).map_err(anyhow::Error::from).with_context(|| format!("Error reading static file: {}", path.display()))
+    } else {
+        let path = seed_id.clone() + "/public/" + filename;
+        data.file_storage.get_file(path).await
+    };
+
+    let data = res.map_err(
+        |_| ErrorNotFound("Seed file not found")
+    )?;
+
+    let ext = Path::new(filename).extension().map(|x| x.to_str().unwrap()).unwrap_or("bin");
+    let mime = actix_files::file_extension_to_mime(ext);
+
+    Ok(HttpResponse::Ok().content_type(mime).body(data))
 }
 
 #[derive(Template)]
@@ -213,7 +269,7 @@ async fn get_seed_redirect(seed_id: web::Path<String>) -> impl Responder {
 async fn get_seed(data: web::Data<AppData>, seed_id: web::Path<String>) -> Result<impl Responder, actix_web::Error> {
     info!("Looking up seed {seed_id}");
 
-    let seed_file_bytes = data.file_storage.get_file(&format!("{seed_id}_randomization.json")).map_err(
+    let seed_file_bytes = data.file_storage.get_file(format!("{seed_id}/randomization.json")).await.map_err(
         |_| ErrorNotFound("Seed not found")
     )?;
     let seed_file = String::from_utf8(seed_file_bytes).map_err(
@@ -255,7 +311,7 @@ async fn get_seed(data: web::Data<AppData>, seed_id: web::Path<String>) -> Resul
         |err| ErrorInternalServerError(format!("Error rendering template: {err}"))
     )?;
 
-    Ok(HttpResponse::Ok().body(render))
+    Ok(HttpResponse::Ok().content_type("text/html; charset=utf-8").body(render))
 }
 
 #[derive(MultipartForm)]
@@ -368,7 +424,7 @@ fn get_quick_reload_buttons(req: &FormCustomize) -> Vec<ControllerButton> {
 async fn patch_seed(data: web::Data<AppData>, seed_id: web::Path<String>, MultipartForm(form): MultipartForm<FormCustomize>) -> Result<impl Responder, actix_web::Error> {
     info!("Patching seed {}", seed_id);
 
-    let seed_file_bytes = data.file_storage.get_file(&format!("{seed_id}_randomization.json")).map_err(
+    let seed_file_bytes = data.file_storage.get_file(format!("{seed_id}/randomization.json")).await.map_err(
         |_| ErrorNotFound("Seed not found")
     )?;
     let seed_file = String::from_utf8(seed_file_bytes).map_err(
@@ -491,43 +547,27 @@ async fn patch_seed(data: web::Data<AppData>, seed_id: web::Path<String>, Multip
     )
 }
 
-#[get("/{seed_id}/download")]
-async fn download_seed(data: web::Data<AppData>, seed_id: web::Path<String>) -> Result<impl Responder, actix_web::Error> {
-    info!("Downloading seed {seed_id}");
-
-    let file = data.file_storage.get_file(&format!("{seed_id}_plando.json")).map_err(
-        |_| ErrorNotFound("Seed not found")
-    )?;
-
-    Ok(HttpResponse::Ok()
-        .content_type("application/octet-stream")
-        .insert_header(ContentDisposition {
-            disposition: DispositionType::Attachment,
-            parameters: vec![DispositionParam::Filename(
-                format!("maprando-plando-{}.json", seed_id)
-            )]
-        })
-        .body(file)
-    )
-}
-
 struct AppData {
     game_data: Arc<GameData>,
     preset_data: PresetData,
     samus_sprites: Vec<SamusSpriteCategory>,
     mosaic_themes: Vec<MosaicTheme>,
-    file_storage: Box<dyn FileStorage>,
+    file_storage: FileStorage,
     //db_pool: Pool<Postgres>
 }
 
 async fn build_app_data() -> anyhow::Result<AppData> {
     let load_path = std::path::Path::new("./data/maprando-data/");
-    let game_data = GameData::load(load_path)?;
+    let mut game_data = GameData::load(load_path)?;
 
     let tech_path = std::path::Path::new("./data/maprando-data/data/tech_data.json");
     let notable_path = std::path::Path::new("./data/maprando-data/data/notable_data.json");
     let presets_path = std::path::Path::new("./data/maprando-data/data/presets");
     let preset_data = PresetData::load(tech_path, notable_path, presets_path, &game_data)?;
+    let global = get_full_global(&game_data);
+    game_data.make_links_data(&|link, game_data| {
+        get_link_difficulty_length(link, game_data, &preset_data, &global)
+    });
 
     let samus_sprite_path = std::path::Path::new("./data/MapRandoSprites/samus_sprites/manifest.json");
     let samus_sprites: Vec<SamusSpriteCategory> = serde_json::from_str(&std::fs::read_to_string(samus_sprite_path)?)?;
@@ -555,13 +595,7 @@ async fn build_app_data() -> anyhow::Result<AppData> {
         }).collect();
 
     let file_storage_url = std::env::var("FILE_STORAGE")?;
-    let file_storage = if let Some(path) = file_storage_url.strip_prefix("file:") {
-        Box::new(LocalFileStorage {
-            path: std::path::Path::new(path).to_path_buf()
-        })
-    } else {
-        bail!("Invalid file_storage: {file_storage_url}");
-    };
+    let file_storage = FileStorage::new(&file_storage_url);
 
     //let db_address = std::env::var("DATABASE_URL")?;
     //let pool = PgPool::connect(&db_address).await?;
@@ -598,8 +632,8 @@ async fn main() -> anyhow::Result<()> {
             .service(Scope::new("seed")
                 .service(get_seed_redirect)
                 .service(get_seed)
+                .service(get_seed_file)
                 .service(patch_seed)
-                .service(download_seed)
             )
             .service(actix_files::Files::new("/js", "./maprando-plando-web/js"))
             .service(actix_files::Files::new("/css", "./maprando-plando-web/css"))

@@ -1,8 +1,11 @@
 target/
 debug/
 .vscode/
-data/
 custom-presets/
 .env
 test_storage/
 template_examples/
+
+data/*
+!data/plando-gfx
+!data/visualizer/

@@ -1,0 +1,388 @@
+body {
+	font-family: sans-serif;
+	background-color: #111;
+	margin: 0;
+	overflow: hidden;
+	user-select: none;
+}
+a {
+	color: white;	
+}
+#zoom {
+	touch-action: none;
+}
+#map, #map_explored {
+	position: absolute;
+	width: 1776px;
+	image-rendering: pixelated;
+	top: 0;
+	left: 0;
+	visibility: hidden;
+	background-image: url("grid.png");
+	background-size: 24px 24px;
+}
+#path-overlay {
+	position: absolute;
+	pointer-events: none;
+	z-index: 3;
+}
+#path-highlight {
+	position: absolute;
+	pointer-events: none;
+	z-index: 3;
+}
+#highlight-overlay {
+	position: absolute;
+	margin: 24px;
+	width: 1728px;
+	height: 1728px;
+	image-rendering: pixelated;
+	z-index: 1;
+	pointer-events: none;
+}
+#obscure-overlay {
+	position: absolute;
+	margin: 24px;
+	width: 1728px;
+	height: 1728px;
+	image-rendering: pixelated;
+	z-index: 1;
+	pointer-events: none;
+}
+#spoiler-overlay {
+	position: absolute;
+	width: 1776px;
+	height: 1776px;
+	image-rendering: pixelated;
+	z-index: 2;
+	pointer-events: none;
+}
+#overlay {
+	position: absolute;
+}
+.popup, #room-info, #sidebar-info, #sidebar-route, #settings, #sidebar-supp-item, #debugData {
+	position: relative;
+	color: #eee;
+	background-color: #222222e0;
+	z-index: 3;
+	border: 2px solid #222;
+	border-radius: 2px;
+	padding: 2px;
+	line-height: 1em;
+	pointer-events: none;
+}
+.room-link {
+	text-decoration: none;
+}
+.room-link:hover {
+	text-decoration: underline;
+}
+.room-head:hover {
+	text-decoration: underline;
+}
+.obtain-room-route,.return-room-route {
+	display: none;
+	padding: 5px;
+	padding-left: 20px;
+}
+.clickable:hover {
+	cursor: pointer;
+}
+.route-consumables, .route-flags, .route-strat{
+	padding-left: 10px;
+}
+#sidebar-info {
+	position: fixed;
+	max-height: 600px;
+	overflow-y: auto;
+	pointer-events: auto;
+	top: 16px;
+	left: 16px;
+	user-select: text;
+}
+#sidebar-supp-item {
+	position: fixed;
+	max-height: 600px;
+	overflow: none;
+	pointer-events: auto;
+	user-select: text;
+	display: none;
+}
+.sidebar-title {
+	font-size: x-large;
+}
+.sidebar-item-name {
+	font-size: x-large;
+	margin-top: 12px;
+}
+.item-list {
+	width: 360px;
+	padding-right: 10px;
+}
+.category {
+	font-size: small;
+	font-weight: bold;
+	margin-top: 8px;
+}
+.step-panel {
+	padding: 3px;
+	display: flex;
+	align-items: center;
+}
+.step-panel:hover {
+	background-color: #333333e0;
+}
+.step-panel.selected {
+	background-color: #444480e0;
+}
+.step-number {
+	font-size: small;
+	font-weight: bold;
+	text-align: right;
+	width: 16px;
+	height: 16px;
+	margin-right: 8px;
+}
+.step-whole-map {
+	font-size: small;
+	font-weight: bold;
+	margin-right: 8px;
+}
+@keyframes pathpulsein {
+	50% {
+		stroke-width: 4;
+	}
+	100% {
+		stroke-width: 2;
+	}
+}
+#path-in {
+	stroke:cyan;
+	stroke-width: 2;
+	fill:none;
+	stroke-linejoin: round;
+	animation-name: pathpulsein;
+	animation-duration: 1s;
+	animation-iteration-count: infinite;
+	animation-timing-function: linear;
+}
+@keyframes pathpulseout {
+	50% {
+		stroke-width: 6;
+	}
+	100% {
+		stroke-width: 4;
+	}
+}
+#path-out {
+	stroke:black;
+	stroke-width: 4;
+	fill:none;
+	stroke-linejoin: round;
+	animation-name: pathpulseout;
+	animation-duration: 1s;
+	animation-iteration-count: infinite;
+	animation-timing-function: linear;
+}
+@keyframes pulse {
+	50% {
+		transform: scale(2);
+	}
+	100% {
+		transform: scale(1);
+	}
+}
+.highlight {
+	z-index: 2;
+	animation-name: pulse;
+	animation-duration: 1s;
+	animation-iteration-count: infinite;
+	animation-timing-function: linear;
+}
+.hidden {
+	display: none;
+}
+.popup {
+	display: none;
+	z-index: 2;
+}
+.icon.spoil:hover + .popup {
+	display: block;
+	width: auto;
+}
+.icon, .ui-icon, .ui-icon-hoverable {
+	background-image: url("items.png");
+	width: 16px;
+	height: 16px;
+	background-size: 384px;
+	image-rendering: pixelated;
+	transition: transform 200ms ease;
+}
+.door-icon{
+	background-image: url("doors.png");
+	width: 16px;
+	height: 16px;
+	background-size: 144px;
+	image-rendering: pixelated;
+	transition: transform 200ms ease;
+}
+.map-door-icon{
+	background-image: url("map_doors.png");
+	width: 18px;
+	height: 18px;
+	background-size: 162px;
+	image-rendering: pixelated;
+	transition: transform 200ms ease;
+}
+.icon,.map-door-icon {
+	position: absolute;
+}
+.door-icon, .ui-icon, .ui-icon-hoverable {
+	display: inline-block;
+	margin-top: 1px;
+	margin-bottom: 1px;
+	margin-left: 1px;
+	margin-right: 1px;
+}
+.icon.spoil:hover {
+	transform: scale(2);
+	z-index: 2;
+}
+.door-icon:hover, .ui-icon-hoverable:hover {
+	transform: scale(2);
+	z-index: 2;
+}
+.ui-icon-hoverable.selected {
+	transform: scale(1.5);
+}
+.item-count {
+	margin-right: 2px
+}
+.button {
+	background-color: #36f;
+	border-radius: 2px;
+	font-weight: bold;
+	text-align: center;
+	padding: 5px;
+	cursor: pointer;
+	width: 200px;
+	margin:auto;
+}
+#msg-wrap {
+	position:fixed;
+	display:none;
+	top:0px;
+	left:0px;
+	right:0px;
+	bottom:0px;
+	justify-content: center;
+	align-items: center;
+	z-index: 4;
+}
+
+.msg {
+	background: #222;
+	color: #eee;
+	background-color: #222;
+	z-index: 4;
+	border-radius: 2px;
+	padding: 8px;
+	max-width: 600px;
+}
+.msg-title {
+	text-align: center;
+	margin: 10px;
+}
+#helpForm {
+	margin:auto;
+	margin-bottom:2px;
+	width:fit-content;
+}
+.flag {
+	image-rendering: pixelated;
+	position: absolute;
+}
+.flag.spoil:hover {
+	transform: scale(1.5);
+	z-index: 2;
+}
+.flag.spoil:hover + .popup {
+	display: block;
+	z-index: 2;
+}
+.start {
+	image-rendering: pixelated;
+	position: absolute;
+	z-index: 2;
+}
+.start:hover {
+	transform: scale(1.5);
+	z-index: 2;
+}
+.start:hover + .popup {
+	display: block;
+	z-index: 2;
+}
+.ship {
+	image-rendering: pixelated;
+	position: absolute;
+}
+.ship.spoil:hover {
+	transform: scale(1.5);
+	z-index: 2;
+}
+.ship.spoil:hover + .popup {
+	display: block;
+	z-index: 2;
+}
+.ui-flag {
+	height: 24px;
+	margin: 2px;
+}
+.ui-flag.selected {
+	transform: scale(1.5);
+}
+.ui-flag:hover {
+	transform: scale(1.5);
+}
+#settings {
+	top: 16px;
+	right: 16px;
+	position: fixed;
+	pointer-events: auto;
+}
+#settingsCog {
+	float:right;
+}
+#settingsForm {
+	align-content:center;
+	clear:top;
+}
+#sublabel {
+	position:relative;
+	left:10px;
+}
+#debugData {
+	bottom: 16px;
+	right: 16px;
+	position: fixed;
+	pointer-events: auto;
+}
+.debugLabel {
+	display: inline-block;
+	width: 150px;
+	text-align: right;
+	margin-top: 5px;
+	margin-bottom: 5px;
+	margin-right: 5px;
+}
+.debugInput {
+	width: 60px;
+}
+#debugOutput {
+	max-width: 900px;
+	max-height: 600px;
+	overflow-x: auto;
+	overflow-y: auto;
+	user-select: text;
+}

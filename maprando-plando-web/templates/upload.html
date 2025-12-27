@@ -3,14 +3,7 @@
         <link rel="stylesheet" href="../css/style.css">
     </head>
     <body>
-        <div id="header">
-            <div id="header-left">
-                Logo goes here
-            </div>
-            <div id="header-right">
-                <a href="https://github.com/Noktuska/maprando-plando">Github</a>
-            </div>
-        </div>
+        {% include "header.html" %}
         <div id="body">
             <div id="upload-wrapper">
                 <h2>Upload Seed:</h2>
@@ -29,11 +22,11 @@
                     </div>
                     <div class="flex-h">
                         <div>
-                            <input id="allowSpoiler" name="allow_spoiler" class="btn-radio" type="checkbox" value="true">
+                            <input id="allowSpoiler" name="allow_spoiler" class="btn-radio" type="checkbox">
                             <label for="allowSpoiler" class="btn label-radio">Unlock Spoiler Log</label>
                         </div>
                         <div>
-                            <input id="allowDownload" name="allow_download" class="btn btn-radio" type="checkbox" value="true">
+                            <input id="allowDownload" name="allow_download" class="btn btn-radio" type="checkbox">
                             <label for="allowDownload" class="btn label-radio">Allow JSON Download</label>
                         </div>
                     </div>
