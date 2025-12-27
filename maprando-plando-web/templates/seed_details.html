@@ -33,15 +33,285 @@
             </div>
         {% endfor %}
     </div>
-    {% let diff = settings.skill_assumption_settings %}
+    {% let diff = &settings.skill_assumption_settings %}
     <div style="padding-bottom: 16px">
         <div class="seed-row">
             <div>Heat damage multiplier:</div>
-            <div>{{ diff.resource_multiplier }}</div>
+            <div>{{+ diff.resource_multiplier }}</div>
         </div>
         <div class="seed-row">
             <div>Escape timer multiplier:</div>
-            <div>{{ diff.escape_timer_multiplier }}</div>
+            <div>{{+ diff.escape_timer_multiplier }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Gate glitch leniency:</div>
+            <div>{{+ diff.gate_glitch_leniency }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Farm time limit:</div>
+            <div>{{+ diff.farm_time_limit }}</div>
+        </div>
+
+        <div class="seed-row">
+            <div>Shinecharge tiles:</div>
+            <div>{{+ diff.shinespark_tiles }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Heated shinecharge tiles:</div>
+            <div>{{+ diff.heated_shinespark_tiles }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Speedball tiles:</div>
+            <div>{{+ diff.speed_ball_tiles }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Shinecharge leniency frames:</div>
+            <div>{{+ diff.shinecharge_leniency_frames }}</div>
+        </div>
+
+        <div class="seed-row">
+            <div>Phantoon proficiency:</div>
+            <div>{{+ diff.phantoon_proficiency }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Draygon proficiency:</div>
+            <div>{{+ diff.draygon_proficiency }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Ridley proficiency:</div>
+            <div>{{+ diff.ridley_proficiency }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Botwoon proficiency:</div>
+            <div>{{+ diff.botwoon_proficiency }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Mother Brain proficiency:</div>
+            <div>{{+ diff.mother_brain_proficiency }}</div>
+        </div>
+
+        <div class="seed-row">
+            <div>Door stuck leniency:</div>
+            <div>{{+ diff.door_stuck_leniency }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Bomb into Crystal Flash leniency:</div>
+            <div>{{+ diff.bomb_into_cf_leniency }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Jump into Crystal Flash leniency:</div>
+            <div>{{+ diff.jump_into_cf_leniency }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Spike suit leniency:</div>
+            <div>{{+ diff.spike_suit_leniency }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Flash suit carrying distance:</div>
+            <div>{{+ diff.flash_suit_distance }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Spike X-mode setup leniency:</div>
+            <div>{{+ diff.spike_xmode_leniency }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Spike speed keep leniency:</div>
+            <div>{{+ diff.spike_speed_keep_leniency }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Elevator Crystal Flash leniency:</div>
+            <div>{{+ diff.elevator_cf_leniency }}</div>
+        </div>
+    </div>
+    <div class="box-header">Quality of Life</div>
+    <div style="padding-bottom: 16px">
+        <div class="seed-row">
+            <div>Initial map reveal:</div>
+            <div>{{+ 
+                settings.quality_of_life_settings.initial_map_reveal_settings.preset.as_ref().unwrap_or(&"Custom".to_string()) 
+            }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Item markers:</div>
+            <div>{{+ item_markers }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Room outline revealed on entry:</div>
+            <div>{% if settings.quality_of_life_settings.room_outline_revealed %}Yes{% else %}No{% endif %}</div>
+        </div>
+        <div class="seed-row">
+            <div>Opposite area connections revealed by map:</div>
+            <div>{% if settings.quality_of_life_settings.opposite_area_revealed %}Yes{% else %}No{% endif %}</div>
+        </div>
+        <hr>
+        <div class="seed-row">
+            <div>Mother Brain fight (phases 2 and 3):</div>
+            <div>{{+ mother_brain_fight }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Supers do double damage to Mother Brain:</div>
+            <div>{% if settings.quality_of_life_settings.supers_double %}Yes{% else %}No{% endif %}</div>
+        </div>
+        <div class="seed-row">
+            <div>Hyper Beam gives all movement items:</div>
+            <div>{% if settings.quality_of_life_settings.escape_movement_items %}Yes{% else %}No{% endif %}</div>
+        </div>
+        <div class="seed-row">
+            <div>Refill energy for escape:</div>
+            <div>{% if settings.quality_of_life_settings.escape_refill %}Yes{% else %}No{% endif %}</div>
+        </div>
+        <div class="seed-row">
+            <div>Enemies cleared during escape:</div>
+            <div>{% if settings.quality_of_life_settings.escape_enemies_cleared %}Yes{% else %}No{% endif %}</div>
+        </div>
+        <hr>
+        <div class="seed-row">
+            <div>Fast elevators:</div>
+            <div>{% if settings.quality_of_life_settings.fast_elevators %}Yes{% else %}No{% endif %}</div>
+        </div>
+        <div class="seed-row">
+            <div>Fast doors:</div>
+            <div>{% if settings.quality_of_life_settings.fast_doors %}Yes{% else %}No{% endif %}</div>
+        </div>
+        <div class="seed-row">
+            <div>Fast pause menu:</div>
+            <div>{% if settings.quality_of_life_settings.fast_pause_menu %}Yes{% else %}No{% endif %}</div>
+        </div>
+        <div class="seed-row">
+            <div>Item fanfares:</div>
+            <div>{{+ fanfares }}</div>
+        </div>
+        <hr>
+        <div class="seed-row">
+            <div>Respin:</div>
+            <div>{% if settings.quality_of_life_settings.respin %}Yes{% else %}No{% endif %}</div>
+        </div>
+        <div class="seed-row">
+            <div>Lenient Space Jump:</div>
+            <div>{% if settings.quality_of_life_settings.infinite_space_jump %}Yes{% else %}No{% endif %}</div>
+        </div>
+        <div class="seed-row">
+            <div>Momentum conservation:</div>
+            <div>{% if settings.quality_of_life_settings.momentum_conservation %}Yes{% else %}No{% endif %}</div>
+        </div>
+        <hr>
+        <div class="seed-row">
+            <div>All items spawn at start of game:</div>
+            <div>{% if settings.quality_of_life_settings.all_items_spawn %}Yes{% else %}No{% endif %}</div>
+        </div>
+        <div class="seed-row">
+            <div>Acid Chozo usable without Space Jump:</div>
+            <div>{% if settings.quality_of_life_settings.acid_chozo %}Yes{% else %}No{% endif %}</div>
+        </div>
+        <div class="seed-row">
+            <div>Lava removed from Climb:</div>
+            <div>{% if settings.quality_of_life_settings.remove_climb_lava %}Yes{% else %}No{% endif %}</div>
+        </div>
+        <hr>
+        <div class="seed-row">
+            <div>E-Tank energy refill:</div>
+            <div>{{+ etank_refill }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Energy stations refill reserves:</div>
+            <div>{% if settings.quality_of_life_settings.energy_station_reserves %}Yes{% else %}No{% endif %}</div>
+        </div>
+        <div class="seed-row">
+            <div>Disableable E-Tanks:</div>
+            <div>{% if settings.quality_of_life_settings.disableable_etanks %}Yes{% else %}No{% endif %}</div>
+        </div>
+        <div class="seed-row">
+            <div>Reserve energy backward transfer:</div>
+            <div>{% if settings.quality_of_life_settings.reserve_backward_transfer %}Yes{% else %}No{% endif %}</div>
+        </div>
+        <hr>
+        <div class="seed-row">
+            <div>Enemy drops are buffed:</div>
+            <div>{% if settings.quality_of_life_settings.buffed_drops %}Yes{% else %}No{% endif %}</div>
+        </div>
+        <div class="seed-row">
+            <div>Guaranteed early save station:</div>
+            <div>{% if settings.quality_of_life_settings.early_save %}Yes{% else %}No{% endif %}</div>
+        </div>
+        <div class="seed-row">
+            <div>Flash suit persists across save/load:</div>
+            <div>{% if settings.quality_of_life_settings.persist_flash_suit %}Yes{% else %}No{% endif %}</div>
+        </div>
+        <div class="seed-row">
+            <div>Blue suit persists across save/load:</div>
+            <div>{% if settings.quality_of_life_settings.persist_blue_suit %}Yes{% else %}No{% endif %}</div>
+        </div>
+    </div>
+    <div class="box-header">Map Reveal Settings</div>
+    <div style="padding-bottom: 16px">
+        {% let imr = &settings.quality_of_life_settings.initial_map_reveal_settings %}
+        <div class="seed-row">
+            <div>Map stations:</div>
+            <div>{{ imr.map_stations }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Save stations:</div>
+            <div>{{ imr.save_stations }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Refill stations:</div>
+            <div>{{ imr.refill_stations }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Ship:</div>
+            <div>{{ imr.ship }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Objectives:</div>
+            <div>{{ imr.objectives }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Area transitions:</div>
+            <div>{{ imr.area_transitions }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Items: tier 1 (small dots):</div>
+            <div>{{ imr.items1 }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Items: tier 2 (X's):</div>
+            <div>{{ imr.items2 }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Items: tier 3 (hollow circles):</div>
+            <div>{{ imr.items3 }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Items: tier 4 (large dots):</div>
+            <div>{{ imr.items4 }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Other:</div>
+            <div>{{ imr.other }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Reveal tiles in unvisited areas:</div>
+            <div>{% if imr.all_areas %}Yes{% else %}No{% endif %}</div>
+        </div>
+    </div>
+    <div class="box-header">Objective Settings</div>
+    <div style="padding-bottom: 16px">
+        {% for obj in objective_names %}
+        <div class="seed-row">
+            <div>{{ obj }}</div>
+            <div>Yes</div>
+        </div>
+        {% endfor %}
+        <div class="seed-row">
+            <div>Number of objectives:</div>
+            <div>{{ objective_names.len() }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Pause menu objective screen:</div>
+            <div>
+                {% let obj_screen = settings.objective_settings.objective_screen %}
+                {{ format!("{:?}", obj_screen) }}
+            </div>
         </div>
     </div>
 </div>

@@ -1,11 +1,11 @@
-use std::{path::Path, sync::Arc};
+use std::{collections::HashMap, path::Path, sync::Arc};
 
 use actix_multipart::form::{self, MultipartForm, MultipartFormConfig, bytes::Bytes, text::Text};
 use actix_web::{App, HttpResponse, HttpServer, Responder, Scope, error::{ErrorBadRequest, ErrorInternalServerError, ErrorNotFound}, get, http::header::{self, ContentDisposition, DispositionParam, DispositionType}, middleware::Logger, post, web};
 use anyhow::Context;
 use askama::Template;
 use log::info;
-use maprando::{customize::{ControllerButton, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, MusicSettings, PaletteTheme, ShakingSetting, TileTheme, mosaic::MosaicTheme, parse_controller_button, samus_sprite::SamusSpriteCategory}, difficulty::{get_full_global, get_link_difficulty_length}, patch::Rom, preset::PresetData, randomize::Randomization, settings::{DoorLocksSize, RandomizerSettings}, spoiler_map};
+use maprando::{customize::{ControllerButton, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, MusicSettings, PaletteTheme, ShakingSetting, TileTheme, mosaic::MosaicTheme, parse_controller_button, samus_sprite::SamusSpriteCategory}, difficulty::{get_full_global, get_link_difficulty_length}, patch::Rom, preset::PresetData, randomize::Randomization, settings::{DoorLocksSize, ETankRefill, Fanfares, ItemMarkers, MotherBrainFight, Objective, ObjectiveSetting, RandomizerSettings, get_objective_groups}, spoiler_map};
 use maprando_game::GameData;
 use maprando_plando_backend::{seed_data::SeedData, Plando};
 use serde::{Deserialize, Serialize};
@@ -233,7 +233,13 @@ struct SeedTemplate<'a> {
     enabled_notables: Vec<(usize, usize)>,
     preset_data: &'a PresetData,
     samus_sprite_categories: Vec<SamusSpriteCategory>,
-    mosaic_themes: Vec<MosaicTheme>
+    mosaic_themes: Vec<MosaicTheme>,
+
+    item_markers: String,
+    mother_brain_fight: String,
+    fanfares: String,
+    etank_refill: String,
+    objective_names: Vec<String>
 }
 
 impl<'a> SeedTemplate<'a> {
@@ -290,6 +296,40 @@ async fn get_seed(data: web::Data<AppData>, seed_id: web::Path<String>) -> Resul
     let qol_str = r_data.settings.quality_of_life_settings.preset.as_ref().unwrap_or(&"custom".to_string()).clone();
     let obj_str = r_data.settings.objective_settings.preset.as_ref().unwrap_or(&"custom".to_string()).clone();
 
+    let item_markers = match r_data.settings.quality_of_life_settings.item_markers {
+        ItemMarkers::Simple => "Simple",
+        ItemMarkers::Uniques => "Uniques",
+        ItemMarkers::Majors => "Majors",
+        ItemMarkers::ThreeTiered => "3-Tiered",
+        ItemMarkers::FourTiered => "4-Tiered"
+    }.to_string();
+    let mother_brain_fight = match r_data.settings.quality_of_life_settings.mother_brain_fight {
+        MotherBrainFight::Vanilla => "Vanilla",
+        MotherBrainFight::Short => "Short",
+        MotherBrainFight::Skip => "Skip"
+    }.to_string();
+    let fanfares = match r_data.settings.quality_of_life_settings.fanfares {
+        Fanfares::Off => "Off",
+        Fanfares::Trimmed => "Trimmed",
+        Fanfares::Vanilla => "Vanilla"
+    }.to_string();
+    let etank_refill = match r_data.settings.quality_of_life_settings.etank_refill {
+        ETankRefill::Disabled => "Disabled",
+        ETankRefill::Full => "Full",
+        ETankRefill::Vanilla => "Vanilla"
+    }.to_string();
+    let objectives_map: HashMap<String, String> = get_objective_groups()
+        .iter()
+        .flat_map(|x| x.objectives.clone())
+        .collect();
+    let objective_names = r_data.settings.objective_settings.objective_options.iter().filter_map(
+        |obj| if obj.setting == ObjectiveSetting::Yes {
+            Some(objectives_map[&format!("{:?}", obj.objective)].clone())
+        } else {
+            None
+        }
+    ).collect();
+
     let template = SeedTemplate {
         name: r_data.name,
         description: r_data.description,
@@ -305,7 +345,12 @@ async fn get_seed(data: web::Data<AppData>, seed_id: web::Path<String>) -> Resul
         preset_data: &data.preset_data,
         logical: r_data.logical,
         samus_sprite_categories: data.samus_sprites.clone(),
-        mosaic_themes: data.mosaic_themes.clone()
+        mosaic_themes: data.mosaic_themes.clone(),
+        item_markers,
+        mother_brain_fight,
+        fanfares,
+        etank_refill,
+        objective_names
     };
     let render = template.render().map_err(
         |err| ErrorInternalServerError(format!("Error rendering template: {err}"))
