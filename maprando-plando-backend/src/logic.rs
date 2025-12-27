@@ -75,7 +75,8 @@ impl Logic {
         randomizer_settings: RandomizerSettings,
         difficulty_tiers: Vec<DifficultyConfig>,
         map: Map,
-        custom_escape_time: Option<usize>
+        custom_escape_time: Option<usize>,
+        rebuild_steps: bool
     ) -> JoinHandle<Result<()>> {
         let arc_hub = self.start_location.clone();
         let arc_r = self.randomization.clone();
@@ -113,7 +114,8 @@ impl Logic {
                 start_location,
                 &item_locations,
                 &spoiler_overrides,
-                custom_escape_time
+                custom_escape_time,
+                rebuild_steps
             ).await?;
 
             let mut lock = arc_hub.lock().unwrap();
@@ -137,7 +139,8 @@ async fn update_randomization_impl(
     start_location: StartLocation,
     item_locations: &[Item],
     spoiler_overrides: &[SpoilerOverride],
-    custom_escape_time: Option<usize>
+    custom_escape_time: Option<usize>,
+    rebuild_steps: bool
 ) -> Result<LogicData> {
     let initial_item_location_state = ItemLocationState {
         placed_item: None,
@@ -295,7 +298,8 @@ async fn update_randomization_impl(
         &mut rng,
         &mut traverser_pair,
         &start_location_data,
-        true
+        true,
+        rebuild_steps
     ).unwrap();
 
     // Apply custom escape time

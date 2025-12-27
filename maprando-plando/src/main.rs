@@ -1,6 +1,6 @@
 use crate::{benchmark::{Benchmark, BenchmarkResult}, egui_sfml::DrawInput, input_state::KeyState, layout::{Layout, SidebarPanel, WindowType, hotkey_settings::Keybind, map_editor_ui::MapEditorUi, room_search::RoomSearch, settings_customize::{Customization, SettingsCustomize, SettingsCustomizeResult}, settings_logic::LogicCustomization, upload::Upload}, texture_manager::TextureManager, update::{Asset, Release}};
 use anyhow::{anyhow, bail, Result};
-use egui::{self, style::default_text_styles, Color32, Context, FontDefinitions, Id, RichText, Sense, Ui, Vec2};
+use egui::{self, Color32, Context, CursorIcon, FontDefinitions, Id, RichText, Sense, Ui, Vec2, style::default_text_styles};
 use egui_sfml::{SfEgui, UserTexSource};
 use hashbrown::{HashMap, HashSet};
 use input_state::MouseState;
@@ -61,6 +61,7 @@ struct Settings {
     hotkeys: HashMap<usize, Vec<Key>>,
     fps_cap: u32,
     animation_speed: f32,
+    rebuild_steps: bool
 }
 
 impl Default for Settings {
@@ -82,7 +83,8 @@ impl Default for Settings {
             scroll_speed: 16.0,
             hotkeys: HashMap::new(),
             fps_cap: 60,
-            animation_speed: 1.0
+            animation_speed: 1.0,
+            rebuild_steps: false
         }
     }
 }
@@ -1149,7 +1151,7 @@ impl PlandoApp {
 
         seed_data.load_into_plando(&mut self.plando)?;
 
-        self.update_spoiler_data_async()?;
+        self.update_spoiler_data_async(self.settings.rebuild_steps)?;
 
         self.push_recent_seed(path.to_str().unwrap().to_string());
 
@@ -1183,12 +1185,12 @@ impl PlandoApp {
         Ok(())
     }
 
-    fn update_spoiler_data_async(&mut self) -> Result<()> {
+    fn update_spoiler_data_async(&mut self, rebuild_steps: bool) -> Result<()> {
         if let Some(handle) = &self.handle_spoiler {
             handle.abort();
         }
 
-        self.handle_spoiler = Some(self.plando.update_spoiler_data()?);
+        self.handle_spoiler = Some(self.plando.update_spoiler_data(rebuild_steps)?);
 
         Ok(())
     }
@@ -1262,22 +1264,6 @@ impl PlandoApp {
         }
 
         Ok(())
-    }
-
-    async fn _update_spoiler_data(&mut self) -> Result<()> {
-        let handle = self.plando.update_spoiler_data()?;
-
-        let res = match handle.await {
-            Ok(_) => Ok(()),
-            Err(err) => if err.is_cancelled() {
-                Ok(())
-            } else {
-                Err(anyhow!(err.to_string()))
-            }
-        };
-
-        self.schedule_redraw();
-        res
     }
 
     fn schedule_redraw(&mut self) {
@@ -1503,7 +1489,7 @@ impl PlandoApp {
                             Hotkeys::IncrementStep => self.spoiler_step += 1,
                             Hotkeys::DecrementStep => if self.spoiler_step > 0 { self.spoiler_step -= 1 },
                             Hotkeys::UpdateSpoiler => {
-                                if let Err(err) = self.update_spoiler_data_async() {
+                                if let Err(err) = self.update_spoiler_data_async(self.settings.rebuild_steps) {
                                     self.modal_type = ModalType::Error(err.to_string());
                                 }
                             },
@@ -1785,7 +1771,7 @@ impl PlandoApp {
                         if ui.button("Clear all Items").clicked() {
                             self.plando.clear_item_locations();
                             if self.settings.spoiler_auto_update {
-                                if let Err(err) = self.update_spoiler_data_async() {
+                                if let Err(err) = self.update_spoiler_data_async(self.settings.rebuild_steps) {
                                     self.modal_type = ModalType::Error(err.to_string());
                                 }
                             }
@@ -1793,7 +1779,7 @@ impl PlandoApp {
                         if ui.button("Clear all Doors").clicked() {
                             self.plando.clear_doors();
                             if self.settings.spoiler_auto_update {
-                                if let Err(err) = self.update_spoiler_data_async() {
+                                if let Err(err) = self.update_spoiler_data_async(self.settings.rebuild_steps) {
                                     self.modal_type = ModalType::Error(err.to_string());
                                 }
                             }
@@ -1806,7 +1792,7 @@ impl PlandoApp {
                                 }
                             }
                             if self.settings.spoiler_auto_update {
-                                if let Err(err) = self.update_spoiler_data_async() {
+                                if let Err(err) = self.update_spoiler_data_async(self.settings.rebuild_steps) {
                                     self.modal_type = ModalType::Error(err.to_string());
                                 }
                             }
@@ -1823,7 +1809,7 @@ impl PlandoApp {
                             }
 
                             if self.settings.spoiler_auto_update {
-                                if let Err(err) = self.update_spoiler_data_async() {
+                                if let Err(err) = self.update_spoiler_data_async(self.settings.rebuild_steps) {
                                     self.modal_type = ModalType::Error(err.to_string());
                                 }
                             }
@@ -1833,7 +1819,7 @@ impl PlandoApp {
                         if ui.button("Reset all Spoiler Overrides").clicked() {
                             self.plando.spoiler_overrides.clear();
                             if self.settings.spoiler_auto_update {
-                                let _ = self.update_spoiler_data_async();
+                                let _ = self.update_spoiler_data_async(self.settings.rebuild_steps);
                             }
                         }
                     });
@@ -1974,7 +1960,7 @@ impl PlandoApp {
                         self.settings.creator_name = self.logic_customization.creator_name.clone();
                         self.settings.custom_escape_time = self.plando.custom_escape_time;
                         if self.settings.spoiler_auto_update {
-                            if let Err(err) = self.update_spoiler_data_async() {
+                            if let Err(err) = self.update_spoiler_data_async(self.settings.rebuild_steps) {
                                 self.modal_type = ModalType::Error(err.to_string());
                             }
                         }
@@ -2126,7 +2112,7 @@ impl PlandoApp {
                 }
 
                 if self.settings.spoiler_auto_update {
-                    if let Err(err) = self.update_spoiler_data_async() {
+                    if let Err(err) = self.update_spoiler_data_async(self.settings.rebuild_steps) {
                         self.modal_type = ModalType::Error(err.to_string());
                     }
                 }
@@ -2350,7 +2336,7 @@ impl PlandoApp {
         drop(sprite_helm);
 
         if should_update && self.settings.spoiler_auto_update {
-            if let Err(err) = self.update_spoiler_data_async() {
+            if let Err(err) = self.update_spoiler_data_async(self.settings.rebuild_steps) {
                 self.modal_type = ModalType::Error(err.to_string());
             }
         }
@@ -2483,7 +2469,7 @@ impl PlandoApp {
                             if self.plando.placed_item_count[as_placeable as usize] < max_count {
                                 self.plando.place_item(i, item_to_place);
                                 if self.settings.spoiler_auto_update {
-                                    if let Err(err) = self.update_spoiler_data_async() {
+                                    if let Err(err) = self.update_spoiler_data_async(self.settings.rebuild_steps) {
                                         self.modal_type = ModalType::Error(err.to_string());
                                     }
                                 }
@@ -2494,7 +2480,7 @@ impl PlandoApp {
                     } else if self.mouse_state.consume_click(mouse::Button::Right) {
                         self.plando.place_item(i, Item::Nothing);
                         if self.settings.spoiler_auto_update {
-                            if let Err(err) = self.update_spoiler_data_async() {
+                            if let Err(err) = self.update_spoiler_data_async(self.settings.rebuild_steps) {
                                 self.modal_type = ModalType::Error(err.to_string());
                             }
                         }
@@ -2606,7 +2592,7 @@ impl PlandoApp {
                         res = self.plando.place_door(room_idx, door_idx, None, true);
                     }
                     if self.settings.spoiler_auto_update {
-                        if let Err(err) = self.update_spoiler_data_async() {
+                        if let Err(err) = self.update_spoiler_data_async(self.settings.rebuild_steps) {
                             self.modal_type = ModalType::Error(err.to_string());
                         }
                     }
@@ -3061,7 +3047,7 @@ impl PlandoApp {
                 if ui.button("Apply").clicked() {
                     self.override_window = None;
                     if self.settings.spoiler_auto_update {
-                        if let Err(err) = self.update_spoiler_data_async() {
+                        if let Err(err) = self.update_spoiler_data_async(self.settings.rebuild_steps) {
                             self.modal_type = ModalType::Error(err.to_string());
                         }
                     }
@@ -3257,130 +3243,138 @@ impl PlandoApp {
                         }
                     }
 
-                    let mut last_room = "";
-                    let mut last_node = "";
                     ui.label("OBTAIN ROUTE");
-                    for entry in details_obtain_route {
-                        if entry.room == last_room && entry.node == last_node && entry.strat_id.is_none() {
-                            continue;
-                        }
-                        last_room = &entry.room;
-                        last_node = &entry.node;
-                        ui.label(entry.room.clone() + ": " + &entry.node);
-                        if !entry.strat_name.is_empty() && !entry.strat_name.starts_with("Base") {
-                            ui.label("  Strat: ".to_string() + &entry.strat_name);
-                        }
-                        if !entry.relevant_flags.is_empty() {
-                            let mut str = "  Relevant flags: ".to_string();
-                            for flag in &entry.relevant_flags {
-                                str += flag;
-                            }
-                            ui.label(str);
-                        }
-
-                        if let Some(x) = entry.energy {
-                            if x >= 0 {
-                                ui.label(format!("   Energy remaining: {}", x));
-                            } else {
-                                ui.label(format!("   Energy consumed: {}", -x - 1));
-                            }
-                        }
-                        if let Some(x) = entry.reserves {
-                            if x >= 0 {
-                                ui.label(format!("   Reserves remaining: {}", x));
-                            } else {
-                                ui.label(format!("   Reserves consumed: {}", -x - 1));
-                            }
-                        }
-                        if let Some(x) = entry.missiles {
-                            if x >= 0 {
-                                ui.label(format!("   Missiles remaining: {}", x));
-                            } else {
-                                ui.label(format!("   Missiles consumed: {}", -x - 1));
-                            }
-                        }
-                        if let Some(x) = entry.supers {
-                            if x >= 0 {
-                                ui.label(format!("   Supers remaining: {}", x));
-                            } else {
-                                ui.label(format!("   Supers consumed: {}", -x - 1));
-                            }
-                        }
-                        if let Some(x) = entry.power_bombs {
-                            if x >= 0 {
-                                ui.label(format!("   Power Bombs remaining: {}", x));
-                            } else {
-                                ui.label(format!("   Power Bombs consumed: {}", -x - 1));
-                            }
-                        }
-                        if let Some(x) = entry.flash_suit {
-                            ui.label(format!("   Flash suit: {x}"));
-                        }
-                    }
+                    Self::draw_spoiler_details_route(ctx, ui, details_obtain_route, true, &mut new_spoiler_type, &self.plando.game_data);
 
                     ui.separator();
                     ui.label("RETURN ROUTE");
-                    for entry in details_return_route {
-                        if entry.room == last_room && entry.node == last_node && entry.strat_id.is_none() {
-                            continue;
-                        }
-                        last_room = &entry.room;
-                        last_node = &entry.node;
-                        ui.label(entry.room.clone() + ": " + &entry.node);
-                        if !entry.strat_name.is_empty() && !entry.strat_name.starts_with("Base") {
-                            ui.label("Strat: ".to_string() + &entry.strat_name);
-                        }
-                        if !entry.relevant_flags.is_empty() {
-                            let mut str = "Relevant flags: ".to_string();
-                            for flag in &entry.relevant_flags {
-                                str += flag;
-                            }
-                            ui.label(str);
-                        }
-                        if let Some(x) = entry.energy {
-                            if x >= 0 {
-                                ui.label(format!("   Energy remaining: {}", x));
-                            } else {
-                                ui.label(format!("   Energy consumed: {}", -x - 1));
-                            }
-                        }
-                        if let Some(x) = entry.reserves {
-                            if x >= 0 {
-                                ui.label(format!("   Reserves remaining: {}", x));
-                            } else {
-                                ui.label(format!("   Reserves consumed: {}", -x - 1));
-                            }
-                        }
-                        if let Some(x) = entry.missiles {
-                            if x >= 0 {
-                                ui.label(format!("   Missiles remaining: {}", x));
-                            } else {
-                                ui.label(format!("   Missiles consumed: {}", -x - 1));
-                            }
-                        }
-                        if let Some(x) = entry.supers {
-                            if x >= 0 {
-                                ui.label(format!("   Supers remaining: {}", x));
-                            } else {
-                                ui.label(format!("   Supers consumed: {}", -x - 1));
-                            }
-                        }
-                        if let Some(x) = entry.power_bombs {
-                            if x >= 0 {
-                                ui.label(format!("   Power Bombs remaining: {}", x));
-                            } else {
-                                ui.label(format!("   Power Bombs consumed: {}", -x - 1));
-                            }
-                        }
-                        if let Some(x) = entry.flash_suit {
-                            ui.label(format!("   Flash suit: {x}"));
-                        }
-                    }
+                    Self::draw_spoiler_details_route(ctx, ui, details_return_route, false, &mut new_spoiler_type, &self.plando.game_data);
 
                     self.spoiler_type = new_spoiler_type;
                 });
             }).unwrap().response;
         window.contains_pointer()
+    }
+
+    fn draw_spoiler_details_route(ctx: &Context, ui: &mut Ui, route: &Vec<SpoilerRouteEntry>, forward: bool, new_spoiler_type: &mut SpoilerType, game_data: &GameData) {
+        let diff_colors = ["#00ff00", "#ffff00", "#ff0000", "#ff8000", "#00ffff", "#00ffff", "#0080ff", "#0080ff", "#ff00ff", "#ff00ff", "#ff0080"];
+        let mut last_room = "";
+        let mut salt_idx = 0;
+        for (idx, entry) in route.iter().enumerate() {
+            if entry.room == last_room {
+                continue;
+            }
+            last_room = &entry.room;
+            let salt_str = format!("details_{}_{salt_idx}", if forward { "obtain" } else { "return" });
+            egui::CollapsingHeader::new(&entry.room).id_salt(salt_str).show(ui, |ui| {
+                let mut last_node = "";
+                for i in idx..route.len() {
+                    let entry = &route[i];
+                    if entry.room != last_room {
+                        break;
+                    }
+                    if entry.node == last_node && entry.strat_id.is_none() {
+                        continue;
+                    }
+                    last_node = &entry.node;
+
+                    let strat_url = entry.strat_id.map(
+                        |strat_id| format!("https://maprando.com/logic/room/{}/{}/{}/{strat_id}", entry.room_id, entry.from_node_id, entry.to_node_id)
+                    );
+
+                    let node_label = egui::Label::new(&entry.node).sense(Sense::click());
+                    let node_resp = ui.add(node_label);
+                    if node_resp.hovered() {
+                        ctx.set_cursor_icon(CursorIcon::PointingHand);
+                    }
+                    if node_resp.clicked() && let Some(strat_url) = &strat_url {
+                        let _ = open::that(strat_url);
+                    }
+
+                    if !entry.strat_name.is_empty() && !entry.strat_name.contains("Base") {
+                        ui.indent("details_indent", |ui| {
+                            let diff_color = if entry.strat_difficulty < diff_colors.len() {
+                                Color32::from_hex(diff_colors[entry.strat_difficulty]).unwrap()
+                            } else {
+                                Color32::WHITE
+                            };
+                            let strat_text = egui::RichText::new(&entry.strat_name)
+                                .color(diff_color)
+                                .underline();
+                            let strat_label = egui::Label::new(strat_text).sense(Sense::click());
+                            let strat_resp = ui.add(strat_label);
+                            if strat_resp.hovered() {
+                                ctx.set_cursor_icon(CursorIcon::PointingHand);
+                            }
+                            if strat_resp.clicked() && let Some(strat_url) = &strat_url {
+                                let _ = open::that(strat_url);
+                            }
+                        });
+                    }
+
+                    if !entry.relevant_flags.is_empty() {
+                        ui.indent("details_indent", |ui| {
+                            for flag in &entry.relevant_flags {
+                                let flag_resp = ui.label(format!("Relevant flags: {flag}"));
+                                if flag_resp.clicked() {
+                                    let flag_id = game_data.flag_isv.index_by_key[flag];
+                                    let flag_idx = game_data.flag_ids.iter().position(|x| *x == flag_id);
+                                    if let Some(flag_idx) = flag_idx {
+                                        *new_spoiler_type = SpoilerType::Flag(flag_idx);
+                                    }
+                                }
+                            }
+                        });
+                    }
+
+                    if entry.energy.is_some() || entry.reserves.is_some() || entry.missiles.is_some()
+                        || entry.supers.is_some() || entry.power_bombs.is_some() || entry.flash_suit.is_some()
+                    {
+                        ui.indent("details_indent", |ui| {
+                            if let Some(x) = entry.energy {
+                                if x >= 0 {
+                                    ui.label(format!("Energy remaining: {}", x));
+                                } else {
+                                    ui.label(format!("Energy consumed: {}", -x - 1));
+                                }
+                            }
+                            if let Some(x) = entry.reserves {
+                                if x >= 0 {
+                                    ui.label(format!("Reserves remaining: {}", x));
+                                } else {
+                                    ui.label(format!("Reserves consumed: {}", -x - 1));
+                                }
+                            }
+                            if let Some(x) = entry.missiles {
+                                if x >= 0 {
+                                    ui.label(format!("Missiles remaining: {}", x));
+                                } else {
+                                    ui.label(format!("Missiles consumed: {}", -x - 1));
+                                }
+                            }
+                            if let Some(x) = entry.supers {
+                                if x >= 0 {
+                                    ui.label(format!("Supers remaining: {}", x));
+                                } else {
+                                    ui.label(format!("Supers consumed: {}", -x - 1));
+                                }
+                            }
+                            if let Some(x) = entry.power_bombs {
+                                if x >= 0 {
+                                    ui.label(format!("Power Bombs remaining: {}", x));
+                                } else {
+                                    ui.label(format!("Power Bombs consumed: {}", -x - 1));
+                                }
+                            }
+                            if let Some(x) = entry.flash_suit {
+                                ui.label(format!("Flash suit: {x}"));
+                            }
+                        });
+                    }
+                }
+            });
+            salt_idx += 1;
+        }
     }
 
     fn draw_spoiler_summary(&mut self, ctx: &Context, mouse_y: f32, spoiler_window_bounds: FloatRect) -> FloatRect {
@@ -3496,6 +3490,13 @@ impl PlandoApp {
                 ui.checkbox(&mut self.settings.spoiler_auto_update, "Auto update Spoiler");
                 if ui.add_enabled(self.settings.spoiler_auto_update != default.spoiler_auto_update, egui::Button::new("Reset")).clicked() {
                     self.settings.spoiler_auto_update = default.spoiler_auto_update;
+                }
+                ui.end_row();
+
+                ui.label("Higher Quality Spoiler Log").on_hover_text("Rebuilds the Spoiler Log after traversal. Slows down Spoiler Log creation but improves logic route quality.");
+                ui.checkbox(&mut self.settings.rebuild_steps, "Higher Quality Spoiler Log");
+                if ui.add_enabled(self.settings.rebuild_steps != default.rebuild_steps, egui::Button::new("Reset")).clicked() {
+                    self.settings.rebuild_steps = default.rebuild_steps;
                 }
                 ui.end_row();
 

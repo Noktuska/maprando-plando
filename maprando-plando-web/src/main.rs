@@ -85,7 +85,7 @@ async fn upload_seed(data: web::Data<AppData>, MultipartForm(form): MultipartFor
     )?;
 
     info!("Updating Spoiler Log");
-    plando.update_spoiler_data().map_err(
+    plando.update_spoiler_data(true).map_err(
         |err| ErrorBadRequest(format!("Failed to update spoiler data: {err}"))
     )?.await.map_err(
         |_| ErrorInternalServerError(format!("Failed to join async handle"))

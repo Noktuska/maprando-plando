@@ -315,7 +315,7 @@ impl Plando {
             }
         }
 
-        let handle = self.update_spoiler_data()?;
+        let handle = self.update_spoiler_data(true)?;
         let randomizer_settings = self.randomizer_settings.clone();
         let arc = self.logic.get_randomization_arc();
 
@@ -708,7 +708,7 @@ impl Plando {
         settings.doors_mode = DoorsMode::Beam;
     }
 
-    pub fn update_spoiler_data(&mut self) -> Result<JoinHandle<Result<()>>> {
+    pub fn update_spoiler_data(&mut self, rebuild_steps: bool) -> Result<JoinHandle<Result<()>>> {
         if let Err(err) = self.is_map_logic_valid() {
             self.logic.reset();
             return Err(err);
@@ -741,7 +741,8 @@ impl Plando {
             self.randomizer_settings.clone(),
             self.difficulty_tiers.clone(),
             self.map().clone(),
-            self.custom_escape_time.clone()
+            self.custom_escape_time.clone(),
+            rebuild_steps
         );
         
         Ok(handle)
