@@ -5,7 +5,7 @@ use actix_web::{App, HttpResponse, HttpServer, Responder, Scope, error::{ErrorBa
 use anyhow::Context;
 use askama::Template;
 use log::info;
-use maprando::{customize::{ControllerButton, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, MusicSettings, PaletteTheme, ShakingSetting, TileTheme, mosaic::MosaicTheme, parse_controller_button, samus_sprite::SamusSpriteCategory}, difficulty::{get_full_global, get_link_difficulty_length}, patch::Rom, preset::PresetData, randomize::Randomization, settings::{DoorLocksSize, ETankRefill, Fanfares, ItemMarkers, MotherBrainFight, Objective, ObjectiveSetting, RandomizerSettings, get_objective_groups}, spoiler_map};
+use maprando::{customize::{ControllerButton, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, MusicSettings, PaletteTheme, ShakingSetting, TileTheme, mosaic::MosaicTheme, parse_controller_button, samus_sprite::SamusSpriteCategory}, difficulty::{get_full_global, get_link_difficulty_length}, patch::Rom, preset::PresetData, randomize::Randomization, settings::{DoorLocksSize, ETankRefill, Fanfares, ItemMarkers, MotherBrainFight, ObjectiveSetting, RandomizerSettings, get_objective_groups}, spoiler_map};
 use maprando_game::GameData;
 use maprando_plando_backend::{seed_data::SeedData, Plando};
 use serde::{Deserialize, Serialize};
