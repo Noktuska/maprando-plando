@@ -18,6 +18,10 @@ body {
     background-color: var(--bg-col-2);
     color: var(--text-col);
 
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    min-height: 100vh;
+
     font-family: sans-serif;
 }
 
@@ -616,4 +620,32 @@ h3 {
 .box > :last-child {
     border-bottom-left-radius: 8px;
     border-bottom-right-radius: 8px;
+}
+
+/**********/
+/* FOOTER */
+/**********/
+
+#footer {
+    background-color: var(--bg-col-1);
+    border-top: 1px solid black;
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    font-size: 0.9rem;
+    color: #CFCFCF;
+    z-index: 1040;
+}
+
+.footer-col {
+    margin: 16px;
+}
+
+.footer-row {
+    margin-top: 4px;
+    display: flex;
+}
+
+.footer-row > * {
+    margin-right: 8px;
 }
