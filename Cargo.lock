@@ -2694,6 +2694,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_json",
+ "zstd 0.13.3",
 ]
 
 [[package]]

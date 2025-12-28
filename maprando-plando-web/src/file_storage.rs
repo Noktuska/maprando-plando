@@ -35,16 +35,18 @@ impl FileStorage {
     }
 
     pub async fn get_file(&self, path: String) -> Result<Vec<u8>> {
-        let full_path = self.base_path.clone() + &path;
+        let full_path = self.base_path.clone() + &path + ".zstd";
         let path = object_store::path::Path::parse(full_path)?;
-        let file = self.object_store.get(&path).await?.bytes().await?;
-        Ok(file.to_vec())
+        let data_compressed = self.object_store.get(&path).await?.bytes().await?;
+        let data = zstd::bulk::decompress(&data_compressed, 64_000_000)?;
+        Ok(data)
     }
 
     pub async fn put_file(&self, path: String, data: Vec<u8>) -> Result<()> {
-        let full_path = self.base_path.clone() + &path;
+        let full_path = self.base_path.clone() + &path + ".zstd";
         let path = object_store::path::Path::parse(full_path)?;
-        self.object_store.put(&path, data.into()).await?;
+        let data_compressed = zstd::bulk::compress(&data, 15)?;
+        self.object_store.put(&path, data_compressed.into()).await?;
         Ok(())
     }
 
