@@ -296,7 +296,7 @@ impl SeedData {
         let item_progression = settings.get_mut("item_progression_settings").ok_or(anyhow!("Expected key: item_progression_settings"))?;
         let item_progression_obj = item_progression.as_object_mut().ok_or(anyhow!("Expected key \"item_progression_settings\" to be of type object"))?;
         item_progression_obj.retain(|k, _| {
-            *k == "ammo_collection_fraction" || *k == "starting_items"
+            *k == "ammo_collect_fraction" || *k == "starting_items"
         });
 
         // Reduce Objective Settings to an array of enabled objective strings
