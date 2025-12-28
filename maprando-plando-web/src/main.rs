@@ -292,9 +292,13 @@ async fn get_seed(data: web::Data<AppData>, seed_id: web::Path<String>) -> Resul
         |notable| if notable.enabled { Some((notable.room_id, notable.notable_id)) } else { None }
     ).collect();
 
-    let diff_str = r_data.settings.skill_assumption_settings.preset.as_ref().unwrap_or(&"custom".to_string()).clone();
-    let qol_str = r_data.settings.quality_of_life_settings.preset.as_ref().unwrap_or(&"custom".to_string()).clone();
-    let obj_str = r_data.settings.objective_settings.preset.as_ref().unwrap_or(&"custom".to_string()).clone();
+    let mut diff_str =  r_data.settings.skill_assumption_settings.preset.as_ref().unwrap_or(&"custom".to_string()).to_ascii_lowercase();
+    let qol_str = r_data.settings.quality_of_life_settings.preset.as_ref().unwrap_or(&"custom".to_string()).to_ascii_lowercase();
+    let obj_str = r_data.settings.objective_settings.preset.as_ref().unwrap_or(&"custom".to_string()).to_ascii_lowercase();
+
+    if diff_str == "implicit" {
+        diff_str = "basic".to_string();
+    }
 
     let item_markers = match r_data.settings.quality_of_life_settings.item_markers {
         ItemMarkers::Simple => "Simple",

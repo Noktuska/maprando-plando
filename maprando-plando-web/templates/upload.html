@@ -1,6 +1,6 @@
 <html>
     <head>
-        <link rel="stylesheet" href="../css/style.css">
+        <link rel="stylesheet" href="/css/style.css">
     </head>
     <body>
         {% include "header.html" %}
@@ -36,7 +36,7 @@
                     <div class="flex-h">
                         <div id="error-out" class="flex-col-1 error-string"></div>
                         <div class="flex-col-2">
-                            <button class="btn btn-confirm" type="submit">Submit</button>
+                            <button id="btn-upload-submit" class="btn btn-confirm" type="submit">Submit</button>
                         </div>
                     </div>
                 </form>
@@ -45,6 +45,14 @@
                 Trying to create a plando? Download the plando tool <a href="https://github.com/Noktuska/maprando-plando/releases">here</a>.
             </div>
         </div>
-        <script src="../js/script.js"></script>
+        <div id="modal-backdrop" class="hidden"></div>
+        <div id="upload-modal" class="modal hidden">
+            <div id="upload-modal-content" class="modal-dialog box-shadow">
+                <div>Uploading seed...</div>
+                <div class="spinner"></div>
+            </div>
+        </div>
+        <script src="/js/script.js"></script>
+        <script src="/js/upload.js"></script>
     </body>
 </html>

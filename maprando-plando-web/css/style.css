@@ -89,6 +89,10 @@ a {
     font-size: 1rem;
 }
 
+.btn:disabled {
+    background-color: #909090 !important;
+}
+
 .btn-confirm {
     background-color: #2367b0;
 }
@@ -115,6 +119,20 @@ a {
     text-align: center;
 }
 
+.spinner {
+    border: 4px solid #3F3F3F;
+    border-top: 4px solid #F3F3F3;
+    border-radius: 50%;
+    width: 1.5rem;
+    height: 1.5rem;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
 .hidden {
     display: none !important;
 }
@@ -138,6 +156,22 @@ a {
 #upload-form textarea {
     resize: none;
     height: auto;
+}
+
+#upload-modal-content {
+    background-color: var(--bg-col-2);
+    border: 1px solid black;
+    border-radius: 4px;
+    max-width: 600px;
+    margin-top: 180px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#upload-modal-content > div {
+    font-size: 1.5rem;
+    margin: 16px;
 }
 
 .input-text {
