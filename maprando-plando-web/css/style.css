@@ -359,6 +359,7 @@ h3 {
 }
 
 .modal-dialog {
+    background-color: var(--bg-col-2);
     margin-top: 100px;
     margin-left: auto;
     margin-right: auto;
