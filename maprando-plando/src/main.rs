@@ -1,4 +1,4 @@
-use crate::{benchmark::{Benchmark, BenchmarkResult}, egui_sfml::DrawInput, input_state::KeyState, layout::{Layout, SidebarPanel, WindowType, hotkey_settings::Keybind, map_editor_ui::MapEditorUi, room_search::RoomSearch, settings_customize::{Customization, SettingsCustomize, SettingsCustomizeResult}, settings_logic::LogicCustomization, upload::Upload}, texture_manager::TextureManager, update::{Asset, Release}};
+use crate::{benchmark::{Benchmark, BenchmarkResult}, egui_sfml::DrawInput, input_state::KeyState, layout::{Layout, SidebarPanel, WindowType, hotkey_settings::Keybind, map_editor_ui::MapEditorUi, room_search::RoomSearch, settings_customize::{Customization, SettingsCustomize, SettingsCustomizeResult}, settings_logic::LogicCustomization, upload::Upload}, spoiler_type::{SpoilerType, SpoilerTypeTracker}, texture_manager::TextureManager, update::{Asset, Release}};
 use anyhow::{anyhow, bail, Result};
 use egui::{self, Color32, Context, CursorIcon, FontDefinitions, Id, RichText, Sense, Ui, Vec2, style::default_text_styles};
 use egui_sfml::{SfEgui, UserTexSource};
@@ -29,6 +29,7 @@ mod input_state;
 mod update;
 mod utils;
 mod egui_sfml;
+mod spoiler_type;
 mod texture_manager;
 
 #[derive(Clone)]
@@ -719,14 +720,6 @@ fn get_flag_info(flag: &String) -> Result<(f32, f32, FlagType, &str)> {
     }
 }
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Clone)]
-enum SpoilerType {
-    None,
-    Hub,
-    Item(usize),
-    Flag(usize)
-}
-
 #[repr(usize)]
 enum TexId {
     DoorGray = Placeable::VARIANTS.len() as usize,
@@ -883,7 +876,7 @@ struct PlandoApp {
     is_mouse_public: bool,
 
     spoiler_step: usize,
-    spoiler_type: SpoilerType,
+    spoiler_type: SpoilerTypeTracker,
     modal_type: ModalType,
     override_window: Option<usize>,
 
@@ -1090,7 +1083,7 @@ impl PlandoApp {
             is_mouse_public: true,
 
             spoiler_step: 0,
-            spoiler_type: SpoilerType::None,
+            spoiler_type: SpoilerTypeTracker::new(),
             modal_type: ModalType::None,
             override_window: None,
 
@@ -1603,10 +1596,10 @@ impl PlandoApp {
             // Reset spoiler step and type if click resulted in nothing
             if self.mouse_state.button_clicked.is_some() && self.is_mouse_public {
                 sidebar_selection = None;
-                self.spoiler_type = SpoilerType::None;
+                self.spoiler_type.set(SpoilerType::None);
             }
             if sidebar_selection.is_some() {
-                self.spoiler_type = SpoilerType::None;
+                self.spoiler_type.set(SpoilerType::None);
             }
 
             sfegui.draw(gui, &mut window, Some(&mut self.texture_manager));
@@ -1885,7 +1878,7 @@ impl PlandoApp {
 
             // Draw Spoiler Details Window
             if !self.reset_after_patch {
-                if self.spoiler_type != SpoilerType::None && self.plando.get_randomization().is_some() {
+                if self.spoiler_type.get() != SpoilerType::None && self.plando.get_randomization().is_some() {
                     self.draw_spoiler_details(ctx);
                 } else if self.plando.get_randomization().is_some() {
                     *spoiler_window_bounds = self.draw_spoiler_summary(ctx, self.mouse_state.mouse_y as f32, *spoiler_window_bounds);
@@ -2090,7 +2083,7 @@ impl PlandoApp {
         // Start and stop drags
         if self.is_mouse_public && self.mouse_state.is_button_pressed(mouse::Button::Left) {
             self.map_editor.start_drag(self.plando.map(), last_hovered_room_idx, mouse_tile_x, mouse_tile_y, &self.plando.game_data);
-            self.spoiler_type = SpoilerType::None;
+            self.spoiler_type.set(SpoilerType::None);
         }
 
         if self.mouse_state.is_button_released(mouse::Button::Left) {
@@ -2328,7 +2321,7 @@ impl PlandoApp {
         if sidebar_selection.is_none() && sprite_helm.global_bounds().contains2(self.local_mouse_x, self.local_mouse_y) {
             sprite_helm.scale(1.2);
             if self.mouse_state.consume_click(mouse::Button::Left) {
-                self.spoiler_type = SpoilerType::Hub;
+                self.spoiler_type.set(SpoilerType::Hub);
             }
             self.is_mouse_public = false;
         }
@@ -2475,7 +2468,7 @@ impl PlandoApp {
                                 }
                             }
                         } else {
-                            self.spoiler_type = SpoilerType::Item(i);
+                            self.spoiler_type.set(SpoilerType::Item(i));
                         }
                     } else if self.mouse_state.consume_click(mouse::Button::Right) {
                         self.plando.place_item(i, Item::Nothing);
@@ -2528,7 +2521,7 @@ impl PlandoApp {
                 info_overlay = Some(flag_str.to_string());
 
                 if sidebar_selection.is_none() && self.mouse_state.consume_click(mouse::Button::Left) {
-                    self.spoiler_type = SpoilerType::Flag(i);
+                    self.spoiler_type.set(SpoilerType::Flag(i));
                 }
 
                 self.is_mouse_public = false;
@@ -2606,7 +2599,7 @@ impl PlandoApp {
     }
 
     fn draw_spoiler_route(&mut self, rt: &mut dyn RenderTarget, states: &RenderStates) {
-        if self.spoiler_type == SpoilerType::None {
+        if self.spoiler_type.get() == SpoilerType::None {
             return;
         }
 
@@ -2615,7 +2608,7 @@ impl PlandoApp {
             let mut return_route = None;
             let mut show_escape_route = false;
 
-            match self.spoiler_type {
+            match self.spoiler_type.get() {
                 SpoilerType::Hub => {
                     obtain_route = Some(&spoiler_log.hub_obtain_route);
                     return_route = Some(&spoiler_log.hub_return_route);
@@ -2645,7 +2638,7 @@ impl PlandoApp {
                         return_route = Some(&details.return_route);
                     } else {
                         self.modal_type = ModalType::Error("Item is nothing or not logically bireachable".to_string());
-                        self.spoiler_type = SpoilerType::None;
+                        self.spoiler_type.set(SpoilerType::None);
                     }
                 }
                 SpoilerType::Flag(spoiler_idx) => {
@@ -2675,7 +2668,7 @@ impl PlandoApp {
                         show_escape_route = flag_id == self.plando.game_data.mother_brain_defeated_flag_id;
                     } else {
                         self.modal_type = ModalType::Error("Flag not logically clearable".to_string());
-                        self.spoiler_type = SpoilerType::None;
+                        self.spoiler_type.set(SpoilerType::None);
                     }
                 }
                 _ => {
@@ -3096,7 +3089,7 @@ impl PlandoApp {
                         }
                     }
 
-                    let mut new_spoiler_type = self.spoiler_type.clone();
+                    let mut new_spoiler_type = self.spoiler_type.get();
 
                     let minor_indices = [Item::Missile as usize, Item::Super as usize, Item::PowerBomb as usize, Item::ETank as usize, Item::ReserveTank as usize];
                     // Render Minor Items
@@ -3192,7 +3185,7 @@ impl PlandoApp {
                     let details_return_route: &Vec<SpoilerRouteEntry>;
 
                     let hub_data = self.plando.get_hub_data();
-                    match self.spoiler_type {
+                    match self.spoiler_type.get() {
                         SpoilerType::Item(item) => {
                             let (room_id, node_id) = self.plando.game_data.item_locations[item];
                             let item_details = details.items.iter().find(
@@ -3235,7 +3228,7 @@ impl PlandoApp {
                     ui.label(details_area);
 
                     ui.separator();
-                    if let SpoilerType::Item(idx) = self.spoiler_type {
+                    if let SpoilerType::Item(idx) = self.spoiler_type.get() {
                         if let Some(item_override) = self.plando.spoiler_overrides.iter().find(|x| x.item_idx == idx) {
                             ui.label("OVERRIDE DESCRIPTION");
                             ui.label(&item_override.description);
@@ -3243,30 +3236,33 @@ impl PlandoApp {
                         }
                     }
 
+                    let reset = self.spoiler_type.reset();
+
                     ui.label("OBTAIN ROUTE");
-                    Self::draw_spoiler_details_route(ctx, ui, details_obtain_route, true, &mut new_spoiler_type, &self.plando.game_data);
+                    let salt_len = Self::draw_spoiler_details_route(ctx, ui, details_obtain_route, 0, reset, &mut new_spoiler_type, &self.plando.game_data);
 
                     ui.separator();
                     ui.label("RETURN ROUTE");
-                    Self::draw_spoiler_details_route(ctx, ui, details_return_route, false, &mut new_spoiler_type, &self.plando.game_data);
+                    Self::draw_spoiler_details_route(ctx, ui, details_return_route, salt_len, reset, &mut new_spoiler_type, &self.plando.game_data);
 
-                    self.spoiler_type = new_spoiler_type;
+                    self.spoiler_type.set(new_spoiler_type);
                 });
             }).unwrap().response;
         window.contains_pointer()
     }
 
-    fn draw_spoiler_details_route(ctx: &Context, ui: &mut Ui, route: &Vec<SpoilerRouteEntry>, forward: bool, new_spoiler_type: &mut SpoilerType, game_data: &GameData) {
+    fn draw_spoiler_details_route(ctx: &Context, ui: &mut Ui, route: &Vec<SpoilerRouteEntry>, start_salt: usize, reset: bool, new_spoiler_type: &mut SpoilerType, game_data: &GameData) -> usize {
         let diff_colors = ["#00ff00", "#ffff00", "#ff0000", "#ff8000", "#00ffff", "#00ffff", "#0080ff", "#0080ff", "#ff00ff", "#ff00ff", "#ff0080"];
         let mut last_room = "";
-        let mut salt_idx = 0;
+        let mut salt_idx = start_salt;
         for (idx, entry) in route.iter().enumerate() {
             if entry.room == last_room {
                 continue;
             }
             last_room = &entry.room;
-            let salt_str = format!("details_{}_{salt_idx}", if forward { "obtain" } else { "return" });
-            egui::CollapsingHeader::new(&entry.room).id_salt(salt_str).show(ui, |ui| {
+            let salt_str = format!("{}{salt_idx}", SpoilerTypeTracker::SALT_PREFIX);
+            let reset = if reset { Some(false) } else { None };
+            egui::CollapsingHeader::new(&entry.room).id_salt(salt_str).open(reset).show(ui, |ui| {
                 let mut last_node = "";
                 for i in idx..route.len() {
                     let entry = &route[i];
@@ -3375,6 +3371,7 @@ impl PlandoApp {
             });
             salt_idx += 1;
         }
+        salt_idx
     }
 
     fn draw_spoiler_summary(&mut self, ctx: &Context, mouse_y: f32, spoiler_window_bounds: FloatRect) -> FloatRect {
@@ -3410,7 +3407,7 @@ impl PlandoApp {
                                     let item_loc = self.plando.game_data.item_locations.iter().position(
                                         |x| x.0 == item_summary.location.room_id && x.1 == item_summary.location.node_id
                                     ).unwrap();
-                                    self.spoiler_type = SpoilerType::Item(item_loc);
+                                    self.spoiler_type.set(SpoilerType::Item(item_loc));
                                 }
                             }
                         });
@@ -3431,7 +3428,7 @@ impl PlandoApp {
                 let item = self.plando.game_data.item_locations.iter().position(
                     |x| x.0 == item_loc.room_id && x.1 == item_loc.node_id
                 ).unwrap();
-                self.spoiler_type = SpoilerType::Item(item);
+                self.spoiler_type.set(SpoilerType::Item(item));
             }
         }).map(|x| x.response);
         if let Some(resp) = resp_opt {
