@@ -13,7 +13,6 @@ rand = "0.8.5"
 serde_json = "1.0.91"
 serde = "1.0.152"
 serde_derive = "1.0.152"
-sfml = { version = "=0.24.0", features = ["serde"] }
 strum = "0.27.2"
 strum_macros = "0.27.2"
 tokio = { version = "1.47.1", features = ["full"] }

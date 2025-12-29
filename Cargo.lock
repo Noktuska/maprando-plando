@@ -2656,7 +2656,6 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_json",
- "sfml",
  "strum",
  "strum_macros",
  "tokio",

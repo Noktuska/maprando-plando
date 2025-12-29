@@ -1,11 +1,77 @@
-use std::{fs::File, i32, io::{Read, Write}, path::Path, sync::Arc};
+use std::{fs::File, i32, io::{Read, Write}, ops::Sub, path::Path, sync::Arc};
 
 use anyhow::Result;
 use hashbrown::{HashMap, HashSet};
 use maprando::randomize::LockedDoor;
 use maprando_game::{DoorType, GameData, Map};
 use serde_json::Value;
-use sfml::{graphics::{Color, IntRect}, system::Vector2i};
+
+#[derive(Clone, Copy)]
+pub struct Rect {
+    pub left: i32,
+    pub top: i32,
+    pub width: i32,
+    pub height: i32
+}
+
+impl Rect {
+    pub fn new(left: i32, top: i32, width: i32, height: i32) -> Self {
+        Self { left, top, width, height }
+    }
+
+    pub fn right(&self) -> i32 {
+        self.left + self.width
+    }
+
+    pub fn bottom(&self) -> i32 {
+        self.top + self.height
+    }
+
+    pub fn intersection(&self, other: &Rect) -> Option<Rect> {
+        let r1_min_x = self.left.min(self.right());
+        let r1_min_y = self.top.min(self.bottom());
+        let r2_min_x = other.left.min(other.right());
+        let r2_min_y = other.top.min(other.bottom());
+        let r1_max_x = self.left.max(self.right());
+        let r1_max_y = self.top.max(self.bottom());
+        let r2_max_x = other.left.max(other.right());
+        let r2_max_y = other.top.max(other.bottom());
+        
+        let left = r1_min_x.max(r2_min_x);
+        let top = r1_min_y.max(r2_min_y);
+        let right = r1_max_x.min(r2_max_x);
+        let bottom = r1_max_y.min(r2_max_y);
+        
+        if left < right && top < bottom {
+            Some(Rect::new(left, top, right - left, bottom - top))
+        } else {
+            None
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct Vec2 {
+    x: i32,
+    y: i32
+}
+
+impl Vec2 {
+    pub fn new(x: i32, y: i32) -> Self {
+        Self { x, y }
+    }
+}
+
+impl Sub for Vec2 {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        Self {
+            x: self.x - rhs.x,
+            y: self.y - rhs.y
+        }
+    }
+}
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub enum Area {
@@ -91,22 +157,22 @@ impl Area {
         }
     }
 
-    pub fn to_color(&self) -> Color {
+    pub fn to_color(&self) -> [u8; 3] {
         use Area::*;
         match self {
-            OuterCrateria => Color::rgb(148, 0, 222),
-            InnerCrateria => Color::rgb(222, 123, 255),
-            BlueBrinstar => Color::rgb(66, 0, 99),
-            GreenBrinstar => Color::rgb(0, 148, 0),
-            PinkBrinstar => Color::rgb(99, 206, 99),
-            RedBrinstar => Color::rgb(0, 63, 0),
-            UpperNorfair => Color::rgb(189, 0, 0),
-            LowerNorfair => Color::rgb(255, 99, 99),
-            WreckedShip => Color::rgb(132, 140, 0),
-            WestMaridia => Color::rgb(25, 99, 239),
-            YellowMaridia => Color::rgb(99, 165, 255),
-            MetroidHabitat => Color::rgb(173, 99, 0),
-            MechaTourian => Color::rgb(239, 140, 99),
+            OuterCrateria => [148, 0, 222],
+            InnerCrateria => [222, 123, 255],
+            BlueBrinstar => [66, 0, 99],
+            GreenBrinstar => [0, 148, 0],
+            PinkBrinstar => [99, 206, 99],
+            RedBrinstar => [0, 63, 0],
+            UpperNorfair => [189, 0, 0],
+            LowerNorfair => [255, 99, 99],
+            WreckedShip => [132, 140, 0],
+            WestMaridia => [25, 99, 239],
+            YellowMaridia => [99, 165, 255],
+            MetroidHabitat => [173, 99, 0],
+            MechaTourian => [239, 140, 99],
         }
     }
 
@@ -428,12 +494,12 @@ impl MapEditor {
         }
     }
 
-    pub fn get_room_bounds(&self, room_idx: usize) -> IntRect {
+    pub fn get_room_bounds(&self, room_idx: usize) -> Rect {
         let (room_x, room_y) = self.map.rooms[room_idx];
         let room_geometry = &self.game_data.room_geometry[room_idx];
         let room_width = room_geometry.map[0].len();
         let room_height = room_geometry.map.len();
-        IntRect::new(room_x as i32, room_y as i32, room_width as i32, room_height as i32)
+        Rect::new(room_x as i32, room_y as i32, room_width as i32, room_height as i32)
     }
 
     fn update_overlaps(&mut self, room_idx: usize) {
@@ -599,8 +665,8 @@ impl MapEditor {
     }
 
     fn check_area_bounds(&mut self) {
-        let mut area_min = [Vector2i::new(i32::MAX, i32::MAX); 6];
-        let mut area_max = [Vector2i::new(0, 0); 6];
+        let mut area_min = [Vec2::new(i32::MAX, i32::MAX); 6];
+        let mut area_max = [Vec2::new(0, 0); 6];
 
         for (room_idx, &(room_x, room_y)) in self.map.rooms.iter().enumerate() {
             if !self.map.room_mask[room_idx] {
@@ -688,7 +754,7 @@ impl MapEditor {
         }
 
         let (room_x, room_y) = self.map.rooms[self.game_data.toilet_room_idx];
-        let toilet_bbox = IntRect::new(room_x as i32, room_y as i32 + 2, 1, 6);
+        let toilet_bbox = Rect::new(room_x as i32, room_y as i32 + 2, 1, 6);
 
         let cross_rooms: Vec<usize> = (0..self.map.rooms.len()).filter_map(|idx| {
             if !self.map.room_mask[idx] || idx == self.game_data.toilet_room_idx {

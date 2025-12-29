@@ -32,6 +32,15 @@ mod egui_sfml;
 mod spoiler_type;
 mod texture_manager;
 
+fn to_sf_rect(rect: maprando_plando_backend::map_editor::Rect) -> IntRect {
+    IntRect {
+        left: rect.left,
+        top: rect.top,
+        width: rect.width,
+        height: rect.height
+    }
+}
+
 #[derive(Clone)]
 struct RoomData {
     room_id: usize,
@@ -1335,7 +1344,8 @@ impl PlandoApp {
                     }
 
                     let mut cell_color = if draw_subareas {
-                        self.plando.map_editor.get_area_value(data.room_idx).to_color()
+                        let col_arr = self.plando.map_editor.get_area_value(data.room_idx).to_color();
+                        Color::rgb(col_arr[0], col_arr[1], col_arr[2])
                     } else {
                         let color_value = if room_geometry.heated { 2 } else { 1 };
                         get_explored_color(color_value, self.plando.map().area[data.room_idx])
@@ -2026,7 +2036,7 @@ impl PlandoApp {
                     continue;
                 }
 
-                let room_bounds = self.plando.map_editor.get_room_bounds(room_idx);
+                let room_bounds = to_sf_rect(self.plando.map_editor.get_room_bounds(room_idx));
 
                 if !room_bounds.contains2(mouse_tile_x as i32, mouse_tile_y as i32) {
                     continue;
@@ -2059,7 +2069,7 @@ impl PlandoApp {
             }
         } else if let Some(room_idx) = last_hovered_room_idx {
             if self.map_editor.dragged_room_idx.is_empty() {
-                let bbox = self.plando.map_editor.get_room_bounds(room_idx);
+                let bbox = to_sf_rect(self.plando.map_editor.get_room_bounds(room_idx));
                 self.draw_room_outline(rt, states, vec![bbox]);
             }
         }
@@ -2072,7 +2082,7 @@ impl PlandoApp {
             };
 
             let bbox_list: Vec<_> = idx_list.iter().map(
-                |&idx| self.plando.map_editor.get_room_bounds(idx)
+                |&idx| to_sf_rect(self.plando.map_editor.get_room_bounds(idx))
             ).collect();
             self.draw_room_outline(rt, states, bbox_list);
         }
@@ -2133,7 +2143,7 @@ impl PlandoApp {
             },
             MapErrorType::EscapeNotLogical => {
                 let motherbrain_idx = self.plando.game_data.room_idx_by_id[&238];
-                vec![self.plando.map_editor.get_room_bounds(motherbrain_idx)]
+                vec![to_sf_rect(self.plando.map_editor.get_room_bounds(motherbrain_idx))]
             }
             MapErrorType::AreaNoMap(_) => vec![],
             MapErrorType::_ItemNotReachable(idx) => {
@@ -2147,7 +2157,7 @@ impl PlandoApp {
                 (0..self.plando.map().rooms.len()).filter(|&room_idx| {
                     self.plando.map().area[room_idx] == area && self.plando.map().room_mask[room_idx]
                 }).map(|room_idx| {
-                    self.plando.map_editor.get_room_bounds(room_idx)
+                    to_sf_rect(self.plando.map_editor.get_room_bounds(room_idx))
                 }).collect()
             },
             MapErrorType::AreaTransitions(_) => { // TODO: Some way to visualize this?
@@ -2157,19 +2167,19 @@ impl PlandoApp {
                 let bbox1 = self.plando.map_editor.get_room_bounds(idx1);
                 let bbox2 = self.plando.map_editor.get_room_bounds(idx2);
                 if let Some(overlap) = bbox1.intersection(&bbox2) {
-                    return vec![overlap];
+                    return vec![to_sf_rect(overlap)];
                 }
-                vec![bbox1, bbox2]
+                vec![to_sf_rect(bbox1), to_sf_rect(bbox2)]
             },
             MapErrorType::MapPerArea(room_idx) => {
-                vec![self.plando.map_editor.get_room_bounds(room_idx)]
+                vec![to_sf_rect(self.plando.map_editor.get_room_bounds(room_idx))]
             },
             MapErrorType::MapBounds(_, _, _, _) => {
                 (0..self.plando.map().rooms.len()).filter_map(|room_idx| {
                     if !self.plando.map().room_mask[room_idx] {
                         return None;
                     }
-                    let bbox = self.plando.map_editor.get_room_bounds(room_idx);
+                    let bbox = to_sf_rect(self.plando.map_editor.get_room_bounds(room_idx));
                     if bbox.left + bbox.width > MapEditor::MAP_MAX_SIZE as i32 || bbox.top + bbox.height > MapEditor::MAP_MAX_SIZE as i32 {
                         return Some(bbox);
                     }
@@ -2178,28 +2188,32 @@ impl PlandoApp {
             }
             MapErrorType::PhantoonMap => {
                 let room_idx = self.plando.game_data.room_idx_by_ptr[&511179];
-                vec![self.plando.map_editor.get_room_bounds(room_idx)]
+                vec![to_sf_rect(self.plando.map_editor.get_room_bounds(room_idx))]
             },
             MapErrorType::PhantoonSave => {
                 let room_idx = self.plando.game_data.room_idx_by_ptr[&511626];
-                vec![self.plando.map_editor.get_room_bounds(room_idx)]
+                vec![to_sf_rect(self.plando.map_editor.get_room_bounds(room_idx))]
             },
             MapErrorType::ToiletNoRoom => {
                 let room_idx = self.plando.game_data.toilet_room_idx;
-                vec![self.plando.map_editor.get_room_bounds(room_idx)]
+                vec![to_sf_rect(self.plando.map_editor.get_room_bounds(room_idx))]
             },
             MapErrorType::ToiletMultipleRooms(room_idx1, room_idx2) => {
                 let room_idx = self.plando.game_data.toilet_room_idx;
-                vec![self.plando.map_editor.get_room_bounds(room_idx),
-                self.plando.map_editor.get_room_bounds(room_idx1),
-                self.plando.map_editor.get_room_bounds(room_idx2)]
+                vec![
+                    to_sf_rect(self.plando.map_editor.get_room_bounds(room_idx)),
+                    to_sf_rect(self.plando.map_editor.get_room_bounds(room_idx1)),
+                    to_sf_rect(self.plando.map_editor.get_room_bounds(room_idx2))
+                ]
             },
             MapErrorType::ToiletArea(room_idx, _, _) => {
-                vec![self.plando.map_editor.get_room_bounds(self.plando.game_data.toilet_room_idx),
-                self.plando.map_editor.get_room_bounds(room_idx)]
+                vec![
+                    to_sf_rect(self.plando.map_editor.get_room_bounds(self.plando.game_data.toilet_room_idx)),
+                    to_sf_rect(self.plando.map_editor.get_room_bounds(room_idx))
+                ]
             },
             MapErrorType::ToiletNoPatch(_, _, _, _) => {
-                vec![self.plando.map_editor.get_room_bounds(self.plando.game_data.toilet_room_idx)]
+                vec![to_sf_rect(self.plando.map_editor.get_room_bounds(self.plando.game_data.toilet_room_idx))]
             },
         }
     }
@@ -2845,7 +2859,7 @@ impl PlandoApp {
             let areas = ["Crateria", "Brinstar", "Norfair", "Wrecked Ship", "Maridia", "Tourian"];
             for (idx, &area_str) in areas.iter().enumerate() {
                 let col = map_editor::Area::from_tuple((idx, 0, 0)).to_color();
-                let col32 = Color32::from_rgb(col.r, col.g, col.b);
+                let col32 = Color32::from_rgb(col[0], col[1], col[2]);
                 let stroke_col = if should_inv(col32) { &inv_color } else { &text_color };
 
                 let btn = egui::Button::new(RichText::new(area_str).color(stroke_col.clone())).fill(col32).min_size(Vec2 { x: 256.0, y: 1.0 });
@@ -2864,7 +2878,7 @@ impl PlandoApp {
 
             for area_value in map_editor::Area::VALUES {
                 let col = area_value.to_color();
-                let col32 = Color32::from_rgb(col.r, col.g, col.b);
+                let col32 = Color32::from_rgb(col[0], col[1], col[2]);
                 let stroke_col = if should_inv(col32) { &inv_color } else { &text_color };
 
                 let btn = egui::Button::new(RichText::new(area_value.to_string()).color(stroke_col.clone())).fill(col32).min_size(Vec2 { x: 256.0, y: 1.0 });
