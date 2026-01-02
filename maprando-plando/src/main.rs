@@ -1758,7 +1758,7 @@ impl PlandoApp {
                                 .pick_file();
                             if let Some(file) = file_opt {
                                 match self.plando.load_map_from_file(&file) {
-                                    Ok(_) => {},
+                                    Ok(_) => self.schedule_redraw(),
                                     Err(err) => self.modal_type = ModalType::Error(err.to_string())
                                 }
                             }
