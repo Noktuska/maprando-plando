@@ -68,12 +68,15 @@ impl Upload {
 }
 
 async fn upload_seed(form_data: FormData) -> Result<UploadResponse> {
+    let allow_spoiler = if form_data.allow_spoiler { "on" } else { "off" };
+    let allow_download = if form_data.allow_download { "on" } else { "off" };
+
     let path = Path::new(Upload::TMP_FILE_PATH);
     let form = reqwest::multipart::Form::new()
         .text("name", form_data.title.clone())
         .text("desc", form_data.desc.clone())
-        .text("allow_spoiler", form_data.allow_spoiler.to_string())
-        .text("allow_download", form_data.allow_download.to_string())
+        .text("allow_spoiler", allow_spoiler)
+        .text("allow_download", allow_download)
         .file("file", path).await?;
     let client = reqwest::Client::new();
     let resp = client.post(format!("{}/upload-seed", Upload::PLANDO_WEB_URL))
