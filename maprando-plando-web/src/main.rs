@@ -57,7 +57,7 @@ async fn upload_seed(data: web::Data<AppData>, MultipartForm(form): MultipartFor
         return Err(ErrorBadRequest("Plando name too long. Maximum of 32 characters."));
     }
     if form.desc.len() > 600 {
-        return Err(ErrorBadRequest("Description too long. Maximum of 300 characters."));
+        return Err(ErrorBadRequest("Description too long. Maximum of 600 characters."));
     }
 
     info!("Received seed: {} ({} bytes)", form.name.0, form.file.data.len());
@@ -334,8 +334,14 @@ async fn get_seed(data: web::Data<AppData>, seed_id: web::Path<String>) -> Resul
         }
     ).collect();
 
+    let seed_name = if r_data.name.is_empty() {
+        &seed_id
+    } else {
+        &r_data.name
+    };
+
     let template = SeedTemplate {
-        name: r_data.name,
+        name: seed_name.clone(),
         description: r_data.description,
         creator: r_data.creator,
         diff_str,
