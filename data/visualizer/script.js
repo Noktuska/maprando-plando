@@ -903,7 +903,7 @@ fetch(`../spoiler.json`).then(c => c.json()).then(c => {
 			}
 
 			if (k.strat_id !== null) {
-				nodeStr = `<a class="room-link" href="${strat_url}">${k.node}</a><br>`;
+				nodeStr = `<a class="room-link" href="https://maprando.com${strat_url}">${k.node}</a><br>`;
 			} else {
 				nodeStr = `${k.node}<br>`;
 			}
@@ -926,13 +926,13 @@ fetch(`../spoiler.json`).then(c => c.json()).then(c => {
 						title += `${i} `;
 					}
 					if (k.strat_id !== null) {
-						out += `<a style="color:${color}" href=${strat_url}><abbr title="${title}">${k.strat_name}</abbr></a><br>`;
+						out += `<a style="color:${color}" href=https://maprando.com${strat_url}><abbr title="${title}">${k.strat_name}</abbr></a><br>`;
 					} else {
 						out += `<abbr title="${title}">${k.strat_name}</abbr><br>`;
 					}
 				} else {
 					if (k.strat_id !== null) {
-						out += `<a style="color:${color}" href=${strat_url}>${k.strat_name}</a><br>`;
+						out += `<a style="color:${color}" href=https://maprando.com${strat_url}>${k.strat_name}</a><br>`;
 					} else {
 						out += `${k.strat_name}<br>`;
 					}
@@ -1588,7 +1588,7 @@ fetch(`../spoiler.json`).then(c => c.json()).then(c => {
 	}
 	function dblclick() {
 		if (!el.classList.contains("hidden")) {
-			window.open("/logic/room/" + el.dataset.roomId);
+			window.open("https://maprando.com/logic/room/" + el.dataset.roomId);
 		}
 	}
 	function up(ev) {
