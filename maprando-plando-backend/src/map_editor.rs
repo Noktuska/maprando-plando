@@ -1,4 +1,4 @@
-use std::{fs::File, i32, io::{Read, Write}, ops::Sub, path::Path, sync::Arc};
+use std::{collections::VecDeque, fs::File, i32, io::{Read, Write}, ops::Sub, path::Path, sync::Arc};
 
 use anyhow::Result;
 use hashbrown::{HashMap, HashSet};
@@ -202,6 +202,7 @@ pub enum MapErrorType {
     DoorDisconnected(usize, usize), // (room_idx, door_idx) of door which is not connected
     EscapeNotLogical,
     AreaNoMap(usize), // area idx which has no map
+    AreaSplit(Area),
     _ItemNotReachable(usize), // item idx which is not reachable
 
     // Errors
@@ -226,6 +227,9 @@ impl MapErrorType {
             MapErrorType::AreaNoMap(idx) => {
                 let area = Area::from_tuple((*idx, 0, 0));
                 format!("{} has no map. Consider placing a map into the area. No issues will arise if an area has no map", area.to_string_major())
+            }
+            MapErrorType::AreaSplit(area) => {
+                format!("{} is split into two or more unconnected Areas or Subareas. Subareas affect room load times when transitioning between them, make sure this is intended.", area.to_string_major())
             }
             MapErrorType::_ItemNotReachable(idx) => {
                 let (room_id, node_id) = game_data.item_locations[*idx];
@@ -273,6 +277,7 @@ impl MapErrorType {
             MapErrorType::DoorDisconnected(_, _) => false,
             MapErrorType::EscapeNotLogical => false,
             MapErrorType::AreaNoMap(_) => false,
+            MapErrorType::AreaSplit(_) => false,
             MapErrorType::_ItemNotReachable(_) => false,
             _ => true
         }
@@ -417,6 +422,7 @@ impl MapEditor {
         });
         self.check_door_connections(locked_doors);
         self.check_area_bounds();
+        self.check_area_connectivity();
         self.check_map_bounds();
         self.check_area_transitions();
         self.check_toilet();
@@ -692,6 +698,62 @@ impl MapEditor {
             if area_size.x > Self::AREA_MAX_WIDTH as i32 || area_size.y > Self::AREA_MAX_HEIGHT as i32 {
                 self.error_list.push(MapErrorType::AreaBounds(idx, area_size.x as usize, area_size.y as usize));
             }
+        }
+    }
+
+    fn check_area_connectivity(&mut self) {
+        // Algorithm to check for split areas/subareas
+        // The Algorithm works as follows:
+        // Iterate through all possible Area/Subarea tuples and pick a random room in that Area
+        // BFS searching through all connected rooms with the same Area and mark them as visited
+        // At the end, any unvisited room has to be in a split area, because if it wasn't, then it would connect to the random room we picked for that area.
+        // In that case, BFS would've also reached this room and marked it as visited.
+        // Runtime O(<num_rooms> + <num_doors>)
+
+        let mut room_queue = VecDeque::new();
+        let mut rooms_visited = HashSet::new();
+        for area in Area::VALUES {
+            let area_tuple = area.to_tuple();
+            let room_idx = match (0..self.map.rooms.len()).find(|idx| {
+                self.map.room_mask[*idx] && self.map.area[*idx] == area_tuple.0 && self.map.subarea[*idx] == area_tuple.1 && self.map.subsubarea[*idx] == area_tuple.2
+            }) {
+                Some(idx) => idx,
+                None => continue
+            };
+            room_queue.push_back(room_idx);
+            while let Some(room_idx) = room_queue.pop_back() {
+                rooms_visited.insert(room_idx);
+                let room_geometry = &self.game_data.room_geometry[room_idx];
+                for (door_idx, door) in room_geometry.doors.iter().enumerate() {
+                    let door_conn_idx = match self.get_door_conn_idx(room_idx, door_idx) {
+                        Some(idx) => idx,
+                        None => continue
+                    };
+                    let door_conn = self.map.doors[door_conn_idx];
+                    let door_ptr_pair = (door.exit_ptr, door.entrance_ptr);
+                    let other_ptr_pair = if door_conn.0 == door_ptr_pair { door_conn.1 } else { door_conn.0 };
+                    let other_room_idx = self.game_data.room_and_door_idxs_by_door_ptr_pair[&other_ptr_pair].0;
+                    let other_area = Area::from_tuple((self.map.area[other_room_idx], self.map.subarea[other_room_idx], self.map.subsubarea[other_room_idx]));
+                    if rooms_visited.contains(&other_room_idx) || area != other_area {
+                        continue;
+                    }
+                    room_queue.push_back(other_room_idx);
+                }
+            }
+        }
+
+        let mut area_set = HashSet::new();
+        for room_idx in 0..self.map.rooms.len() {
+            if !self.map.room_mask[room_idx] || rooms_visited.contains(&room_idx) {
+                continue;
+            }
+            let area_tuple = (self.map.area[room_idx], self.map.subarea[room_idx], self.map.subsubarea[room_idx]);
+            let area = Area::from_tuple(area_tuple);
+            if area_set.contains(&area_tuple) {
+                continue;
+            }
+            area_set.insert(area_tuple);
+            self.error_list.push(MapErrorType::AreaSplit(area));
         }
     }
 

@@ -2146,6 +2146,7 @@ impl PlandoApp {
                 vec![to_sf_rect(self.plando.map_editor.get_room_bounds(motherbrain_idx))]
             }
             MapErrorType::AreaNoMap(_) => vec![],
+            MapErrorType::AreaSplit(_) => vec![],
             MapErrorType::_ItemNotReachable(idx) => {
                 let (room_id, node_id) = self.plando.game_data.item_locations[idx];
                 let room_idx = self.plando.room_id_to_idx(room_id);
