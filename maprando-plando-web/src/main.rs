@@ -568,6 +568,9 @@ async fn patch_seed(data: web::Data<AppData>, seed_id: web::Path<String>, Multip
         },
     };
 
+    let mut mosaic_themes = data.mosaic_themes.clone();
+    mosaic_themes.retain(|theme| theme.name != "Outline" && theme.name != "Invisible");
+
     let cur_dir = std::env::current_dir()?;
     let data_dir = std::path::Path::new("./data/maprando-data");
     std::env::set_current_dir(data_dir)?;
