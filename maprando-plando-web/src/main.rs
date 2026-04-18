@@ -86,6 +86,11 @@ async fn upload_seed(data: web::Data<AppData>, MultipartForm(form): MultipartFor
         |err| ErrorBadRequest(format!("Failed to pass parsed plando file into plando instance: {err}"))
     )?;
 
+    info!("Preparing map");
+    plando.prepare_map().map_err(
+        |err| ErrorBadRequest(format!("Invalid map: {err}"))
+    )?;
+
     info!("Updating Spoiler Log");
     plando.update_spoiler_data(true).map_err(
         |err| ErrorBadRequest(format!("Failed to update spoiler data: {err}"))

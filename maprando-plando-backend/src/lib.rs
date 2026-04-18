@@ -296,12 +296,11 @@ impl Plando {
         Ok(())
     }
 
-    pub fn patch_rom(&mut self, rom_vanilla: &Rom, settings: CustomizeSettings, samus_sprite_categories: Vec<SamusSpriteCategory>, mosaic_themes: Vec<MosaicTheme>) -> Result<JoinHandle<Result<Rom>>> {
-        if self.map_editor.error_list.iter().filter(|err| err.is_severe()).count() > 0 {
+    pub fn prepare_map(&mut self) -> Result<()> {
+        if self.map_editor.error_list.iter().any(|err| err.is_severe()) {
             bail!("Map has errors that need to be fixed");
         }
 
-        // Place any remaining wall doors
         for door in self.map_editor.error_list.clone() {
             if let MapErrorType::DoorDisconnected(room_idx, door_idx) = door {
                 if let Err(e) = self.place_door(room_idx, door_idx, Some(DoorType::Wall), false) {
@@ -314,6 +313,12 @@ impl Plando {
                 }
             }
         }
+
+        Ok(())
+    }
+
+    pub fn patch_rom(&mut self, rom_vanilla: &Rom, settings: CustomizeSettings, samus_sprite_categories: Vec<SamusSpriteCategory>, mosaic_themes: Vec<MosaicTheme>) -> Result<JoinHandle<Result<Rom>>> {
+        self.prepare_map()?;
 
         let handle = self.update_spoiler_data(true)?;
         let randomizer_settings = self.randomizer_settings.clone();
