@@ -558,7 +558,7 @@ fetch(`../spoiler.json`).then(c => c.json()).then(c => {
 			
 			let non_unique_item_list = document.createElement("div");
 			non_unique_item_list.className = "item-list";
-			let s = [ss.max_missiles, ss.max_supers, ss.max_power_bombs, Math.floor(ss.max_energy / 100), ss.max_reserves / 100];
+			let s = [ss.max_missiles, ss.max_supers, ss.max_power_bombs, Math.floor(ss.max_energy / 100), Math.round(ss.max_reserves / 100)];
 			let co = [ss.collectible_missiles, ss.collectible_supers, ss.collectible_power_bombs, null, null];
 			let ic = [1, 2, 3, 0, 20];
 			for (let i in s) {
@@ -749,6 +749,9 @@ fetch(`../spoiler.json`).then(c => c.json()).then(c => {
 		}
 		if (k.flash_suit !== undefined) {
 			out += `Flash suit: ${k.flash_suit}<br>`;
+		}
+		if (k.blue_suit !== undefined) {
+			out += `Blue suit: ${k.blue_suit}<br>`;
 		}
 		return out;
 	}
@@ -1123,7 +1126,7 @@ fetch(`../spoiler.json`).then(c => c.json()).then(c => {
 		
 		let item_list = document.createElement("div");
 		item_list.className = "item-list";
-		let s = [ss.max_missiles, ss.max_supers, ss.max_power_bombs, Math.floor(ss.max_energy / 100), ss.max_reserves / 100];
+		let s = [ss.max_missiles, ss.max_supers, ss.max_power_bombs, Math.floor(ss.max_energy / 100), Math.round(ss.max_reserves / 100)];
 		let ic = [1, 2, 3, 0, 20];
 		for (let i in s) {
 			if (s[i] > 0) {
