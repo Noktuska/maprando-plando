@@ -1896,6 +1896,11 @@ impl PlandoApp {
 
             // Draw Spoiler Details Window
             if !self.reset_after_patch {
+                if let SpoilerType::Item(item) = self.spoiler_type.get() {
+                    if self.plando.item_locations[item] == Item::Nothing {
+                        self.spoiler_type.set(SpoilerType::None);
+                    }
+                }
                 if self.spoiler_type.get() != SpoilerType::None && self.plando.get_randomization().is_some() {
                     self.draw_spoiler_details(ctx);
                 } else if self.plando.get_randomization().is_some() {
