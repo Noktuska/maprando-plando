@@ -111,6 +111,10 @@
             <div>{{+ diff.flash_suit_distance }}</div>
         </div>
         <div class="seed-row">
+            <div>Blue suit carrying distance:</div>
+            <div>{{+ diff.blue_suit_distance }}</div>
+        </div>
+        <div class="seed-row">
             <div>Spike X-mode setup leniency:</div>
             <div>{{+ diff.spike_xmode_leniency }}</div>
         </div>
@@ -122,9 +126,19 @@
             <div>Elevator Crystal Flash leniency:</div>
             <div>{{+ diff.elevator_cf_leniency }}</div>
         </div>
+        <div class="seed-row">
+            <div>Crystal Spark leniency:</div>
+            <div>{{+ diff.crystal_spark_leniency }}</div>
+        </div>
     </div>
     <div class="box-header">Quality of Life</div>
     <div style="padding-bottom: 16px">
+        <div class="seed-row">
+            <div>Enhanced map:</div>
+            <div>{{+ 
+                settings.quality_of_life_settings.enhanced_map_settings.preset.as_ref().unwrap_or(&"Custom".to_string()) 
+            }}</div>
+        </div>
         <div class="seed-row">
             <div>Initial map reveal:</div>
             <div>{{+ 
@@ -143,6 +157,10 @@
             <div>Opposite area connections revealed by map:</div>
             <div>{% if settings.quality_of_life_settings.opposite_area_revealed %}Yes{% else %}No{% endif %}</div>
         </div>
+        <div class="seed-row">
+            <div>Hazard markers:</div>
+            <div>{% if settings.quality_of_life_settings.hazard_markers %}Yes{% else %}No{% endif %}</div>
+        </div>
         <hr>
         <div class="seed-row">
             <div>Mother Brain fight (phases 2 and 3):</div>
@@ -151,6 +169,10 @@
         <div class="seed-row">
             <div>Supers do double damage to Mother Brain:</div>
             <div>{% if settings.quality_of_life_settings.supers_double %}Yes{% else %}No{% endif %}</div>
+        </div>
+        <div class="seed-row">
+            <div>Escape auto save:</div>
+            <div>{% if settings.quality_of_life_settings.escape_autosave %}Yes{% else %}No{% endif %}</div>
         </div>
         <div class="seed-row">
             <div>Hyper Beam gives all movement items:</div>
@@ -176,6 +198,22 @@
         <div class="seed-row">
             <div>Fast pause menu:</div>
             <div>{% if settings.quality_of_life_settings.fast_pause_menu %}Yes{% else %}No{% endif %}</div>
+        </div>
+        <div class="seed-row">
+            <div>Fast saves:</div>
+            <div>{% if settings.quality_of_life_settings.fast_saves %}Yes{% else %}No{% endif %}</div>
+        </div>
+        <div class="seed-row">
+            <div>Fast baby cutscene:</div>
+            <div>{% if settings.quality_of_life_settings.fast_baby_cutscene %}Yes{% else %}No{% endif %}</div>
+        </div>
+        <div class="seed-row">
+            <div>Fast Mother Brain cutscene:</div>
+            <div>{% if settings.quality_of_life_settings.fast_mother_brain_cutscene %}Yes{% else %}No{% endif %}</div>
+        </div>
+        <div class="seed-row">
+            <div>Fast decompression:</div>
+            <div>{% if settings.quality_of_life_settings.fast_decompression %}Yes{% else %}No{% endif %}</div>
         </div>
         <div class="seed-row">
             <div>Item fanfares:</div>
@@ -207,18 +245,30 @@
             <div>Lava removed from Climb:</div>
             <div>{% if settings.quality_of_life_settings.remove_climb_lava %}Yes{% else %}No{% endif %}</div>
         </div>
+        <div class="seed-row">
+            <div>Crash fixes:</div>
+            <div>{{+ crash_fix_preset }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Fix blue speed echoes:</div>
+            <div>{% if settings.quality_of_life_settings.fix_blue_echoes %}Yes{% else %}No{% endif %}</div>
+        </div>
         <hr>
         <div class="seed-row">
-            <div>E-Tank energy refill:</div>
-            <div>{{+ etank_refill }}</div>
+            <div>Ammo stations refill all ammo types:</div>
+            <div>{% if settings.quality_of_life_settings.ammo_refill_all %}Yes{% else %}No{% endif %}</div>
         </div>
         <div class="seed-row">
             <div>Energy stations refill reserves:</div>
             <div>{% if settings.quality_of_life_settings.energy_station_reserves %}Yes{% else %}No{% endif %}</div>
         </div>
         <div class="seed-row">
+            <div>E-Tank energy refill:</div>
+            <div>{{+ etank_refill }}</div>
+        </div>
+        <div class="seed-row">
             <div>Disableable E-Tanks:</div>
-            <div>{% if settings.quality_of_life_settings.disableable_etanks %}Yes{% else %}No{% endif %}</div>
+            <div>{{+ disableable_etanks }}</div>
         </div>
         <div class="seed-row">
             <div>Reserve energy backward transfer:</div>
@@ -227,7 +277,7 @@
         <hr>
         <div class="seed-row">
             <div>Enemy drops are buffed:</div>
-            <div>{% if settings.quality_of_life_settings.buffed_drops %}Yes{% else %}No{% endif %}</div>
+            <div>{{+ enemy_drops }}</div>
         </div>
         <div class="seed-row">
             <div>Guaranteed early save station:</div>
@@ -240,6 +290,97 @@
         <div class="seed-row">
             <div>Blue suit persists across save/load:</div>
             <div>{% if settings.quality_of_life_settings.persist_blue_suit %}Yes{% else %}No{% endif %}</div>
+        </div>
+        <div class="seed-row">
+            <div>Camera fixes:</div>
+            <div>{% if settings.quality_of_life_settings.camera_fixes %}Yes{% else %}No{% endif %}</div>
+        </div>
+    </div>
+    <div class="box-header">Door details</div>
+    <div style="padding-bottom: 16px">
+        <div class="seed-row">
+            <div>Missile doors:</div>
+            <div>{{+ settings.doors_settings.red_doors_count }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Super doors:</div>
+            <div>{{+ settings.doors_settings.green_doors_count }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Power Bomb doors:</div>
+            <div>{{+ settings.doors_settings.yellow_doors_count }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Charge doors:</div>
+            <div>{{+ settings.doors_settings.charge_doors_count }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Ice doors:</div>
+            <div>{{+ settings.doors_settings.ice_doors_count }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Wave doors:</div>
+            <div>{{+ settings.doors_settings.wave_doors_count }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Spazer doors:</div>
+            <div>{{+ settings.doors_settings.spazer_doors_count }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Plasma doors:</div>
+            <div>{{+ settings.doors_settings.plasma_doors_count }}</div>
+        </div>
+    </div>
+    <div class="box-header">Enhanced map details</div>
+    <div style="padding-bottom: 16px">
+        {% let emd = &settings.quality_of_life_settings.enhanced_map_settings %}
+        <div class="seed-row">
+            <div>Blue doors</div>
+            <div>{{ emd.blue_doors }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Gray doors</div>
+            <div>{{ emd.gray_doors }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Ammo doors</div>
+            <div>{{ emd.ammo_doors }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Beam doors</div>
+            <div>{{ emd.beam_doors }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Heat</div>
+            <div>{{ emd.heat }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Water</div>
+            <div>{{ emd.water }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Lava</div>
+            <div>{{ emd.lava }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Acid</div>
+            <div>{{ emd.acid }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Walls and passages</div>
+            <div>{{ emd.walls }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Objectives</div>
+            <div>{{ emd.objectives }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Map stations</div>
+            <div>{{ emd.map_station }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Refill stations</div>
+            <div>{{ emd.refill_station }}</div>
         </div>
     </div>
     <div class="box-header">Map Reveal Settings</div>
@@ -294,6 +435,29 @@
             <div>{% if imr.all_areas %}Yes{% else %}No{% endif %}</div>
         </div>
     </div>
+    <div class="box-header">Crash fix details</div>
+    <div style="padding: 16px">
+        <div class="seed-row">
+            <div>Unequip Spring Ball bounce:</div>
+            <div>{{+ settings.quality_of_life_settings.crash_fixes.spring_ball }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Yapping Maw shinespark:</div>
+            <div>{{+ settings.quality_of_life_settings.crash_fixes.yapping_maw }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Frame-perfect pause auto-reserve:</div>
+            <div>{{+ settings.quality_of_life_settings.crash_fixes.auto_reserve }}</div>
+        </div>
+        <div class="seed-row">
+            <div>X-Mode tile collision:</div>
+            <div>{{+ settings.quality_of_life_settings.crash_fixes.x_mode }}</div>
+        </div>
+        <div class="seed-row">
+            <div>Sprite overflow bug:</div>
+            <div>{{+ settings.quality_of_life_settings.crash_fixes.sprite_overflow }}</div>
+        </div>
+    </div>
     <div class="box-header">Objective Settings</div>
     <div style="padding-bottom: 16px">
         {% for obj in objective_names %}
@@ -314,4 +478,11 @@
             </div>
         </div>
     </div>
+    {% let game_variations = self.game_variations() %}
+    {% if game_variations.len() > 0 %}
+    <div class="box-header">Other settings</div>
+    <div style="padding-bottom: 16px">
+        {{+ game_variations.join("<br>")|safe }}
+    </div>
+    {% endif %}
 </div>

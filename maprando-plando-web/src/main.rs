@@ -5,7 +5,7 @@ use actix_web::{App, HttpResponse, HttpServer, Responder, Scope, error::{ErrorBa
 use anyhow::Context;
 use askama::Template;
 use log::info;
-use maprando::{customize::{ControllerButton, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, MusicSettings, PaletteTheme, ShakingSetting, TileTheme, mosaic::MosaicTheme, parse_controller_button, samus_sprite::SamusSpriteCategory}, difficulty::{get_full_global, get_link_difficulty_length}, patch::Rom, preset::PresetData, randomize::Randomization, settings::{DoorLocksSize, ETankRefill, Fanfares, ItemMarkers, MotherBrainFight, ObjectiveSetting, RandomizerSettings, get_objective_groups}, spoiler_map};
+use maprando::{customize::{ControllerButton, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, MapTheme, MusicSettings, PaletteTheme, ShakingSetting, StatuesHallwayAudio, StatuesHallwayTiling, TileTheme, mosaic::MosaicTheme, parse_controller_button, samus_sprite::SamusSpriteCategory}, difficulty::{get_full_global, get_link_difficulty_length}, patch::Rom, preset::PresetData, randomize::Randomization, settings::{AreaAssignmentBaseOrder, AreaAssignmentPreset, CrashFixesPreset, DisableETankSetting, DoorLocksSize, ETankRefill, EnemyDrops, Fanfares, ItemMarkers, MapStationReveal, MotherBrainFight, ObjectiveSetting, RandomizerSettings, SpeedBooster, WallJump, get_objective_groups}, spoiler_map};
 use maprando_game::GameData;
 use maprando_plando_backend::{seed_data::SeedData, Plando};
 use serde::{Deserialize, Serialize};
@@ -244,6 +244,9 @@ struct SeedTemplate<'a> {
     mother_brain_fight: String,
     fanfares: String,
     etank_refill: String,
+    disableable_etanks: String,
+    enemy_drops: String,
+    crash_fix_preset: String,
     objective_names: Vec<String>
 }
 
@@ -266,6 +269,52 @@ impl<'a> SeedTemplate<'a> {
         let ratio = enabled as f32 / total as f32;
         let percent = (ratio * 100.0).floor() as usize;
         percent
+    }
+
+    fn game_variations(&self) -> Vec<&str> {
+        let mut game_variations = vec![];
+        let other_settings = &self.settings.other_settings;
+        if other_settings.area_assignment.preset != Some(AreaAssignmentPreset::Standard) {
+            match other_settings.area_assignment.base_order {
+                AreaAssignmentBaseOrder::Size => game_variations.push("Size-based area assignment"),
+                AreaAssignmentBaseOrder::Depth => game_variations.push("Depth-based area assignment"),
+                AreaAssignmentBaseOrder::Random => game_variations.push("Random area assignment"),
+            }
+            if other_settings.area_assignment.ship_in_crateria {
+                game_variations.push("Ship in Crateria");
+            }
+            if other_settings.area_assignment.mother_brain_in_tourian {
+                game_variations.push("Mother Brain in Tourian");
+            }
+        }
+        if other_settings.door_locks_size == DoorLocksSize::Small {
+            game_variations.push("Door locks drawn smaller on map");
+        }
+        if other_settings.wall_jump == WallJump::Collectible {
+            game_variations.push("Collectible wall jump");
+        }
+        if other_settings.map_station_reveal == MapStationReveal::Partial {
+            game_variations.push("Map stations give partial reveal");
+        }
+        if other_settings.energy_free_shinesparks {
+            game_variations.push("Energy-free shinesparks");
+        }
+        if other_settings.speed_booster == SpeedBooster::Split {
+            game_variations.push("Split Speed Booster");
+        }
+        if other_settings.disable_spikesuit {
+            game_variations.push("Spikesuit disabled");
+        }
+        if other_settings.disable_bluesuit {
+            game_variations.push("Blue suit disabled");
+        }
+        if other_settings.enable_major_glitches {
+            game_variations.push("Major glitches enabled");
+        }
+        if other_settings.all_enemies_respawn {
+            game_variations.push("All enemies respawn");
+        }
+        game_variations
     }
 }
 
@@ -327,6 +376,25 @@ async fn get_seed(data: web::Data<AppData>, seed_id: web::Path<String>) -> Resul
         ETankRefill::Full => "Full",
         ETankRefill::Vanilla => "Vanilla"
     }.to_string();
+    let disableable_etanks = match r_data.settings.quality_of_life_settings.disableable_etanks {
+        DisableETankSetting::Off => "Off",
+        DisableETankSetting::Standard => "Standard",
+        DisableETankSetting::Unrestricted => "Unrestricted"
+    }.to_string();
+    let enemy_drops = match r_data.settings.quality_of_life_settings.enemy_drops {
+        EnemyDrops::Off => "Off",
+        EnemyDrops::Vanilla => "Vanilla",
+        EnemyDrops::Buffed => "Buffed"
+    }.to_string();
+    let crash_fix_preset = match r_data.settings.quality_of_life_settings.crash_fixes.preset {
+        None => "Custom",
+        Some(preset) => match preset {
+            CrashFixesPreset::Death => "Death",
+            CrashFixesPreset::Silent => "Silent",
+            CrashFixesPreset::Warn => "Warn",
+            CrashFixesPreset::Crash => "Crash"
+        }
+    }.to_string();
     let objectives_map: HashMap<String, String> = get_objective_groups()
         .iter()
         .flat_map(|x| x.objectives.clone())
@@ -365,6 +433,9 @@ async fn get_seed(data: web::Data<AppData>, seed_id: web::Path<String>) -> Resul
         mother_brain_fight,
         fanfares,
         etank_refill,
+        disableable_etanks,
+        enemy_drops,
+        crash_fix_preset,
         objective_names
     };
     let render = template.render().map_err(
@@ -379,8 +450,14 @@ struct FormCustomize {
     rom: Bytes,
     samus_sprite: Text<String>,
     etank_color: Text<String>,
+    map_theme: Text<bool>,
     item_dot_change: Text<String>,
     transition_letters: Text<bool>,
+    boss_icons: Text<bool>,
+    miniboss_icons: Text<bool>,
+    save_icons: Text<bool>,
+    statues_hallway_tiling: Text<String>,
+    statues_hallway_audio: Text<String>,
     reserve_hud_style: Text<bool>,
     room_palettes: Text<String>,
     tile_theme: Text<String>,
@@ -498,25 +575,36 @@ async fn patch_seed(data: web::Data<AppData>, seed_id: web::Path<String>, Multip
     let rom_vanilla = Rom::new(rom_bytes);
 
     let customize_settings = CustomizeSettings {
-        samus_sprite: if r_data.settings.other_settings.ultra_low_qol
-            && form.samus_sprite.0 == "samus_vanilla"
-            && form.vanilla_screw_attack_animation.0
-        {
-            None
-        } else {
-            Some(form.samus_sprite.0.clone())
-        },
+        samus_sprite: Some(form.samus_sprite.0.clone()),
         etank_color: Some((
             u8::from_str_radix(&form.etank_color.0[0..2], 16).unwrap() / 8,
             u8::from_str_radix(&form.etank_color.0[2..4], 16).unwrap() / 8,
             u8::from_str_radix(&form.etank_color.0[4..6], 16).unwrap() / 8,
         )),
+        map_theme: if form.map_theme.0 {
+            MapTheme::Dark
+        } else {
+            MapTheme::Light
+        },
         item_dot_change: match form.item_dot_change.0.as_str() {
             "Fade" => maprando::customize::ItemDotChange::Fade,
             "Disappear" => maprando::customize::ItemDotChange::Disappear,
             _ => panic!("Unexpected item_dot_change"),
         },
         transition_letters: form.transition_letters.0,
+        boss_icons: form.boss_icons.0,
+        miniboss_icons: form.miniboss_icons.0,
+        save_icons: form.save_icons.0,
+        statues_hallway_tiling: match form.statues_hallway_tiling.0.as_str() {
+            "Disabled" => StatuesHallwayTiling::Disabled,
+            "Enabled" => StatuesHallwayTiling::Enabled,
+            _ => StatuesHallwayTiling::Default
+        },
+        statues_hallway_audio: match form.statues_hallway_audio.0.as_str() {
+            "Disabled" => StatuesHallwayAudio::Disabled,
+            "Louder" => StatuesHallwayAudio::Louder,
+            _ => StatuesHallwayAudio::Enabled
+        },
         reserve_hud_style: form.reserve_hud_style.0,
         vanilla_screw_attack_animation: form.vanilla_screw_attack_animation.0,
         room_names: form.room_names.0,
