@@ -1,10 +1,10 @@
-use crate::{benchmark::{Benchmark, BenchmarkResult}, egui_sfml::DrawInput, input_state::KeyState, layout::{Layout, SidebarPanel, WindowType, hotkey_settings::Keybind, map_editor_ui::MapEditorUi, room_search::RoomSearch, settings_customize::{Customization, SettingsCustomize, SettingsCustomizeResult}, settings_logic::LogicCustomization, upload::Upload}, spoiler_type::{SpoilerType, SpoilerTypeTracker}, texture_manager::TextureManager, update::{Asset, Release}};
+use crate::{benchmark::{Benchmark, BenchmarkResult}, egui_sfml::DrawInput, input_state::KeyState, layout::{Layout, SidebarPanel, WindowType, hotkey_settings::Keybind, map_editor_ui::MapEditorUi, room_search::RoomSearch, settings_customize::{SettingsCustomize, SettingsCustomizeResult}, settings_logic::LogicCustomization, upload::Upload}, spoiler_type::{SpoilerType, SpoilerTypeTracker}, texture_manager::TextureManager, update::{Asset, Release}};
 use anyhow::{anyhow, bail, Result};
 use egui::{self, Color32, Context, CursorIcon, FontDefinitions, Id, RichText, Sense, Ui, Vec2, style::default_text_styles};
 use egui_sfml::{SfEgui, UserTexSource};
 use hashbrown::{HashMap, HashSet};
 use input_state::MouseState;
-use maprando::{difficulty::{get_full_global, get_link_difficulty_length}, map_repository::MapRepository, patch::Rom, preset::PresetData, settings::{Objective, RandomizerSettings, try_upgrade_settings}, spoiler_log::SpoilerRouteEntry};
+use maprando::{customize::CustomizeSettings, difficulty::{get_full_global, get_link_difficulty_length}, map_repository::MapRepository, patch::Rom, preset::PresetData, settings::{Objective, RandomizerSettings, try_upgrade_settings}, spoiler_log::SpoilerRouteEntry};
 use maprando_game::{BeamType, DoorType, GameData, Item, Map, MapTileEdge, MapTileInterior, MapTileSpecialType};
 use maprando_plando_backend::{get_double_item_offset, map_editor::{self, MapEditor, MapErrorType}, randomize::get_vertex_info, seed_data::SeedData, DoubleItemPlacement, Placeable, Plando, SpoilerOverride, ITEM_VALUES};
 use rand::{rngs::StdRng, RngCore, SeedableRng};
@@ -58,7 +58,7 @@ struct Settings {
     mouse_click_delay_tolerance: i32,
     rom_path: String,
     spoiler_auto_update: bool,
-    last_customization: Customization,
+    last_customization: CustomizeSettings,
     last_logic_preset: Option<RandomizerSettings>,
     creator_name: String,
     custom_escape_time: Option<usize>,
@@ -81,7 +81,7 @@ impl Default for Settings {
             mouse_click_delay_tolerance: 60,
             rom_path: String::new(),
             spoiler_auto_update: true,
-            last_customization: Customization::default(),
+            last_customization: CustomizeSettings::default(),
             last_logic_preset: None,
             creator_name: "Plando".to_string(),
             custom_escape_time: None,
@@ -327,7 +327,7 @@ fn get_explored_color(value: u8, area: usize) -> graphics::Color {
 fn load_textures(game_data: &GameData, texture_manager: &mut TextureManager) -> Result<()> {
     let img_items = graphics::Image::from_file("../visualizer/items.png")?;
     let tex_items = graphics::Texture::from_image(&img_items, IntRect::default())?;
-    let tex_item_width = (tex_items.size().x / 24) as i32;
+    let tex_item_width = tex_items.size().x as i32 / ITEM_VALUES.len() as i32;
 
     let img_doors = generate_door_sprites()?;
     let img_door_width = (img_doors.size().x / 10) as i32;
@@ -337,30 +337,36 @@ fn load_textures(game_data: &GameData, texture_manager: &mut TextureManager) -> 
     let tex_minibosses = graphics::Texture::from_file("../visualizer/minibosses.png")?;
     let tex_misc = graphics::Texture::from_file("../visualizer/misc.png")?;
 
-    texture_manager.add_texture(Placeable::Helm as usize, tex_helm)?;
-    texture_manager.add_texture(TexId::FlagTypeBosses as usize, tex_bosses)?;
-    texture_manager.add_texture(TexId::FlagTypeMinibosses as usize, tex_minibosses)?;
-    texture_manager.add_texture(TexId::FlagTypeMisc as usize, tex_misc)?;
+    texture_manager.add_texture(Placeable::Helm, tex_helm)?;
+    texture_manager.add_texture(TexId::FlagTypeBosses, tex_bosses)?;
+    texture_manager.add_texture(TexId::FlagTypeMinibosses, tex_minibosses)?;
+    texture_manager.add_texture(TexId::FlagTypeMisc, tex_misc)?;
 
     // Add item textures to egui
-    for i in 0..22 {
-        let source_rect = IntRect::new(i * tex_item_width, 0, tex_item_width, img_items.size().y as i32);
+    for i in 0..ITEM_VALUES.len() - 1 {
+        let placeable = Placeable::VARIANTS[Placeable::ETank as usize + i];
+        let source_rect = IntRect::new(i as i32 * tex_item_width, 0, tex_item_width, img_items.size().y as i32);
         let tex = graphics::Texture::from_image(&img_items, source_rect)?;
-        texture_manager.add_texture(Placeable::ETank as usize + i as usize, tex)?;
+        texture_manager.add_texture(placeable, tex)?;
     }
     // Add Door textures to egui
     for i in 0..10 {
         let source_rect = IntRect::new(i * img_door_width, 0, img_door_width, img_doors.size().y as i32);
         let tex = graphics::Texture::from_image(&img_doors, source_rect)?;
-        texture_manager.add_texture(Placeable::DoorMissile as usize + i as usize, tex)?;
+        if i < 9 {
+            let placeable = Placeable::VARIANTS[Placeable::DoorMissile as usize + i as usize];
+            texture_manager.add_texture(placeable, tex)?;
+        } else {
+            texture_manager.add_texture(TexId::DoorGray, tex)?;
+        }
     }
     // Add Flag textures to egui
     let mut flag_has_tex = Vec::new();
     for flag_idx in 0..game_data.flag_ids.len() {
         let flag_id = game_data.flag_ids[flag_idx];
-        let flag_str = &game_data.flag_isv.keys[flag_id];
-        if let Ok(tex) = graphics::Texture::from_file(("../visualizer/".to_string().to_owned() + flag_str + ".png").as_str()) {
-            texture_manager.add_texture(TexId::FlagFirst as usize + flag_id as usize, tex)?;
+        let flag_str = game_data.flag_isv.keys[flag_id].clone();
+        if let Ok(tex) = graphics::Texture::from_file(("../visualizer/".to_string().to_owned() + &flag_str + ".png").as_str()) {
+            texture_manager.add_texture(flag_str, tex)?;
             flag_has_tex.push(flag_id);
         }
     }
@@ -626,7 +632,7 @@ fn load_room_sprites(game_data: &GameData) -> Result<(FBox<graphics::Image>, Vec
     Ok((atlas, room_data))
 }
 
-// Generates 9 door sprites (Missile, Super, PB, Charge, Ice, Wave, Spazer, Plasma, Gray)
+// Generates 10 door sprites (Missile, Super, PB, Charge, Ice, Wave, Spazer, Plasma, Gray, Wall)
 fn generate_door_sprites() -> Result<FBox<graphics::Image>> {
     let mut img_doors = graphics::Image::new_solid(3 * 10, 8, Color::TRANSPARENT).unwrap();
     for x in 0..10 {
@@ -729,14 +735,14 @@ fn get_flag_info(flag: &String) -> Result<(f32, f32, FlagType, &str)> {
     }
 }
 
+#[derive(Debug, Hash)]
 #[repr(usize)]
 enum TexId {
-    DoorGray = Placeable::VARIANTS.len() as usize,
+    DoorGray,
     Atlas,
     FlagTypeBosses,
     FlagTypeMinibosses,
     FlagTypeMisc,
-    FlagFirst
 }
 
 impl Into<usize> for TexId {
@@ -1056,7 +1062,7 @@ impl PlandoApp {
 
         let (atlas_img, room_data) = load_room_sprites(&plando.game_data)?;
         let atlas_tex = graphics::Texture::from_image(&atlas_img, IntRect::default())?;
-        texture_manager.add_texture(TexId::Atlas as usize, atlas_tex)?;
+        texture_manager.add_texture(TexId::Atlas, atlas_tex)?;
 
         let mut mouse_state = MouseState::default();
         mouse_state.click_pos_leniency = settings.mouse_click_pos_tolerance as f32;
@@ -1173,7 +1179,7 @@ impl PlandoApp {
     fn patch_rom(&mut self, save_path: &Path) -> Result<()> {
          let rom_vanilla = self.rom_vanilla.as_ref().ok_or(anyhow!("Provided no vanilla ROM to patch"))?;
         
-        let settings = self.settings_customization.get_settings();
+        let settings = self.settings_customization.customization.clone();
 
         if let Some(handle) = &self.handle_patch {
             handle.0.abort();
@@ -1376,7 +1382,7 @@ impl PlandoApp {
                         tex.draw(&sprite_tile);
                     }
 
-                    let tex_helm = self.texture_manager.get_texture_const(Placeable::Helm as usize).unwrap();
+                    let tex_helm = self.texture_manager.get_texture_const(Placeable::Helm).unwrap();
                     let tex_helm_w = tex_helm.size().x as f32;
                     let mut sprite_helm = graphics::Sprite::with_texture(tex_helm);
                     sprite_helm.set_scale(8.0 / tex_helm_w);
@@ -1568,7 +1574,7 @@ impl PlandoApp {
                 self.benchmark.split("Draw gray doors");
 
                 // Draw items
-                self.draw_items(&mut *window, &states, sidebar_selection, &tex_items);
+                self.draw_items(&mut *window, &states, sidebar_selection);
                 self.benchmark.split("Draw placed items");
 
                 // Draw flags
@@ -1952,10 +1958,11 @@ impl PlandoApp {
                         // Remove placed starting items
                         for item_idx in 0..self.plando.item_locations.len() {
                             let item = self.plando.item_locations[item_idx];
-                            let placeable = Placeable::from_item(item);
-                            if let Some(max) = self.plando.get_max_placeable_count(placeable) {
-                                if self.plando.placed_item_count[placeable as usize] > max {
-                                    self.plando.place_item(item_idx, Item::Nothing);
+                            if let Ok(placeable) = Placeable::from_item(item) {
+                                if let Some(max) = self.plando.get_max_placeable_count(placeable) {
+                                    if self.plando.placed_item_count[placeable as usize] > max {
+                                        self.plando.place_item(item_idx, Item::Nothing);
+                                    }
                                 }
                             }
                         }
@@ -2288,7 +2295,8 @@ impl PlandoApp {
     }
 
     fn draw_start_locations(&mut self, rt: &mut dyn RenderTarget, states: &RenderStates, sidebar_selection: Option<Placeable>) {
-        let (tex_helm_w, _, tex_helm) = self.texture_manager.get_texture(Placeable::Helm as u64);
+        let tex_helm = self.texture_manager.get_texture_const(Placeable::Helm).unwrap();
+        let tex_helm_w = tex_helm.size().x as f32;
         let mut sprite_helm = graphics::Sprite::with_texture(tex_helm);
         sprite_helm.set_color(Color::rgba(0xAF, 0xAF, 0xAF, 0x5F));
 
@@ -2383,7 +2391,7 @@ impl PlandoApp {
                     },
                     DoorType::Wall => Placeable::DoorWall,
                     _ => Placeable::DoorMissile
-                } as usize;
+                };
                 let door_tex = self.texture_manager.get_texture_const(door_tex_id).unwrap();
                 let mut door_spr = graphics::Sprite::with_texture(door_tex);
                 door_spr.set_origin((4.0, 4.0));
@@ -2428,10 +2436,10 @@ impl PlandoApp {
         }
     }
 
-    fn draw_items(&mut self, rt: &mut dyn RenderTarget, states: &RenderStates, sidebar_selection: Option<Placeable>, tex_items: &FBox<graphics::Texture>) {
+    fn draw_items(&mut self, rt: &mut dyn RenderTarget, states: &RenderStates, sidebar_selection: Option<Placeable>) {
         let mut info_overlay = None;
+        let mut update_spoiler = false;
         if sidebar_selection.is_none() || sidebar_selection.is_some_and(|x| x >= Placeable::ETank) {
-            let tex_item_width = tex_items.size().x as i32 / 24;
             for i in 0..self.plando.item_locations.len() {
                 let item = self.plando.item_locations[i];
                 let (room_id, node_id) = self.plando.game_data.item_locations[i];
@@ -2444,13 +2452,15 @@ impl PlandoApp {
                 let (room_x, room_y) = self.plando.map().rooms[room_idx];
                 let (tile_x, tile_y) = self.plando.game_data.node_coords[&(room_id, node_id)];
 
-                let item_index = match item {
-                    Item::Nothing => 23,
-                    item => item as i32
-                };
+                let tex = if item == Item::Nothing {
+                    self.texture_manager.get_texture_const(Item::Nothing)
+                } else {
+                    let placeable = Placeable::from_item(item).unwrap();
+                    self.texture_manager.get_texture_const(placeable)
+                }.unwrap();
+                let tex_item_width = tex.size().x;
 
-                let mut spr_item = graphics::Sprite::with_texture_and_rect(&tex_items,
-                    IntRect::new(tex_item_width * item_index, 0, tex_item_width, tex_item_width));
+                let mut spr_item = graphics::Sprite::with_texture(tex);
                 spr_item.set_origin(Vector2f::new(tex_item_width as f32 / 2.0, tex_item_width as f32 / 2.0));
                 let double_item = get_double_item_offset(room_id, node_id);
                 let item_x_offset = match double_item {
@@ -2462,24 +2472,22 @@ impl PlandoApp {
                 spr_item.set_scale(6.0 / tex_item_width as f32);
                 if spr_item.global_bounds().contains2(self.local_mouse_x, self.local_mouse_y) && self.is_mouse_public {
                     spr_item.scale(1.2);
-                    let item_name = if item_index == 23 {
+                    let item_name = if item == Item::Nothing {
                         &"Nothing".to_string()
                     } else {
-                        &self.plando.game_data.item_isv.keys[item_index as usize]
+                        &self.plando.game_data.item_isv.keys[item as usize]
                     };
                     info_overlay = Some(item_name.clone());
 
                     if self.mouse_state.consume_click(mouse::Button::Left) {
                         if sidebar_selection.is_some_and(|x| x.to_item().is_some()) {
                             let item_to_place = sidebar_selection.unwrap().to_item().unwrap();
-                            let as_placeable = Placeable::from_item(item_to_place);
+                            let as_placeable = sidebar_selection.unwrap();
                             let max_count = self.plando.get_max_placeable_count(as_placeable).unwrap_or(999);
                             if self.plando.placed_item_count[as_placeable as usize] < max_count {
                                 self.plando.place_item(i, item_to_place);
                                 if self.settings.spoiler_auto_update {
-                                    if let Err(err) = self.update_spoiler_data_async(self.settings.rebuild_steps) {
-                                        self.modal_type = ModalType::Error(err.to_string());
-                                    }
+                                    update_spoiler = true;
                                 }
                             }
                         } else {
@@ -2488,9 +2496,7 @@ impl PlandoApp {
                     } else if self.mouse_state.consume_click(mouse::Button::Right) {
                         self.plando.place_item(i, Item::Nothing);
                         if self.settings.spoiler_auto_update {
-                            if let Err(err) = self.update_spoiler_data_async(self.settings.rebuild_steps) {
-                                self.modal_type = ModalType::Error(err.to_string());
-                            }
+                            update_spoiler = true;
                         }
                     }
 
@@ -2498,6 +2504,12 @@ impl PlandoApp {
                 }
 
                 rt.draw_with_renderstates(&spr_item, &states);
+            }
+        }
+
+        if update_spoiler {
+            if let Err(err) = self.update_spoiler_data_async(self.settings.rebuild_steps) {
+                self.modal_type = ModalType::Error(err.to_string());
             }
         }
 
@@ -2522,9 +2534,11 @@ impl PlandoApp {
             if flag_info.is_err() {
                 continue;
             }
-            let (flag_x, flag_y, flag_type, flag_str) = flag_info.unwrap();
+            let (flag_x, flag_y, _flag_type, flag_str) = flag_info.unwrap();
             let flag_position = Vector2f::new(room_x as f32 + flag_x + 0.5, room_y as f32 + flag_y + 0.5);
-            let (tex_w, tex_h, tex) = self.texture_manager.get_texture(flag_type as u64);
+            let tex = self.texture_manager.get_texture_const(flag_str_short.to_owned()).unwrap();
+            let tex_w = tex.size().x as f32;
+            let tex_h = tex.size().y as f32;
             let mut spr_flag = graphics::Sprite::with_texture(tex);
             spr_flag.set_origin(Vector2f::new(tex_w / 2.0, tex_h / 2.0));
             spr_flag.set_position(flag_position * 8.0);
@@ -2576,7 +2590,7 @@ impl PlandoApp {
                 let x = (room_x + tile_x) as f32;
                 let y = (room_y + tile_y) as f32;
 
-                let tex = self.texture_manager.get_texture_const(door_type as usize).unwrap();
+                let tex = self.texture_manager.get_texture_const(door_type).unwrap();
                 let mut spr_ghost = graphics::Sprite::with_texture(tex);
                 spr_ghost.set_position(Vector2f::new(x, y) * 8.0);
                 spr_ghost.move_(4.0);
@@ -2784,7 +2798,7 @@ impl PlandoApp {
             }).min_row_height(sidebar_height).show(ui, |ui| {
                 for (row, placeable) in Placeable::VARIANTS.iter().enumerate() {
                     // Load image
-                    let img = egui::Image::new(self.texture_manager.get_image_source(*placeable as u64)).sense(Sense::click())
+                    let img = egui::Image::new(self.texture_manager.get_image_source(*placeable)).sense(Sense::click())
                         .fit_to_exact_size(Vec2::new(sidebar_height, sidebar_height));
                     let img_resp = ui.add(img);
                     if img_resp.clicked() {
@@ -2992,7 +3006,7 @@ impl PlandoApp {
             for (override_idx, item_override) in overrides {
                 ui.horizontal(|ui| {
                     let cur_item = self.plando.item_locations[item_override.item_idx];
-                    let cur_item_name = Placeable::from_item(cur_item).to_string();
+                    let cur_item_name = Placeable::from_item(cur_item).map(|item| item.to_string()).unwrap_or("ERROR".to_string());
                     hovered |= egui::ComboBox::new(format!("combo_spoiler_override_item_{override_idx}"), "Item").selected_text(&cur_item_name).show_ui(ui, |ui| {
                         for item in ITEM_VALUES {
                             let locs: Vec<_> = self.plando.item_locations.iter().enumerate().filter(
@@ -3001,7 +3015,7 @@ impl PlandoApp {
                             if locs.is_empty() || item == Item::Nothing {
                                 continue;
                             }
-                            let item_name = Placeable::from_item(item).to_string();
+                            let item_name = Placeable::from_item(item).map(|item| item.to_string()).unwrap_or("ERROR".to_string());
                             if ui.selectable_label(item_name == cur_item_name, item_name).clicked() {
                                 item_override.item_idx = locs[0].0;
                             }
@@ -3106,19 +3120,20 @@ impl PlandoApp {
 
                     let mut new_spoiler_type = self.spoiler_type.get();
 
-                    let minor_indices = [Item::Missile as usize, Item::Super as usize, Item::PowerBomb as usize, Item::ETank as usize, Item::ReserveTank as usize];
+                    let minor_items = [Item::Missile, Item::Super, Item::PowerBomb, Item::ETank, Item::ReserveTank];
                     // Render Minor Items
                     ui.horizontal(|ui| {
-                        for i in 0..minor_indices.len() {
-                            let idx = minor_indices[i];
+                        for i in 0..minor_items.len() {
+                            let item = minor_items[i];
+                            let idx = item as usize;
                             if collectible_items[idx] == 0 {
                                 continue;
                             }
-                            let placeable_idx = Placeable::ETank as u64 + idx as u64;
-                            let img = egui::Image::new(self.texture_manager.get_image_source(placeable_idx)).fit_to_exact_size(Vec2::new(16.0, 16.0) * self.settings.ui_scale);
+                            let placeable = Placeable::from_item(item).unwrap();
+                            let img = egui::Image::new(self.texture_manager.get_image_source(placeable)).fit_to_exact_size(Vec2::new(16.0, 16.0) * self.settings.ui_scale);
                             ui.add(img);
                             let ammo_collected = (collectible_items[idx] as f32 * self.plando.randomizer_settings.item_progression_settings.ammo_collect_fraction).round() as i32 * 5;
-                            let label = if idx == Item::ETank as usize || idx == Item::ReserveTank as usize {
+                            let label = if item == Item::ETank || item == Item::ReserveTank {
                                 collectible_items[idx].to_string()
                             } else {
                                 ammo_collected.to_string() + " / " + &(collectible_items[idx] * 5).to_string()
@@ -3129,11 +3144,12 @@ impl PlandoApp {
                     // Render Major Items
                     ui.horizontal(|ui| {
                         for i in 0..ITEM_VALUES.len() - 1 {
-                            if collectible_items[i] == 0 || minor_indices.contains(&i) {
+                            let item = ITEM_VALUES[i];
+                            if collectible_items[i] == 0 || minor_items.contains(&item) {
                                 continue;
                             }
-                            let placeable_idx = Placeable::ETank as u64 + i as u64;
-                            let img = egui::Image::new(self.texture_manager.get_image_source(placeable_idx)).fit_to_exact_size(Vec2::new(16.0, 16.0) * self.settings.ui_scale);
+                            let placeable = Placeable::from_item(item).unwrap();
+                            let img = egui::Image::new(self.texture_manager.get_image_source(placeable)).fit_to_exact_size(Vec2::new(16.0, 16.0) * self.settings.ui_scale);
                             ui.add(img);
                         }
                     });
@@ -3141,11 +3157,11 @@ impl PlandoApp {
                     ui.horizontal(|ui| {
                         for i in 0..collectible_flags.len() {
                             let flag_id = self.plando.game_data.flag_ids[i];
-                            let flag_tex_idx = TexId::FlagFirst as usize + flag_id;
-                            if !collectible_flags[i] || !self.texture_manager.exists(flag_tex_idx) {
+                            let flag_str = &self.plando.game_data.flag_isv.keys[flag_id];
+                            if !collectible_flags[i] || !self.texture_manager.exists(flag_str.clone()) {
                                 continue;
                             }
-                            let img = egui::Image::new(self.texture_manager.get_image_source(flag_tex_idx as u64)).fit_to_exact_size(Vec2::new(24.0, 24.0) * self.settings.ui_scale).sense(Sense::click());
+                            let img = egui::Image::new(self.texture_manager.get_image_source(flag_str.clone())).fit_to_exact_size(Vec2::new(24.0, 24.0) * self.settings.ui_scale).sense(Sense::click());
                             let resp = ui.add(img);
                             if resp.clicked() {
                                 new_spoiler_type = SpoilerType::Flag(i);
@@ -3165,8 +3181,9 @@ impl PlandoApp {
                         for i in idxs {
                             let item_details = &details.items[i];
                             let item_id = self.plando.game_data.item_isv.index_by_key[&item_details.item];
-                            let placeable_id = Placeable::ETank as u64 + item_id as u64;
-                            let img = egui::Image::new(self.texture_manager.get_image_source(placeable_id)).fit_to_exact_size(Vec2::new(16.0, 16.0) * self.settings.ui_scale).sense(Sense::click());
+                            let item = ITEM_VALUES[item_id];
+                            let placeable = Placeable::from_item(item).unwrap();
+                            let img = egui::Image::new(self.texture_manager.get_image_source(placeable)).fit_to_exact_size(Vec2::new(16.0, 16.0) * self.settings.ui_scale).sense(Sense::click());
                             if ui.add(img).clicked() {
                                 let item_idx = self.plando.game_data.item_locations.iter().position(
                                     |x| x.0 == item_details.location.room_id && x.1 == item_details.location.node_id
@@ -3179,11 +3196,11 @@ impl PlandoApp {
                     ui.horizontal_wrapped(|ui| {
                         for flag_details in &details.flags {
                             let flag_id = self.plando.game_data.flag_isv.index_by_key[&flag_details.flag];
-                            let flag_tex_id = TexId::FlagFirst as usize + flag_id;
-                            if !self.texture_manager.exists(flag_tex_id) {
+                            let flag_str = flag_details.flag.clone();
+                            if !self.texture_manager.exists(flag_str.clone()) {
                                 continue;
                             }
-                            let img = egui::Image::new(self.texture_manager.get_image_source(flag_tex_id as u64)).fit_to_exact_size(Vec2::new(24.0, 24.0) * self.settings.ui_scale).sense(Sense::click());
+                            let img = egui::Image::new(self.texture_manager.get_image_source(flag_str)).fit_to_exact_size(Vec2::new(24.0, 24.0) * self.settings.ui_scale).sense(Sense::click());
                             if ui.add(img).clicked() {
                                 let flag_idx = self.plando.game_data.flag_ids.iter().position(
                                     |x| *x == flag_id
@@ -3409,13 +3426,14 @@ impl PlandoApp {
                         ui.label(summary.step.to_string());
                         ui.horizontal_wrapped(|ui| {
                             for item_summary in &summary.items {
-                                let item = self.plando.game_data.item_isv.index_by_key[&item_summary.item];
-                                if items_found[item] {
+                                let item_idx = self.plando.game_data.item_isv.index_by_key[&item_summary.item];
+                                let item = ITEM_VALUES[item_idx];
+                                if items_found[item_idx] {
                                     continue;
                                 }
-                                items_found[item] = true;
-                                let placeable_id = Placeable::ETank as u64 + item as u64;
-                                let img = egui::Image::new(self.texture_manager.get_image_source(placeable_id))
+                                items_found[item_idx] = true;
+                                let placeable = Placeable::from_item(item).unwrap();
+                                let img = egui::Image::new(self.texture_manager.get_image_source(placeable))
                                     .fit_to_exact_size(Vec2::new(16.0, 16.0) * self.settings.ui_scale).sense(Sense::click());
                                 if ui.add(img).clicked() {
                                     self.spoiler_step = summary.step - 1;

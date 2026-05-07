@@ -7,7 +7,7 @@ use std::{path::Path, sync::{Arc, MutexGuard}};
 
 use anyhow::{bail, Result};
 use hashbrown::{HashMap, HashSet};
-use maprando::{customize::{CustomizeSettings, mosaic::MosaicTheme, samus_sprite::SamusSpriteCategory}, patch::Rom, preset::PresetData, randomize::{DifficultyConfig, LockedDoor, Randomization}, settings::{DoorsMode, ItemCount, Objective, RandomizerSettings, WallJump}, spoiler_log::SpoilerLog, traverse::LockedDoorData};
+use maprando::{customize::{CustomizeSettings, mosaic::MosaicTheme, samus_sprite::SamusSpriteCategory}, patch::Rom, preset::PresetData, randomize::{DifficultyConfig, LockedDoor, Randomization}, settings::{DoorsSettings, ItemCount, Objective, RandomizerSettings, SpeedBooster, WallJump}, spoiler_log::SpoilerLog, traverse::LockedDoorData};
 use maprando_game::{BeamType, Capacity, DoorPtrPair, DoorType, GameData, HubLocation, Item, Map, NodeId, RoomId, StartLocation, VertexKey};
 use maprando_logic::{GlobalState, Inventory, LocalState};
 use rand::{rngs::StdRng, SeedableRng};
@@ -23,13 +23,13 @@ pub enum DoubleItemPlacement {
     Middle, Left, Right
 }
 
-pub const ITEM_VALUES: [Item; 23] = [
+pub const ITEM_VALUES: [Item; 25] = [
     Item::ETank, Item::Missile, Item::Super, Item::PowerBomb, Item::Bombs, Item::Charge, Item::Ice, Item::HiJump, Item::SpeedBooster,
     Item::Wave, Item::Spazer, Item::SpringBall, Item::Varia, Item::Gravity, Item::XRayScope, Item::Plasma, Item::Grapple,
-    Item::SpaceJump, Item::ScrewAttack, Item::Morph, Item::ReserveTank, Item::WallJump, Item::Nothing
+    Item::SpaceJump, Item::ScrewAttack, Item::Morph, Item::ReserveTank, Item::WallJump, Item::Nothing, Item::SparkBooster, Item::BlueBooster
 ];
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, VariantArray)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, VariantArray)]
 pub enum Placeable {
     Helm = 0,
     ETank,
@@ -54,6 +54,8 @@ pub enum Placeable {
     Morph,
     ReserveTank,
     WalljumpBoots,
+    BlueBooster,
+    SparkBooster,
     DoorMissile,
     DoorSuper,
     DoorPowerBomb,
@@ -91,6 +93,8 @@ impl Placeable {
             Placeable::Morph => "Morph",
             Placeable::ReserveTank => "Reserve Tank",
             Placeable::WalljumpBoots => "Walljump Boots",
+            Placeable::SparkBooster => "Spark Booster",
+            Placeable::BlueBooster => "Blue Booster",
             Placeable::DoorMissile => "Missile Door",
             Placeable::DoorSuper => "Super Door",
             Placeable::DoorPowerBomb => "Power Bomb Door",
@@ -103,16 +107,64 @@ impl Placeable {
         }.to_string()
     }
 
-    pub fn from_item(item: Item) -> Placeable {
-        let idx = Placeable::ETank as usize + item as usize;
-        Placeable::VARIANTS[idx]
+    pub fn from_item(item: Item) -> Result<Placeable> {
+        Ok(match item {
+            Item::ETank => Placeable::ETank,
+            Item::Missile => Placeable::Missile,
+            Item::Super => Placeable::SuperMissile,
+            Item::PowerBomb => Placeable::PowerBomb,
+            Item::Bombs => Placeable::Bombs,
+            Item::Charge => Placeable::Charge,
+            Item::Ice => Placeable::Ice,
+            Item::HiJump => Placeable::HighJump,
+            Item::SpeedBooster => Placeable::SpeedBooster,
+            Item::Wave => Placeable::Wave,
+            Item::Spazer => Placeable::Spazer,
+            Item::SpringBall => Placeable::Springball,
+            Item::Varia => Placeable::Varia,
+            Item::Gravity => Placeable::Gravity,
+            Item::XRayScope => Placeable::XRay,
+            Item::Plasma => Placeable::Plasma,
+            Item::Grapple => Placeable::Grapple,
+            Item::SpaceJump => Placeable::SpaceJump,
+            Item::ScrewAttack => Placeable::ScrewAttack,
+            Item::Morph => Placeable::Morph,
+            Item::ReserveTank => Placeable::ReserveTank,
+            Item::WallJump => Placeable::WalljumpBoots,
+            Item::SparkBooster => Placeable::SparkBooster,
+            Item::BlueBooster => Placeable::BlueBooster,
+            _ => bail!("No placeable corresponding to item {item:?}")
+        })
     }
 
     pub fn to_item(self) -> Option<Item> {
-        if self == Placeable::Helm || self > Placeable::WalljumpBoots {
-            return None;
-        }
-        Some(ITEM_VALUES[self as usize - Placeable::ETank as usize])
+        Some(match self {
+            Self::ETank => Item::ETank,
+            Self::Missile => Item::Missile,
+            Self::SuperMissile => Item::Super,
+            Self::PowerBomb => Item::PowerBomb,
+            Self::Bombs => Item::Bombs,
+            Self::Charge => Item::Charge,
+            Self::Ice => Item::Ice,
+            Self::HighJump => Item::HiJump,
+            Self::SpeedBooster => Item::SpeedBooster,
+            Self::Wave => Item::Wave,
+            Self::Spazer => Item::Spazer,
+            Self::Springball => Item::SpringBall,
+            Self::Varia => Item::Varia,
+            Self::Gravity => Item::Gravity,
+            Self::XRay => Item::XRayScope,
+            Self::Plasma => Item::Plasma,
+            Self::Grapple => Item::Grapple,
+            Self::SpaceJump => Item::SpaceJump,
+            Self::ScrewAttack => Item::ScrewAttack,
+            Self::Morph => Item::Morph,
+            Self::ReserveTank => Item::ReserveTank,
+            Self::WalljumpBoots => Item::WallJump,
+            Self::SparkBooster => Item::SparkBooster,
+            Self::BlueBooster => Item::BlueBooster,
+            _ => return None
+        })
     }
 
     pub fn to_door_type(self) -> Option<DoorType> {
@@ -430,11 +482,13 @@ impl Plando {
     pub fn place_item(&mut self, item_loc: usize, item: Item) {
         // Remove old item from placed_item_count
         if self.item_locations[item_loc] != Item::Nothing {
-            self.placed_item_count[Placeable::ETank as usize + self.item_locations[item_loc] as usize] -= 1;
+            let old_placeable = Placeable::from_item(self.item_locations[item_loc]).unwrap();
+            self.placed_item_count[old_placeable as usize] -= 1;
         }
         // Add new item to placed_item_count
         if item != Item::Nothing {
-            self.placed_item_count[Placeable::ETank as usize + item as usize] += 1;
+            let placeable = Placeable::from_item(item).unwrap();
+            self.placed_item_count[placeable as usize] += 1;
         }
         self.item_locations[item_loc] = item;
     }
@@ -581,12 +635,17 @@ impl Plando {
             return Some(1);
         } else if placeable >= Placeable::Bombs && placeable <= Placeable::Morph {
             let item = placeable.to_item().unwrap();
+            if item == Item::SpeedBooster && self.randomizer_settings.other_settings.speed_booster == SpeedBooster::Split {
+                return Some(0);
+            }
             if let Some(item_count) = self.randomizer_settings.item_progression_settings.starting_items.iter().find(|x| x.item == item) {
                 return Some(1 - item_count.count);
             }
             return Some(1);
         } else if placeable == Placeable::WalljumpBoots {
             return if self.randomizer_settings.other_settings.wall_jump == WallJump::Vanilla { Some(0) } else { Some(1) };
+        } else if placeable == Placeable::BlueBooster || placeable == Placeable::SparkBooster {
+            return if self.randomizer_settings.other_settings.speed_booster == SpeedBooster::Vanilla { Some(0) } else { Some(1) };
         } else if placeable < Placeable::DoorMissile {
             let count = match placeable {
                 Placeable::Missile => return None,
@@ -710,7 +769,25 @@ impl Plando {
         settings.item_progression_settings.preset = Some(self.creator_name.clone());
         settings.map_layout = self.creator_name.clone();
 
-        settings.doors_mode = DoorsMode::Beam;
+        let red_doors_count = self.placed_item_count[Placeable::DoorMissile as usize] as i32;
+        let green_doors_count = self.placed_item_count[Placeable::DoorSuper as usize] as i32;
+        let yellow_doors_count = self.placed_item_count[Placeable::DoorPowerBomb as usize] as i32;
+        let charge_doors_count = self.placed_item_count[Placeable::DoorCharge as usize] as i32;
+        let ice_doors_count = self.placed_item_count[Placeable::DoorIce as usize] as i32;
+        let wave_doors_count = self.placed_item_count[Placeable::DoorWave as usize] as i32;
+        let spazer_doors_count = self.placed_item_count[Placeable::DoorSpazer as usize] as i32;
+        let plasma_doors_count = self.placed_item_count[Placeable::DoorPlasma as usize] as i32;
+        settings.doors_settings = DoorsSettings {
+            preset: None,
+            red_doors_count,
+            green_doors_count,
+            yellow_doors_count,
+            charge_doors_count,
+            ice_doors_count,
+            wave_doors_count,
+            spazer_doors_count,
+            plasma_doors_count
+        };
     }
 
     pub fn update_spoiler_data(&mut self, rebuild_steps: bool) -> Result<JoinHandle<Result<()>>> {
@@ -828,15 +905,6 @@ impl Plando {
         let mut flag_vec = vec![false; self.game_data.flag_isv.keys.len()];
         let tourian_open_idx = self.game_data.flag_isv.index_by_key["f_TourianOpen"];
         flag_vec[tourian_open_idx] = true;
-        if self.randomizer_settings.quality_of_life_settings.all_items_spawn {
-            let all_items_spawn_idx = self.game_data.flag_isv.index_by_key["f_AllItemsSpawn"];
-            flag_vec[all_items_spawn_idx] = true;
-        }
-        if self.randomizer_settings.quality_of_life_settings.acid_chozo {
-            let acid_chozo_without_space_jump_idx =
-                self.game_data.flag_isv.index_by_key["f_AcidChozoWithoutSpaceJump"];
-            flag_vec[acid_chozo_without_space_jump_idx] = true;
-        }
         flag_vec
     }
 }

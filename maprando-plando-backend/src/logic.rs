@@ -304,13 +304,10 @@ async fn update_randomization_impl(
 
     // Apply custom escape time
     if let Some(custom_escape_time) = custom_escape_time {
-        let base_igt_frames = custom_escape_time * 60;
         let base_igt_seconds = custom_escape_time as f32;
         let raw_time_seconds = base_igt_seconds; // Ignore multiplier for custom time
         let final_time_seconds = raw_time_seconds.min(5995.0);
 
-        s.escape.base_igt_frames = base_igt_frames;
-        s.escape.base_igt_seconds = base_igt_seconds;
         s.escape.raw_time_seconds = raw_time_seconds;
         s.escape.final_time_seconds = final_time_seconds;
 

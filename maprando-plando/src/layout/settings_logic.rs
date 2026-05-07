@@ -3,7 +3,7 @@ use std::{io::Write, path::Path};
 use anyhow::Result;
 use egui::Context;
 use hashbrown::HashMap;
-use maprando::{preset::PresetData, settings::{DoorLocksSize, ETankRefill, Fanfares, InitialMapRevealSettings, ItemMarkers, MapRevealLevel, MapStationReveal, MotherBrainFight, ObjectiveScreen, ObjectiveSetting, RandomizerSettings, SaveAnimals, WallJump}};
+use maprando::{preset::PresetData, settings::{CrashFixes, CrashFixesPreset, DisableETankSetting, DoorLocksSize, ETankRefill, EnemyDrops, EnhancedMapLevel, EnhancedMapOther, EnhancedMapSettings, EnhancedMapWalls, Fanfares, FixMode, InitialMapRevealSettings, ItemMarkers, MapRevealLevel, MapStationReveal, MotherBrainFight, ObjectiveScreen, ObjectiveSetting, RandomizerSettings, SaveAnimals, SpeedBooster, WallJump}};
 use maprando_game::Item;
 use maprando_plando_backend::Placeable;
 use strum_macros::VariantArray;
@@ -139,7 +139,7 @@ impl LogicCustomization {
             ui.collapsing("Starting Items", |ui| {
                 egui::Grid::new("grid_starting_items").num_columns(4).striped(true).show(ui, |ui| {
                     for item in &mut self.cur_settings.item_progression_settings.starting_items {
-                        ui.label(Placeable::from_item(item.item).to_string());
+                        ui.label(Placeable::from_item(item.item).map(|item| item.to_string()).unwrap_or_default());
                         if item.item.is_unique() {
                             ui.selectable_value(&mut item.count, 0, "No");
                             ui.selectable_value(&mut item.count, 1, "Yes");
@@ -169,6 +169,12 @@ impl LogicCustomization {
                 ui.selectable_value(&mut self.cur_settings.other_settings.wall_jump, WallJump::Collectible, "Collectible");
                 ui.end_row();
 
+                // Split Speed Booster
+                ui.label("Speed Booster");
+                ui.selectable_value(&mut self.cur_settings.other_settings.speed_booster, SpeedBooster::Vanilla, "Vanilla");
+                ui.selectable_value(&mut self.cur_settings.other_settings.speed_booster, SpeedBooster::Split, "Split");
+                ui.end_row();
+
                 // Door locks size
                 ui.label("Door locks size on map");
                 ui.selectable_value(&mut self.cur_settings.other_settings.door_locks_size, DoorLocksSize::Small, "Small");
@@ -185,14 +191,17 @@ impl LogicCustomization {
                 self.cur_settings.other_settings.energy_free_shinesparks.generate("Energy-free shinesparks", ui);
 
                 // Ultra low qol
-                ui.label("Ultra-low quality of life");
-                ui.selectable_value(&mut self.cur_settings.other_settings.ultra_low_qol, false, "No");
-                if ui.selectable_label(self.cur_settings.other_settings.ultra_low_qol, "Yes").clicked() {
-                    self.cur_settings.other_settings.ultra_low_qol = true;
-                    self.cur_settings.quality_of_life_settings = self.preset_data.quality_of_life_presets.iter().find(
-                        |x| x.preset.as_ref().is_some_and(|x| *x == "Off".to_string())
-                    ).unwrap().clone();
-                }
+                // All enemies respawn
+                self.cur_settings.other_settings.all_enemies_respawn.generate("All enemies respawn", ui);
+
+                // Disable spikesuits
+                self.cur_settings.other_settings.disable_spikesuit.generate("Disable spikesuits", ui);
+
+                // Disable bluesuits
+                self.cur_settings.other_settings.disable_bluesuit.generate("Disable bluesuits", ui);
+
+                // Major glitches
+                self.cur_settings.other_settings.enable_major_glitches.generate("Enable major glitches", ui);
             });
             // Save preset
             ui.horizontal(|ui| {
@@ -358,6 +367,10 @@ impl LogicCustomization {
                 ui.label("Flash suit carrying distance");
                 ui.add(egui::DragValue::new(&mut self.cur_settings.skill_assumption_settings.flash_suit_distance).speed(0.1).range(0..=255));
                 ui.end_row();
+                
+                ui.label("Blue suit carrying distance");
+                ui.add(egui::DragValue::new(&mut self.cur_settings.skill_assumption_settings.blue_suit_distance).speed(0.1).range(0..=255));
+                ui.end_row();
 
                 ui.label("Spike X-Mode setup leniency");
                 ui.add(egui::DragValue::new(&mut self.cur_settings.skill_assumption_settings.spike_xmode_leniency).speed(0.1).range(0..=1000));
@@ -369,6 +382,10 @@ impl LogicCustomization {
 
                 ui.label("Elevator Crystal Flash leniency");
                 ui.add(egui::DragValue::new(&mut self.cur_settings.skill_assumption_settings.elevator_cf_leniency).speed(0.1).range(0..=1000));
+                ui.end_row();
+                
+                ui.label("Crystal Spark leniency");
+                ui.add(egui::DragValue::new(&mut self.cur_settings.skill_assumption_settings.crystal_spark_leniency).speed(0.1).range(0..=1000));
                 ui.end_row();
             });
 
@@ -404,13 +421,26 @@ impl LogicCustomization {
             
             ui.label("Map");
             egui::Grid::new("grid_qol_map").num_columns(5).show(ui, |ui| {
-                ui.label("Item markers");
-                ui.selectable_value(&mut qol.item_markers, ItemMarkers::Simple, "Simple");
-                ui.selectable_value(&mut qol.item_markers, ItemMarkers::Majors, "Majors");
-                ui.selectable_value(&mut qol.item_markers, ItemMarkers::Uniques, "Uniques");
-                ui.selectable_value(&mut qol.item_markers, ItemMarkers::ThreeTiered, "3-Tiered");
-                ui.selectable_value(&mut qol.item_markers, ItemMarkers::FourTiered, "4-Tiered");
+                let enhanced_map_settings = &mut qol.enhanced_map_settings;
+                enhanced_map_settings.generate("Enhanced map", ui);
                 ui.end_row();
+
+                ui.collapsing("Custom", |ui| {
+                    egui::Grid::new("grid_qol_enhanced_map").num_columns(3).show(ui, |ui| {
+                        enhanced_map_settings.blue_doors.generate("Blue doors", ui);
+                        enhanced_map_settings.gray_doors.generate("Blue doors", ui);
+                        enhanced_map_settings.ammo_doors.generate("Blue doors", ui);
+                        enhanced_map_settings.beam_doors.generate("Blue doors", ui);
+                        enhanced_map_settings.heat.generate("Blue doors", ui);
+                        enhanced_map_settings.water.generate("Blue doors", ui);
+                        enhanced_map_settings.lava.generate("Blue doors", ui);
+                        enhanced_map_settings.acid.generate("Blue doors", ui);
+                        enhanced_map_settings.walls.generate("Blue doors", ui);
+                        enhanced_map_settings.objectives.generate("Blue doors", ui);
+                        enhanced_map_settings.map_station.generate("Blue doors", ui);
+                        enhanced_map_settings.refill_station.generate("Blue doors", ui);
+                    })
+                });
 
                 let s = &mut qol.initial_map_reveal_settings;
                 s.generate("Initial Map Reveal", ui);
@@ -434,8 +464,17 @@ impl LogicCustomization {
                 });
                 ui.end_row();
 
+                ui.label("Item markers");
+                ui.selectable_value(&mut qol.item_markers, ItemMarkers::Simple, "Simple");
+                ui.selectable_value(&mut qol.item_markers, ItemMarkers::Majors, "Majors");
+                ui.selectable_value(&mut qol.item_markers, ItemMarkers::Uniques, "Uniques");
+                ui.selectable_value(&mut qol.item_markers, ItemMarkers::ThreeTiered, "3-Tiered");
+                ui.selectable_value(&mut qol.item_markers, ItemMarkers::FourTiered, "4-Tiered");
+                ui.end_row();
+
                 qol.room_outline_revealed.generate("Room outline revealed on entry", ui);
                 qol.opposite_area_revealed.generate("Opposite area connections revealed by map", ui);
+                qol.hazard_markers.generate("Hazard markers", ui);
             });
             ui.separator();
 
@@ -448,6 +487,7 @@ impl LogicCustomization {
                 ui.end_row();
 
                 qol.supers_double.generate("Supers do double damage to Mother Brain", ui);
+                qol.escape_autosave.generate("Escape auto save", ui);
                 qol.escape_movement_items.generate("Hyper Beam gives all movement items", ui);
                 qol.escape_refill.generate("Refill energy for escape", ui);
                 qol.escape_enemies_cleared.generate("Enemies cleared during escape", ui);
@@ -459,6 +499,10 @@ impl LogicCustomization {
                 qol.fast_elevators.generate("Fast elevators", ui);
                 qol.fast_doors.generate("Fast doors", ui);
                 qol.fast_pause_menu.generate("Fast pause menu", ui);
+                qol.fast_saves.generate("Fast saves", ui);
+                qol.fast_baby_cutscene.generate("Fast baby cutscene", ui);
+                qol.fast_mother_brain_cutscene.generate("Fast Mother Brain cutscene", ui);
+                qol.fast_decompression.generate("Fast decompression", ui);
 
                 ui.label("Item fanfares");
                 ui.selectable_value(&mut qol.fanfares, Fanfares::Vanilla, "Vanilla");
@@ -480,28 +524,55 @@ impl LogicCustomization {
                 qol.all_items_spawn.generate("All items spawn at start of game", ui);
                 qol.acid_chozo.generate("Acid Chozo usable without Space Jump", ui);
                 qol.remove_climb_lava.generate("Lava removed from climb", ui);
+                qol.crash_fixes.generate("Crash fixes", ui);
+
+                ui.collapsing("Custom", |ui| {
+                    egui::Grid::new("grid_qol_crash_fixes").num_columns(5).show(ui, |ui| {
+                        qol.crash_fixes.spring_ball.generate("Unequip Spring Ball bounce", ui);
+                        qol.crash_fixes.yapping_maw.generate("Yapping Maw shinespark", ui);
+                        qol.crash_fixes.auto_reserve.generate("Frame-perfect pause auto-reserve", ui);
+                        qol.crash_fixes.x_mode.generate("X-Mode tile collision", ui);
+                        qol.crash_fixes.sprite_overflow.generate("Sprite overflow bug", ui);
+                    })
+                });
+
+                qol.fix_blue_echoes.generate("Fix blue speed echoes", ui);
             });
             ui.separator();
 
-            ui.label("Energy and reserves");
+            ui.label("Ammo, energy and reserves");
             egui::Grid::new("grid_qol_energy").num_columns(2).show(ui, |ui| {
+                qol.ammo_refill_all.generate("Ammo stations refill all ammo types", ui);
+                qol.energy_station_reserves.generate("Energy stations refill reserves", ui);
+
                 ui.label("E-Tank energy refill");
                 ui.selectable_value(&mut qol.etank_refill, ETankRefill::Disabled, "Disabled");
                 ui.selectable_value(&mut qol.etank_refill, ETankRefill::Vanilla, "Vanilla");
                 ui.selectable_value(&mut qol.etank_refill, ETankRefill::Full, "Full");
                 ui.end_row();
 
-                qol.energy_station_reserves.generate("Energy stations refill reserves", ui);
-                qol.disableable_etanks.generate("Disableable E-Tanks", ui);
+                ui.label("Disableable E-Tanks");
+                ui.selectable_value(&mut qol.disableable_etanks, DisableETankSetting::Off, "Off");
+                ui.selectable_value(&mut qol.disableable_etanks, DisableETankSetting::Standard, "Standard");
+                ui.selectable_value(&mut qol.disableable_etanks, DisableETankSetting::Unrestricted, "Unrestricted");
+                ui.end_row();
+
                 qol.reserve_backward_transfer.generate("Reserve energy backwards transfer", ui);
             });
             ui.separator();
 
             ui.label("Other");
             egui::Grid::new("grid_qol_other").num_columns(2).show(ui, |ui| {
-                qol.buffed_drops.generate("Enemy drops are buffed", ui);
+                ui.label("Enemy drops");
+                ui.selectable_value(&mut qol.enemy_drops, EnemyDrops::Off, "Off");
+                ui.selectable_value(&mut qol.enemy_drops, EnemyDrops::Vanilla, "Vanilla");
+                ui.selectable_value(&mut qol.enemy_drops, EnemyDrops::Buffed, "Buffed");
+                ui.end_row();
+                
+                qol.early_save.generate("Guaranteed early save station", ui);
                 qol.persist_flash_suit.generate("Flash suit persists across save/load", ui);
                 qol.persist_blue_suit.generate("Blue suit persists across save/load", ui);
+                qol.camera_fixes.generate("Camera fixes", ui);
             });
         });
     }
@@ -675,5 +746,124 @@ impl SettingsPreset<MapRevealPreset> for InitialMapRevealSettings {
                 other: MapRevealLevel::Full,
             },
         }
+    }
+}
+
+// GENERATOR FOR EnhancedMapSettings
+#[derive(VariantArray, PartialEq)]
+enum EnhancedMapPreset {
+    No, Yes
+}
+
+impl ToString for EnhancedMapPreset {
+    fn to_string(&self) -> String {
+        match *self {
+            Self::No => "No",
+            Self::Yes => "Yes"
+        }.to_string()
+    }
+}
+
+impl SettingsPreset<EnhancedMapPreset> for EnhancedMapSettings {
+    fn get(key: &EnhancedMapPreset) -> Self {
+        match *key {
+            EnhancedMapPreset::No => EnhancedMapSettings {
+                preset: Some("No".to_string()),
+                blue_doors: EnhancedMapLevel::Hidden,
+                gray_doors: EnhancedMapLevel::Hidden,
+                ammo_doors: EnhancedMapLevel::Hidden,
+                beam_doors: EnhancedMapLevel::Hidden,
+                heat: EnhancedMapLevel::Hidden,
+                water: EnhancedMapLevel::Hidden,
+                lava: EnhancedMapLevel::Hidden,
+                acid: EnhancedMapLevel::Hidden,
+                walls: EnhancedMapWalls::Vanilla,
+                objectives: EnhancedMapOther::Vanilla,
+                map_station: EnhancedMapOther::Vanilla,
+                refill_station: EnhancedMapOther::Vanilla
+            },
+            EnhancedMapPreset::Yes => EnhancedMapSettings {
+                preset: Some("Yes".to_string()),
+                blue_doors: EnhancedMapLevel::Visible,
+                gray_doors: EnhancedMapLevel::Visible,
+                ammo_doors: EnhancedMapLevel::Visible,
+                beam_doors: EnhancedMapLevel::Visible,
+                heat: EnhancedMapLevel::Visible,
+                water: EnhancedMapLevel::Visible,
+                lava: EnhancedMapLevel::Visible,
+                acid: EnhancedMapLevel::Visible,
+                walls: EnhancedMapWalls::Enhanced,
+                objectives: EnhancedMapOther::Icon,
+                map_station: EnhancedMapOther::Icon,
+                refill_station: EnhancedMapOther::Icon
+            }
+        }
+    }
+}
+
+impl SettingsGen for EnhancedMapLevel {
+    fn generate<S: Into<String>>(&mut self, label: S, ui: &mut egui::Ui) {
+        ui.label(label.into());
+        ui.selectable_value(self, Self::Hidden, "Hidden");
+        ui.selectable_value(self, Self::Visible, "Visible");
+        ui.end_row();
+    }
+}
+
+impl SettingsGen for EnhancedMapOther {
+    fn generate<S: Into<String>>(&mut self, label: S, ui: &mut egui::Ui) {
+        ui.label(label.into());
+        ui.selectable_value(self, Self::Vanilla, "Vanilla");
+        ui.selectable_value(self, Self::Icon, "Icon");
+        ui.end_row();
+    }
+}
+
+impl SettingsGen for EnhancedMapWalls {
+    fn generate<S: Into<String>>(&mut self, label: S, ui: &mut egui::Ui) {
+        ui.label(label.into());
+        ui.selectable_value(self, Self::Vanilla, "Vanilla");
+        ui.selectable_value(self, Self::Enhanced, "Enhanced");
+        ui.end_row();
+    }
+}
+
+// GENERATOR FOR CrashFixes
+
+#[derive(VariantArray, PartialEq)]
+enum CrashFixPreset {
+    Crash, Death, Warn, Silent
+}
+
+impl ToString for CrashFixPreset {
+    fn to_string(&self) -> String {
+        match *self {
+            Self::Crash => "Crash",
+            Self::Death => "Death",
+            Self::Warn => "Warn",
+            Self::Silent => "Silent"
+        }.to_string()
+    }
+}
+
+impl SettingsPreset<CrashFixPreset> for CrashFixes {
+    fn get(key: &CrashFixPreset) -> Self {
+        match *key {
+            CrashFixPreset::Crash => Self::from_preset(CrashFixesPreset::Crash),
+            CrashFixPreset::Death => Self::from_preset(CrashFixesPreset::Death),
+            CrashFixPreset::Warn => Self::from_preset(CrashFixesPreset::Warn),
+            CrashFixPreset::Silent => Self::from_preset(CrashFixesPreset::Silent),
+        }
+    }
+}
+
+impl SettingsGen for FixMode {
+    fn generate<S: Into<String>>(&mut self, label: S, ui: &mut egui::Ui) {
+        ui.label(label.into());
+        ui.selectable_value(self, Self::Crash, "Crash");
+        ui.selectable_value(self, Self::Death, "Death");
+        ui.selectable_value(self, Self::Warn, "Warn");
+        ui.selectable_value(self, Self::Silent, "Silent");
+        ui.end_row();
     }
 }

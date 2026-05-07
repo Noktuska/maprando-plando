@@ -2,209 +2,8 @@ use std::path::Path;
 
 use anyhow::{anyhow, Result};
 use egui::{Color32, Context};
-use maprando::customize::{mosaic::MosaicTheme, samus_sprite::SamusSpriteCategory, ControllerButton, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, ItemDotChange, MusicSettings, PaletteTheme, ShakingSetting, TileTheme};
-use serde::{Deserialize, Serialize};
-
-#[derive(Serialize, Deserialize, PartialEq, Eq, Clone, Copy)]
-pub enum CustomControllerButton {
-    Left,
-    Right,
-    Up,
-    Down,
-    X,
-    Y,
-    A,
-    B,
-    L,
-    R,
-    Select,
-    Start,
-}
-
-impl CustomControllerButton {
-    fn convert(&self) -> ControllerButton {
-        use ControllerButton::*;
-        match self {
-            CustomControllerButton::Left => Left,
-            CustomControllerButton::Right => Right,
-            CustomControllerButton::Up => Up,
-            CustomControllerButton::Down => Down,
-            CustomControllerButton::X => X,
-            CustomControllerButton::Y => Y,
-            CustomControllerButton::A => A,
-            CustomControllerButton::B => B,
-            CustomControllerButton::L => L,
-            CustomControllerButton::R => R,
-            CustomControllerButton::Select => Select,
-            CustomControllerButton::Start => Start,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-pub struct CustomControllerConfig {
-    pub shot: CustomControllerButton,
-    pub jump: CustomControllerButton,
-    pub dash: CustomControllerButton,
-    pub item_select: CustomControllerButton,
-    pub item_cancel: CustomControllerButton,
-    pub angle_up: CustomControllerButton,
-    pub angle_down: CustomControllerButton,
-    pub spin_lock_buttons: Vec<CustomControllerButton>,
-    pub quick_reload_buttons: Vec<CustomControllerButton>,
-    pub moonwalk: bool,
-}
-
-impl CustomControllerConfig {
-    fn default() -> Self {
-        use CustomControllerButton::*;
-        CustomControllerConfig {
-            shot: X,
-            jump: A,
-            dash: B,
-            item_select: Select,
-            item_cancel: Y,
-            angle_up: R,
-            angle_down: L,
-            spin_lock_buttons: vec![X, L, R, Up],
-            quick_reload_buttons: vec![L, R, Select, Start],
-            moonwalk: false
-        }
-    }
-
-    fn is_valid(&self) -> bool {
-        let mut vec = vec![];
-        vec.push(self.shot as usize);
-        vec.push(self.jump as usize);
-        vec.push(self.dash as usize);
-        vec.push(self.item_cancel as usize);
-        vec.push(self.item_select as usize);
-        vec.push(self.angle_down as usize);
-        vec.push(self.angle_up as usize);
-        vec.sort();
-        vec.dedup();
-        vec.len() == 7
-    }
-
-    fn to_controller_config(&self) -> ControllerConfig {
-        ControllerConfig {
-            shot: self.shot.convert(),
-            jump: self.jump.convert(),
-            dash: self.dash.convert(),
-            item_select: self.item_select.convert(),
-            item_cancel: self.item_cancel.convert(),
-            angle_up: self.angle_up.convert(),
-            angle_down: self.angle_down.convert(),
-            spin_lock_buttons: self.spin_lock_buttons.iter().map(|x| x.convert()).collect(),
-            quick_reload_buttons: self.quick_reload_buttons.iter().map(|x| x.convert()).collect(),
-            moonwalk: self.moonwalk
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-pub struct Customization {
-    pub samus_sprite: String,
-    pub etank_color: [f32; 3],
-    pub item_dot_change: usize,
-    pub transition_letters: bool,
-    pub reserve_hud_style: bool,
-    pub vanilla_screw_attack_animation: bool,
-    pub palette_theme: usize,
-    pub tile_theme: usize,
-    pub door_theme: usize,
-    pub music: usize,
-    pub disable_beeping: bool,
-    pub shaking: usize,
-    pub flashing: usize,
-    pub room_names: bool,
-    pub controller_config: CustomControllerConfig,
-}
-
-impl Default for Customization {
-    fn default() -> Self {
-        Customization {
-            samus_sprite: "samus_vanilla".to_string(),
-            etank_color: [0xDE as f32 / 255.0, 0x38 as f32 / 255.0, 0x94 as f32 / 255.0],
-            item_dot_change: 0,
-            transition_letters: true,
-            reserve_hud_style: true,
-            vanilla_screw_attack_animation: false,
-            palette_theme: 0,
-            tile_theme: 0,
-            door_theme: 0,
-            music: 0,
-            disable_beeping: false,
-            shaking: 1,
-            flashing: 1,
-            room_names: true,
-            controller_config: CustomControllerConfig::default()
-        }
-    }
-}
-
-impl Customization {
-    fn to_settings(&self, themes: &[MosaicTheme]) -> CustomizeSettings {
-        let etank_color = Some((
-            (self.etank_color[0] * 31.0) as u8,
-            (self.etank_color[1] * 31.0) as u8,
-            (self.etank_color[2] * 31.0) as u8
-        ));
-
-        let item_dot_change = match self.item_dot_change {
-            0 => ItemDotChange::Fade,
-            _ => ItemDotChange::Disappear
-        };
-        let palette_theme = match self.palette_theme {
-            1 => PaletteTheme::AreaThemed,
-            _ => PaletteTheme::Vanilla
-        };
-        let tile_theme = match self.tile_theme {
-            0 => TileTheme::Vanilla,
-            1 => TileTheme::AreaThemed,
-            2 => TileTheme::Scrambled,
-            i => {
-                let idx = i - 3;
-                TileTheme::Constant(themes[idx].name.clone())
-            }
-        };
-        let door_theme = match self.door_theme {
-            1 => DoorTheme::Alternate,
-            _ => DoorTheme::Vanilla
-        };
-        let music = match self.music {
-            1 => MusicSettings::Disabled,
-            _ => MusicSettings::AreaThemed
-        };
-        let shaking = match self.shaking {
-            1 => ShakingSetting::Reduced,
-            2 => ShakingSetting::Disabled,
-            _ => ShakingSetting::Vanilla
-        };
-        let flashing = match self.flashing {
-            1 => FlashingSetting::Reduced,
-            _ => FlashingSetting::Vanilla
-        };
-
-        CustomizeSettings {
-            samus_sprite: Some(self.samus_sprite.clone()),
-            etank_color,
-            item_dot_change,
-            transition_letters: self.transition_letters,
-            reserve_hud_style: self.reserve_hud_style,
-            vanilla_screw_attack_animation: self.vanilla_screw_attack_animation,
-            palette_theme,
-            tile_theme,
-            door_theme,
-            music,
-            disable_beeping: self.disable_beeping,
-            shaking,
-            flashing,
-            room_names: self.room_names,
-            controller_config: self.controller_config.to_controller_config()
-        }
-    }
-}
+use hashbrown::HashSet;
+use maprando::customize::{ControllerButton, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, ItemDotChange, MapTheme, MusicSettings, PaletteTheme, ShakingSetting, StatuesHallwayAudio, StatuesHallwayTiling, TileTheme, mosaic::MosaicTheme, samus_sprite::SamusSpriteCategory};
 
 pub enum SettingsCustomizeResult {
     Idle, Cancel, Apply, Error(String)
@@ -213,7 +12,7 @@ pub enum SettingsCustomizeResult {
 pub struct SettingsCustomize {
     pub open: bool,
 
-    pub customization: Customization,
+    pub customization: CustomizeSettings,
 
     pub samus_sprite_categories: Vec<SamusSpriteCategory>,
     pub mosaic_themes: Vec<MosaicTheme>
@@ -248,14 +47,10 @@ impl SettingsCustomize {
 
         Ok(Self {
             open: false,
-            customization: Customization::default(),
+            customization: CustomizeSettings::default(),
             samus_sprite_categories: samus_sprites,
             mosaic_themes
         })
-    }
-
-    pub fn get_settings(&self) -> CustomizeSettings {
-        self.customization.to_settings(&self.mosaic_themes)
     }
 
     pub fn draw_customization_window(&mut self, ctx: &Context) -> SettingsCustomizeResult {
@@ -269,7 +64,7 @@ impl SettingsCustomize {
 
             egui::Grid::new("grid_customize").num_columns(2).striped(true).with_row_color(move |row, _| {
                 let diff = Color32::from_rgb(115, 36, 36);
-                let def = Customization::default();
+                let def = CustomizeSettings::default();
                 if vec![
                     false, false,
                     clone.door_theme != def.door_theme,
@@ -299,45 +94,51 @@ impl SettingsCustomize {
                 None
             }).show(ui, |ui| {
                 ui.label("Samus sprite");
-                egui::ComboBox::from_id_salt("combo_customize").selected_text(&self.customization.samus_sprite).show_ui(ui, |ui| {
+                egui::ComboBox::from_id_salt("combo_customize").selected_text(self.customization.samus_sprite.as_ref().unwrap_or(&String::default())).show_ui(ui, |ui| {
                     for category in &self.samus_sprite_categories {
                         for sprite in &category.sprites {
-                            ui.selectable_value(&mut self.customization.samus_sprite, sprite.name.clone(), sprite.display_name.clone());
+                            ui.selectable_value(&mut self.customization.samus_sprite, Some(sprite.name.clone()), sprite.display_name.clone());
                         }
                     }
                 });
                 ui.end_row();
 
                 ui.label("Energy tank color");
-                ui.color_edit_button_rgb(&mut self.customization.etank_color);
+                let mut etank_color = if let Some((r, g, b)) = self.customization.etank_color {
+                    [r as f32 / 31.0, g as f32 / 31.0, b as f32 / 31.0]
+                } else {
+                    [0xDE as f32 / 255.0, 0x38 as f32 / 255.0, 0x94 as f32 / 255.0]
+                };
+                ui.color_edit_button_rgb(&mut etank_color);
+                self.customization.etank_color = Some(((etank_color[0] * 31.0) as u8, (etank_color[1] * 31.0) as u8, (etank_color[2] * 31.0) as u8));
                 ui.end_row();
 
                 ui.label("Door colors");
                 ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.customization.door_theme, 0, "Vanilla");
-                    ui.selectable_value(&mut self.customization.door_theme, 1, "Alternate");
+                    ui.selectable_value(&mut self.customization.door_theme, DoorTheme::Vanilla, "Vanilla");
+                    ui.selectable_value(&mut self.customization.door_theme, DoorTheme::Alternate, "Alternate");
                 });
                 ui.end_row();
 
                 ui.label("Music");
                 ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.customization.music, 0, "On");
-                    ui.selectable_value(&mut self.customization.music, 1, "Off");
+                    ui.selectable_value(&mut self.customization.music, MusicSettings::AreaThemed, "On");
+                    ui.selectable_value(&mut self.customization.music, MusicSettings::Disabled, "Off");
                 });
                 ui.end_row();
 
                 ui.label("Screen shaking");
                 ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.customization.shaking, 0, "Vanilla");
-                    ui.selectable_value(&mut self.customization.shaking, 1, "Reduced");
-                    ui.selectable_value(&mut self.customization.shaking, 2, "Disabled");
+                    ui.selectable_value(&mut self.customization.shaking, ShakingSetting::Vanilla, "Vanilla");
+                    ui.selectable_value(&mut self.customization.shaking, ShakingSetting::Reduced, "Reduced");
+                    ui.selectable_value(&mut self.customization.shaking, ShakingSetting::Disabled, "Disabled");
                 });
                 ui.end_row();
 
                 ui.label("Screen flashing");
                 ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.customization.flashing, 0, "Vanilla");
-                    ui.selectable_value(&mut self.customization.flashing, 1, "Reduced");
+                    ui.selectable_value(&mut self.customization.flashing, FlashingSetting::Vanilla, "Vanilla");
+                    ui.selectable_value(&mut self.customization.flashing, FlashingSetting::Reduced, "Reduced");
                 });
                 ui.end_row();
 
@@ -353,17 +154,26 @@ impl SettingsCustomize {
 
                 ui.label("Room palettes");
                 ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.customization.palette_theme, 0, "Vanilla");
-                    ui.selectable_value(&mut self.customization.palette_theme, 1, "Area-themed");
+                    ui.selectable_value(&mut self.customization.palette_theme, PaletteTheme::Vanilla, "Vanilla");
+                    ui.selectable_value(&mut self.customization.palette_theme, PaletteTheme::AreaThemed, "Area-themed");
                 });
                 ui.end_row();
 
                 ui.label("Tile theme");
+                let cur_tile_theme = match &self.customization.tile_theme {
+                    TileTheme::Vanilla => "Vanilla".to_string(),
+                    TileTheme::AreaThemed => "Area-themed".to_string(),
+                    TileTheme::Scrambled => "Scrambled".to_string(),
+                    TileTheme::Constant(v) => v.clone()
+                };
                 let mut tile_theme_strs: Vec<String> = vec!["Vanilla", "Area-themed", "Scrambled"].iter().map(|x| x.to_string()).collect();
                 self.mosaic_themes.iter().for_each(|x| tile_theme_strs.push(x.display_name.clone()));
-                egui::ComboBox::from_id_salt("combo_customize_tile").selected_text(&tile_theme_strs[self.customization.tile_theme]).show_ui(ui, |ui| {
-                    for (i, theme) in tile_theme_strs.iter().enumerate() {
-                        ui.selectable_value(&mut self.customization.tile_theme, i, theme);
+                egui::ComboBox::from_id_salt("combo_customize_tile").selected_text(&cur_tile_theme).show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.customization.tile_theme, TileTheme::Vanilla, "Vanilla");
+                    ui.selectable_value(&mut self.customization.tile_theme, TileTheme::AreaThemed, "Area-themed");
+                    ui.selectable_value(&mut self.customization.tile_theme, TileTheme::Scrambled, "Scrambled");
+                    for theme in &self.mosaic_themes {
+                        ui.selectable_value(&mut self.customization.tile_theme, TileTheme::Constant(theme.name.clone()), &theme.display_name);
                     }
                 });
                 ui.end_row();
@@ -382,8 +192,80 @@ impl SettingsCustomize {
                 });
                 ui.end_row();
 
-                use CustomControllerButton::*;
-                const VALUES: [CustomControllerButton; 12] = [X, Y, A, B, L, R, Select, Start, Up, Down, Left, Right];
+                ui.label("Room names");
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.customization.room_names, false, "Off");
+                    ui.selectable_value(&mut self.customization.room_names, true, "On");
+                });
+                ui.end_row();
+                
+                ui.separator();
+                ui.end_row();
+
+                ui.label("Map theme");
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.customization.map_theme, MapTheme::Light, "Light");
+                    ui.selectable_value(&mut self.customization.map_theme, MapTheme::Dark, "Dark");
+                });
+                ui.end_row();
+
+                ui.label("Item dots after collection");
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.customization.item_dot_change, ItemDotChange::Stay, "Stay");
+                    ui.selectable_value(&mut self.customization.item_dot_change, ItemDotChange::Fade, "Fade");
+                    ui.selectable_value(&mut self.customization.item_dot_change, ItemDotChange::Disappear, "Disappear");
+                });
+                ui.end_row();
+
+                ui.label("Area transition markers");
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.customization.transition_letters, false, "Arrows");
+                    ui.selectable_value(&mut self.customization.transition_letters, true, "Letters");
+                });
+                ui.end_row();
+
+                ui.label("Boss room icons");
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.customization.boss_icons, false, "Disabled");
+                    ui.selectable_value(&mut self.customization.boss_icons, true, "Enabled");
+                });
+                ui.end_row();
+
+                ui.label("Miniboss room icons");
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.customization.miniboss_icons, false, "Disabled");
+                    ui.selectable_value(&mut self.customization.miniboss_icons, true, "Enabled");
+                });
+                ui.end_row();
+
+                ui.label("Save room icons");
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.customization.save_icons, false, "Disabled");
+                    ui.selectable_value(&mut self.customization.save_icons, true, "Enabled");
+                });
+                ui.end_row();
+
+                ui.label("Statues Hallway tiling");
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.customization.statues_hallway_tiling, StatuesHallwayTiling::Disabled, "Disabled");
+                    ui.selectable_value(&mut self.customization.statues_hallway_tiling, StatuesHallwayTiling::Default, "Default");
+                    ui.selectable_value(&mut self.customization.statues_hallway_tiling, StatuesHallwayTiling::Enabled, "Enabled");
+                });
+                ui.end_row();
+
+                ui.label("Statues Hallway audio");
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.customization.statues_hallway_audio, StatuesHallwayAudio::Disabled, "Disabled");
+                    ui.selectable_value(&mut self.customization.statues_hallway_audio, StatuesHallwayAudio::Enabled, "Enabled");
+                    ui.selectable_value(&mut self.customization.statues_hallway_audio, StatuesHallwayAudio::Louder, "Louder");
+                });
+                ui.end_row();
+
+                ui.separator();
+                ui.end_row();
+
+                use ControllerButton::*;
+                const VALUES: [ControllerButton; 12] = [X, Y, A, B, L, R, Select, Start, Up, Down, Left, Right];
                 const STRINGS: [&str; 12] = ["X", "Y", "A", "B", "L", "R", "Select", "Start", "Up", "Down", "Left", "Right"];
                 let config = &mut self.customization.controller_config;
 
@@ -484,7 +366,7 @@ impl SettingsCustomize {
                 ui.end_row();
 
                 while ui.button("Patch ROM").clicked() {
-                    if !self.customization.controller_config.is_valid() {
+                    if !is_controls_valid(&self.customization.controller_config) {
                         result = SettingsCustomizeResult::Error("Controller config is invalid".to_string());
                         break;
                     }
@@ -498,6 +380,18 @@ impl SettingsCustomize {
 
         result
     }
+}
+
+fn is_controls_valid(config: &ControllerConfig) -> bool {
+    let mut set = HashSet::new();
+    set.insert(config.shot as usize);
+    set.insert(config.jump as usize);
+    set.insert(config.dash as usize);
+    set.insert(config.item_cancel as usize);
+    set.insert(config.item_select as usize);
+    set.insert(config.angle_down as usize);
+    set.insert(config.angle_up as usize);
+    set.iter().count() == 7
 }
 
 fn load_samus_sprites() -> Result<Vec<SamusSpriteCategory>> {
