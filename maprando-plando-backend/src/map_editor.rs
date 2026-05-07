@@ -48,6 +48,10 @@ impl Rect {
             None
         }
     }
+
+    pub fn contains(&self, x: i32, y: i32) -> bool {
+        x >= self.left && x < self.right() && y >= self.top && y < self.bottom()
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -622,10 +626,19 @@ impl MapEditor {
             if other_door.direction != dir_opposite || other_door.subtype != door.subtype {
                 continue;
             }
-            let (room_x, room_y) = self.map.rooms[other_room_idx];
-            let door_x = other_door.x + room_x;
-            let door_y = other_door.y + room_y;
-            if door_x != target_x || door_y != target_y {
+            let (other_room_x, other_room_y) = self.map.rooms[other_room_idx];
+            let other_door_x = other_door.x + other_room_x;
+            let other_door_y = other_door.y + other_room_y;
+
+            // Allow for long distance elevators
+            if door.subtype == "elevator" {
+                if other_door_x != target_x { // x-coordinate has to match exactly
+                    continue;
+                }
+                if (door.direction == "down" && other_door_y < target_y) || (door.direction == "up" && other_door_y > target_y) { // y-coordinate has to be in the correct direction
+                    continue;
+                }
+            } else if other_door_x != target_x || other_door_y != target_y {
                 continue;
             }
 
