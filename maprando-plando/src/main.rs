@@ -1,7 +1,7 @@
 use crate::{benchmark::{Benchmark, BenchmarkResult}, egui_sfml::DrawInput, input_state::KeyState, layout::{Layout, SidebarPanel, WindowType, hotkey_settings::Keybind, map_editor_ui::MapEditorUi, room_search::RoomSearch, settings_customize::{SettingsCustomize, SettingsCustomizeResult}, settings_logic::LogicCustomization, upload::Upload}, spoiler_type::{SpoilerType, SpoilerTypeTracker}, texture_manager::TextureManager, update::{Asset, Release}};
 use anyhow::{anyhow, bail, Result};
 use egui::{self, Color32, Context, CursorIcon, FontDefinitions, Id, RichText, Sense, Ui, Vec2, style::default_text_styles};
-use egui_sfml::{SfEgui, UserTexSource};
+use egui_sfml::SfEgui;
 use hashbrown::{HashMap, HashSet};
 use input_state::MouseState;
 use maprando::{customize::CustomizeSettings, difficulty::{get_full_global, get_link_difficulty_length}, map_repository::MapRepository, patch::Rom, preset::PresetData, settings::{Objective, RandomizerSettings, try_upgrade_settings}, spoiler_log::SpoilerRouteEntry};
@@ -349,6 +349,10 @@ fn load_textures(game_data: &GameData, texture_manager: &mut TextureManager) -> 
         let tex = graphics::Texture::from_image(&img_items, source_rect)?;
         texture_manager.add_texture(placeable, tex)?;
     }
+    // Add Chozo orb as nothing item
+    let source_rect = IntRect::new(tex_items.size().x as i32 - tex_item_width, 0, tex_item_width, tex_items.size().y as i32);
+    let tex = graphics::Texture::from_image(&img_items, source_rect)?;
+    texture_manager.add_texture(Item::Nothing, tex)?;
     // Add Door textures to egui
     for i in 0..10 {
         let source_rect = IntRect::new(i * img_door_width, 0, img_door_width, img_doors.size().y as i32);
@@ -1397,8 +1401,6 @@ impl PlandoApp {
         let mut window = window_context.window;
         let font_default = window_context.font_default;
         let mut sfegui = window_context.sfegui;
-
-        let tex_items = graphics::Texture::from_file("../visualizer/items.png").unwrap();
 
         let mut tex_grid = graphics::Texture::from_file("../visualizer/grid.png").unwrap();
         tex_grid.set_repeated(true);
@@ -3396,6 +3398,9 @@ impl PlandoApp {
                             }
                             if let Some(x) = entry.flash_suit {
                                 ui.label(format!("Flash suit: {x}"));
+                            }
+                            if let Some(x) = entry.blue_suit {
+                                ui.label(format!("Blue suit: {x}"));
                             }
                         });
                     }
