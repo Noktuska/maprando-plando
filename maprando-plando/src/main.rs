@@ -71,7 +71,9 @@ struct Settings {
     hotkeys: HashMap<usize, Vec<Key>>,
     fps_cap: u32,
     animation_speed: f32,
-    rebuild_steps: bool
+    rebuild_steps: bool,
+    autosave_interval: usize,
+    autosave_slots: usize
 }
 
 impl Default for Settings {
@@ -94,7 +96,9 @@ impl Default for Settings {
             hotkeys: HashMap::new(),
             fps_cap: 60,
             animation_speed: 1.0,
-            rebuild_steps: false
+            rebuild_steps: false,
+            autosave_interval: 150,
+            autosave_slots: 3
         }
     }
 }
@@ -1422,6 +1426,8 @@ impl PlandoApp {
 
         let mut frame_counter = 0;
         let mut start = Instant::now();
+        let mut autosave_timer = Instant::now();
+        let mut autosave_slot = 0;
         let mut fps_text = graphics::Text::new("FPS: 0", &font_default, 12);
 
         let mut last_spoiler_step = self.spoiler_step;
@@ -1629,6 +1635,15 @@ impl PlandoApp {
             version_text.set_position((2.0, window.size().y as f32 - 14.0));
             window.draw(&version_text);
             self.benchmark.split("Draw version string");
+
+            // Autosave
+            if self.settings.autosave_slots > 0 && (Instant::now() - autosave_timer).as_secs() as usize >= self.settings.autosave_interval {
+                let path_str = format!("../../autosave_{autosave_slot}.json");
+                let path = Path::new(&path_str);
+                let _ = self.save_seed(path);
+                autosave_slot = (autosave_slot + 1) % self.settings.autosave_slots;
+                autosave_timer = Instant::now();
+            }
 
             frame_counter += 1;
             if (Instant::now() - start).as_secs_f32() >= 1.0 {
@@ -3590,6 +3605,16 @@ impl PlandoApp {
 
                 ui.label("Animation Speed").on_hover_text("Speeds up or slows down animations, such as the selection box. This has no performance impact");
                 let slider = egui::Slider::new(&mut self.settings.animation_speed, 0.01..=10.0);
+                ui.add(slider);
+                ui.end_row();
+
+                ui.label("Autosave interval").on_hover_text("Time in seconds between autosaves");
+                let slider = egui::Slider::new(&mut self.settings.autosave_interval, 1..=3600);
+                ui.add(slider);
+                ui.end_row();
+
+                ui.label("Autosave slots").on_hover_text("The number of autosave slots to rotate through. 0 to disable autosaving");
+                let slider = egui::Slider::new(&mut self.settings.autosave_slots, 0..=10);
                 ui.add(slider);
                 ui.end_row();
             });
