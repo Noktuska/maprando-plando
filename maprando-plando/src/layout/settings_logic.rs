@@ -1,11 +1,11 @@
 use std::{io::Write, path::Path};
 
 use anyhow::Result;
-use egui::Context;
+use egui::{CollapsingHeader, Context, SelectableLabel};
 use hashbrown::HashMap;
-use maprando::{preset::PresetData, settings::{CrashFixes, CrashFixesPreset, DisableETankSetting, DoorLocksSize, ETankRefill, EnemyDrops, EnhancedMapLevel, EnhancedMapOther, EnhancedMapSettings, EnhancedMapWalls, Fanfares, FixMode, InitialMapRevealSettings, ItemMarkers, MapRevealLevel, MapStationReveal, MotherBrainFight, ObjectiveScreen, ObjectiveSetting, RandomizerSettings, SaveAnimals, SpeedBooster, WallJump}};
+use maprando::{preset::PresetData, settings::{CrashFixes, CrashFixesPreset, DisableETankSetting, DoorLocksSize, ETankRefill, EnemyDrops, EnhancedMapLevel, EnhancedMapOther, EnhancedMapSettings, EnhancedMapWalls, Fanfares, FixMode, InitialMapRevealSettings, ItemCount, ItemMarkers, MapRevealLevel, MapStationReveal, MotherBrainFight, ObjectiveScreen, ObjectiveSetting, RandomizerSettings, SaveAnimals, SpeedBooster, WallJump}};
 use maprando_game::Item;
-use maprando_plando_backend::Placeable;
+use maprando_plando_backend::{ITEM_VALUES, Placeable};
 use strum_macros::VariantArray;
 
 use crate::layout::settings_gen::{SettingsGen, SettingsPreset};
@@ -32,7 +32,7 @@ pub struct LogicCustomization {
 
 impl LogicCustomization {
     pub fn new(preset_data: PresetData, settings: RandomizerSettings) -> Self {
-        Self {
+        let mut res = Self {
             open: false,
             preset_data,
             cur_settings: settings.clone(),
@@ -43,15 +43,33 @@ impl LogicCustomization {
             use_custom_escape_time: false,
             custom_escape_time: 0,
             creator_name: "Plando".to_string()
-        }
+        };
+        res.init_starting_items();
+        res
     }
 
     pub fn load(&mut self, settings: RandomizerSettings, custom_escape_time: Option<usize>, creator_name: String) {
         self.settings = settings.clone();
         self.cur_settings = settings;
+        self.init_starting_items();
         self.custom_escape_time = custom_escape_time.unwrap_or(0);
         self.use_custom_escape_time = custom_escape_time.is_some();
         self.creator_name = creator_name;
+    }
+
+    fn init_starting_items(&mut self) {
+        let mut items = ITEM_VALUES.to_vec();
+        items.retain(|item| {
+            self.settings.item_progression_settings.starting_items.iter().find(|starting_item| starting_item.item == *item).is_none() && *item != Item::Nothing
+        });
+        for item in items {
+            let item_count = ItemCount {
+                item,
+                count: 0
+            };
+            self.settings.item_progression_settings.starting_items.push(item_count.clone());
+            self.cur_settings.item_progression_settings.starting_items.push(item_count);
+        }
     }
 
     pub fn draw_window(&mut self, ctx: &Context) -> Result<bool> {
@@ -141,8 +159,24 @@ impl LogicCustomization {
                     for item in &mut self.cur_settings.item_progression_settings.starting_items {
                         ui.label(Placeable::from_item(item.item).map(|item| item.to_string()).unwrap_or_default());
                         if item.item.is_unique() {
-                            ui.selectable_value(&mut item.count, 0, "No");
-                            ui.selectable_value(&mut item.count, 1, "Yes");
+                            let enabled = (self.cur_settings.other_settings.speed_booster == SpeedBooster::Vanilla && item.item == Item::SpeedBooster)
+                                || (self.cur_settings.other_settings.speed_booster == SpeedBooster::Split && (item.item == Item::BlueBooster || item.item == Item::SparkBooster))
+                                || (item.item != Item::SpeedBooster && item.item != Item::BlueBooster && item.item != Item::SparkBooster);
+                            if !enabled {
+                                item.count = 0;
+                            }
+                            let value_no = SelectableLabel::new(item.count == 0, "No");
+                            let value_yes = SelectableLabel::new(item.count == 1, "Yes");
+                            let mut resp_no = ui.add_enabled(enabled, value_no);
+                            if resp_no.clicked() && resp_no.enabled() && item.count != 0 {
+                                item.count = 0;
+                                resp_no.mark_changed();
+                            }
+                            let mut resp_yes = ui.add_enabled(enabled, value_yes);
+                            if resp_yes.clicked() && resp_yes.enabled() && item.count != 1 {
+                                item.count = 1;
+                                resp_yes.mark_changed();
+                            }
                         } else {
                             ui.add(egui::DragValue::new(&mut item.count).speed(0.1).range(0..=match item.item {
                                 Item::ETank => 14,
@@ -425,7 +459,7 @@ impl LogicCustomization {
                 enhanced_map_settings.generate("Enhanced map", ui);
                 ui.end_row();
 
-                ui.collapsing("Custom", |ui| {
+                CollapsingHeader::new("Custom").id_salt("c_enhanced_map").show(ui, |ui| {
                     egui::Grid::new("grid_qol_enhanced_map").num_columns(3).show(ui, |ui| {
                         enhanced_map_settings.blue_doors.generate("Blue doors", ui);
                         enhanced_map_settings.gray_doors.generate("Blue doors", ui);
@@ -441,12 +475,13 @@ impl LogicCustomization {
                         enhanced_map_settings.refill_station.generate("Blue doors", ui);
                     })
                 });
+                ui.end_row();
 
                 let s = &mut qol.initial_map_reveal_settings;
                 s.generate("Initial Map Reveal", ui);
                 ui.end_row();
 
-                ui.collapsing("Custom", |ui| {
+                CollapsingHeader::new("Custom").id_salt("c_map_reveal").show(ui, |ui| {
                     egui::Grid::new("grid_qol_map_reveal").num_columns(4).show(ui, |ui| {
                         s.map_stations.generate("Map stations", ui);
                         s.save_stations.generate("Save stations", ui);
@@ -525,6 +560,7 @@ impl LogicCustomization {
                 qol.acid_chozo.generate("Acid Chozo usable without Space Jump", ui);
                 qol.remove_climb_lava.generate("Lava removed from climb", ui);
                 qol.crash_fixes.generate("Crash fixes", ui);
+                ui.end_row();
 
                 ui.collapsing("Custom", |ui| {
                     egui::Grid::new("grid_qol_crash_fixes").num_columns(5).show(ui, |ui| {
@@ -535,6 +571,7 @@ impl LogicCustomization {
                         qol.crash_fixes.sprite_overflow.generate("Sprite overflow bug", ui);
                     })
                 });
+                ui.end_row();
 
                 qol.fix_blue_echoes.generate("Fix blue speed echoes", ui);
             });
