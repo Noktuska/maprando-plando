@@ -999,8 +999,9 @@ impl PlandoApp {
         }
 
         tx.send(Progress::LoadPlandoCore).await?;
+        let toilet_path = Path::new("../patches/mosaic");
         let map = maps_vanilla.get_map_batch(0, &game_data)?.first().ok_or(anyhow!("Vanilla Map Repository is empty"))?.clone();
-        let mut plando = Plando::new(Arc::new(game_data), map.clone(), &preset_data)?;
+        let mut plando = Plando::new(Arc::new(game_data), map.clone(), &preset_data, toilet_path)?;
 
         let preset = match &settings.last_logic_preset {
             Some(preset) => preset.clone(),

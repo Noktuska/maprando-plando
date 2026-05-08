@@ -240,10 +240,10 @@ pub struct Plando {
 }
 
 impl Plando {
-    pub fn new(game_data: Arc<GameData>, map: Map, preset_data: &PresetData) -> Result<Self> {
+    pub fn new(game_data: Arc<GameData>, map: Map, preset_data: &PresetData, toilet_path: &Path) -> Result<Self> {
         let mut rng = rand::rngs::StdRng::from_entropy();
 
-        let map_editor = MapEditor::new(map, game_data.clone());
+        let map_editor = MapEditor::new(map, game_data.clone(), toilet_path);
 
         let randomizer_settings = preset_data.default_preset.clone();
         let objectives = maprando::randomize::get_objectives(&randomizer_settings, Some(map_editor.get_map()), &game_data, &mut rng);

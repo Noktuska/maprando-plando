@@ -304,21 +304,20 @@ impl MapEditor {
     pub const AREA_MAX_TRANSITIONS: usize = 23;
     pub const MAP_MAX_SIZE: usize = 72;
 
-    pub fn new(map: Map, game_data: Arc<GameData>) -> MapEditor {
+    pub fn new(map: Map, game_data: Arc<GameData>, toilet_path: &Path) -> MapEditor {
         MapEditor {
             map,
             game_data,
-            toilet_patch_map: Self::generate_toilet_map().unwrap_or_default(),
+            toilet_patch_map: Self::generate_toilet_map(toilet_path).unwrap_or_default(),
             error_list: Vec::new(),
             invalid_doors: HashSet::new(),
         }
     }
 
-    fn generate_toilet_map() -> Result<HashMap<usize, Vec<(i32, i32)>>> {
+    fn generate_toilet_map(toilet_path: &Path) -> Result<HashMap<usize, Vec<(i32, i32)>>> {
         let mut toilet_patch_map: HashMap<usize, Vec<(i32, i32)>> = HashMap::new();
 
-        let dir_path = Path::new("../patches/mosaic");
-        let patches: Vec<_> = std::fs::read_dir(dir_path)?.filter_map(|path| {
+        let patches: Vec<_> = std::fs::read_dir(toilet_path)?.filter_map(|path| {
             path.ok().map(|path| path.file_name().into_string().unwrap().trim_end_matches(".bps").to_string())
         }).collect();
 
