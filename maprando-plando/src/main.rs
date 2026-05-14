@@ -3126,7 +3126,7 @@ impl PlandoApp {
                     });
                     ui.label("PREVIOUSLY COLLECTIBLE");
 
-                    let mut collectible_items = [0; ITEM_VALUES.len() - 1];
+                    let mut collectible_items = [0; ITEM_VALUES.len()];
                     let mut collectible_flags = vec![false; self.plando.game_data.flag_ids.len()];
                     for prev_step in 0..self.spoiler_step {
                         let prev_details = &spoiler_log.details[prev_step];
@@ -3166,9 +3166,9 @@ impl PlandoApp {
                     });
                     // Render Major Items
                     ui.horizontal(|ui| {
-                        for i in 0..ITEM_VALUES.len() - 1 {
+                        for i in 0..ITEM_VALUES.len() {
                             let item = ITEM_VALUES[i];
-                            if collectible_items[i] == 0 || minor_items.contains(&item) {
+                            if item == Item::Nothing || collectible_items[i] == 0 || minor_items.contains(&item) {
                                 continue;
                             }
                             let placeable = Placeable::from_item(item).unwrap();
