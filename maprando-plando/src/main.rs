@@ -2565,7 +2565,7 @@ impl PlandoApp {
             let mut spr_flag = graphics::Sprite::with_texture(tex);
             spr_flag.set_origin(Vector2f::new(tex_w / 2.0, tex_h / 2.0));
             spr_flag.set_position(flag_position * 8.0);
-            spr_flag.set_scale(8.0 / tex_w);
+            spr_flag.set_scale(6.0 / tex_w);
 
             if spr_flag.global_bounds().contains2(self.local_mouse_x, self.local_mouse_y) && self.is_mouse_public {
                 spr_flag.scale(1.3);
