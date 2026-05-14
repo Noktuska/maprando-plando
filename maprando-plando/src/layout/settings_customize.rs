@@ -18,6 +18,28 @@ pub struct SettingsCustomize {
     pub mosaic_themes: Vec<MosaicTheme>
 }
 
+fn get_default_settings() -> CustomizeSettings {
+    CustomizeSettings {
+        shaking: ShakingSetting::Reduced,
+        flashing: FlashingSetting::Reduced,
+        tile_theme: TileTheme::Vanilla,
+        vanilla_screw_attack_animation: false,
+        controller_config: ControllerConfig {
+            shot: ControllerButton::X,
+            jump: ControllerButton::A,
+            dash: ControllerButton::B,
+            item_select: ControllerButton::Select,
+            item_cancel: ControllerButton::Y,
+            angle_up: ControllerButton::R,
+            angle_down: ControllerButton::L,
+            spin_lock_buttons: vec![ControllerButton::L, ControllerButton::R, ControllerButton::Up, ControllerButton::X],
+            quick_reload_buttons: vec![ControllerButton::L, ControllerButton::R, ControllerButton::Select, ControllerButton::Start],
+            moonwalk: true
+        },
+        ..Default::default()
+    }
+}
+
 impl SettingsCustomize {
     pub fn new() -> Result<Self> {
         let samus_sprites = load_samus_sprites()?;
@@ -64,7 +86,7 @@ impl SettingsCustomize {
 
             egui::Grid::new("grid_customize").num_columns(2).striped(true).with_row_color(move |row, _| {
                 let diff = Color32::from_rgb(115, 36, 36);
-                let def = CustomizeSettings::default();
+                let def = get_default_settings();
                 if vec![
                     false, false,
                     clone.door_theme != def.door_theme,
@@ -77,6 +99,17 @@ impl SettingsCustomize {
                     clone.tile_theme != def.tile_theme,
                     clone.reserve_hud_style != def.reserve_hud_style,
                     clone.vanilla_screw_attack_animation != def.vanilla_screw_attack_animation,
+                    clone.room_names != def.room_names,
+                    false,
+                    clone.map_theme != def.map_theme,
+                    clone.item_dot_change != def.item_dot_change,
+                    clone.transition_letters != def.transition_letters,
+                    clone.boss_icons != def.boss_icons,
+                    clone.miniboss_icons != def.miniboss_icons,
+                    clone.save_icons != def.save_icons,
+                    clone.statues_hallway_tiling != def.statues_hallway_tiling,
+                    clone.statues_hallway_audio != def.statues_hallway_audio,
+                    false,
                     clone.controller_config.shot != def.controller_config.shot,
                     clone.controller_config.jump != def.controller_config.jump,
                     clone.controller_config.dash != def.controller_config.dash,
