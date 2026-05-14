@@ -63,7 +63,8 @@ impl SeedData {
         plando.item_locations = self.item_placements;
         for item in &plando.item_locations {
             if *item != Item::Nothing {
-                plando.placed_item_count[*item as usize + Placeable::ETank as usize] += 1;
+                let placeable = Placeable::from_item(*item)?;
+                plando.placed_item_count[placeable as usize] += 1;
             }
         }
         
