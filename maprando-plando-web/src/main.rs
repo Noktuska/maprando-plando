@@ -5,10 +5,11 @@ use actix_web::{App, HttpResponse, HttpServer, Responder, Scope, error::{ErrorBa
 use anyhow::Context;
 use askama::Template;
 use log::info;
-use maprando::{customize::{ControllerButton, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, MapTheme, MusicSettings, PaletteTheme, ShakingSetting, StatuesHallwayAudio, StatuesHallwayTiling, TileTheme, mosaic::MosaicTheme, parse_controller_button, samus_sprite::SamusSpriteCategory}, difficulty::{get_full_global, get_link_difficulty_length}, patch::Rom, preset::PresetData, randomize::Randomization, settings::{AreaAssignmentBaseOrder, AreaAssignmentPreset, CrashFixesPreset, DisableETankSetting, DoorLocksSize, ETankRefill, EnemyDrops, Fanfares, ItemMarkers, MapStationReveal, MotherBrainFight, ObjectiveSetting, RandomizerSettings, SpeedBooster, WallJump, get_objective_groups}, spoiler_map};
+use maprando::{customize::{ControllerButton, ControllerConfig, CustomizeSettings, DoorTheme, FlashingSetting, MapTheme, MusicSettings, PaletteTheme, ShakingSetting, StatuesHallwayAudio, StatuesHallwayTiling, TileTheme, mosaic::MosaicTheme, parse_controller_button, samus_sprite::SamusSpriteCategory}, difficulty::{get_full_global, get_link_difficulty_length}, patch::Rom, preset::PresetData, randomize::Randomization, settings::{AreaAssignmentBaseOrder, AreaAssignmentPreset, CrashFixesPreset, DisableETankSetting, DoorLocksSize, ETankRefill, EnemyDrops, Fanfares, ItemMarkers, MapStationReveal, MotherBrainFight, ObjectiveSetting, RandomizerSettings, SpeedBooster, WallJump, get_objective_groups, try_upgrade_settings}, spoiler_map};
 use maprando_game::GameData;
 use maprando_plando_backend::{seed_data::SeedData, Plando};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::file_storage::{FileStorage, Seed, SeedFile};
 
@@ -78,7 +79,8 @@ async fn upload_seed(data: web::Data<AppData>, MultipartForm(form): MultipartFor
     info!("Seed data parsed, creator: {}", seed_data.creator_name);
 
     info!("Constructing plando instance");
-    let mut plando = Plando::new(data.game_data.clone(), seed_data.map.clone(), &data.preset_data).map_err(
+    let toilet_path = Path::new("./data/patches/mosaic");
+    let mut plando = Plando::new(data.game_data.clone(), seed_data.map.clone(), &data.preset_data, toilet_path).map_err(
         |err| ErrorInternalServerError(format!("Failed to construct plando instance: {err}"))
     )?;
     info!("Loading seed into plando instance");
@@ -335,7 +337,15 @@ async fn get_seed(data: web::Data<AppData>, seed_id: web::Path<String>) -> Resul
     let seed_file = String::from_utf8(seed_file_bytes).map_err(
         |_| ErrorInternalServerError("Failed to read seed file: Contains non-utf-8 characters")
     )?;
-    let r_data: FileRandomization = serde_json::from_str(&seed_file).map_err(
+    let mut seed_json: Value = serde_json::from_str(&seed_file).unwrap();
+    if let Value::Object(r_data) = &mut seed_json {
+        if let Some(settings) = r_data.get_mut("settings") {
+            let r_str = serde_json::to_string(settings).unwrap();
+            let (new_settings_str, _) = try_upgrade_settings(r_str, &data.preset_data, false).unwrap();
+            *settings = serde_json::from_str(&new_settings_str).unwrap();
+        }
+    }
+    let r_data: FileRandomization = serde_json::from_value(seed_json).map_err(
         |_| ErrorInternalServerError("Seed file is not valid JSON")
     )?;
 
@@ -567,7 +577,15 @@ async fn patch_seed(data: web::Data<AppData>, seed_id: web::Path<String>, Multip
     let seed_file = String::from_utf8(seed_file_bytes).map_err(
         |_| ErrorInternalServerError("Failed to read seed file: Contains non-utf-8 characters")
     )?;
-    let r_data: FileRandomization = serde_json::from_str(&seed_file).map_err(
+    let mut seed_json: Value = serde_json::from_str(&seed_file).unwrap();
+    if let Value::Object(r_data) = &mut seed_json {
+        if let Some(settings) = r_data.get_mut("settings") {
+            let r_str = serde_json::to_string(settings).unwrap();
+            let (new_settings_str, _) = try_upgrade_settings(r_str, &data.preset_data, false).unwrap();
+            *settings = serde_json::from_str(&new_settings_str).unwrap();
+        }
+    }
+    let r_data: FileRandomization = serde_json::from_value(seed_json).map_err(
         |_| ErrorInternalServerError("Seed file is not valid JSON")
     )?;
 
