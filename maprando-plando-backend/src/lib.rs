@@ -645,7 +645,9 @@ impl Plando {
         } else if placeable == Placeable::WalljumpBoots {
             return if self.randomizer_settings.other_settings.wall_jump == WallJump::Vanilla { Some(0) } else { Some(1) };
         } else if placeable == Placeable::BlueBooster || placeable == Placeable::SparkBooster {
-            return if self.randomizer_settings.other_settings.speed_booster == SpeedBooster::Vanilla { Some(0) } else { Some(1) };
+            let item = placeable.to_item().unwrap();
+            return if self.randomizer_settings.other_settings.speed_booster == SpeedBooster::Vanilla
+                || self.randomizer_settings.item_progression_settings.starting_items.iter().find(|x| x.item == item).is_some_and(|v| v.count > 0) { Some(0) } else { Some(1) };
         } else if placeable < Placeable::DoorMissile {
             let count = match placeable {
                 Placeable::Missile => return None,
