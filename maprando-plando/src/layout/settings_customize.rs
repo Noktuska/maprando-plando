@@ -13,6 +13,7 @@ pub struct SettingsCustomize {
     pub open: bool,
 
     pub customization: CustomizeSettings,
+    etank_color: [f32; 3],
 
     pub samus_sprite_categories: Vec<SamusSpriteCategory>,
     pub mosaic_themes: Vec<MosaicTheme>
@@ -70,6 +71,7 @@ impl SettingsCustomize {
         Ok(Self {
             open: false,
             customization: CustomizeSettings::default(),
+            etank_color: [0xDE as f32 / 255.0, 0x38 as f32 / 255.0, 0x94 as f32 / 255.0],
             samus_sprite_categories: samus_sprites,
             mosaic_themes
         })
@@ -137,13 +139,8 @@ impl SettingsCustomize {
                 ui.end_row();
 
                 ui.label("Energy tank color");
-                let mut etank_color = if let Some((r, g, b)) = self.customization.etank_color {
-                    [r as f32 / 31.0, g as f32 / 31.0, b as f32 / 31.0]
-                } else {
-                    [0xDE as f32 / 255.0, 0x38 as f32 / 255.0, 0x94 as f32 / 255.0]
-                };
-                ui.color_edit_button_rgb(&mut etank_color);
-                self.customization.etank_color = Some(((etank_color[0] * 31.0) as u8, (etank_color[1] * 31.0) as u8, (etank_color[2] * 31.0) as u8));
+                ui.color_edit_button_rgb(&mut self.etank_color);
+                self.customization.etank_color = Some(((self.etank_color[0] * 31.0) as u8, (self.etank_color[1] * 31.0) as u8, (self.etank_color[2] * 31.0) as u8));
                 ui.end_row();
 
                 ui.label("Door colors");
