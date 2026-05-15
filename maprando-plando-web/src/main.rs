@@ -1,7 +1,7 @@
 use std::{collections::HashMap, path::Path, sync::Arc};
 
 use actix_multipart::form::{self, MultipartForm, MultipartFormConfig, bytes::Bytes, text::Text};
-use actix_web::{App, HttpResponse, HttpServer, Responder, Scope, error::{ErrorBadRequest, ErrorInternalServerError, ErrorNotFound}, get, http::header::{self, ContentDisposition, DispositionParam, DispositionType}, middleware::Logger, post, web};
+use actix_web::{App, HttpResponse, HttpServer, Responder, Scope, error::{ErrorBadRequest, ErrorInternalServerError, ErrorNotFound}, get, http::header::{self, ContentDisposition, DispositionParam, DispositionType}, middleware::{Compress, Logger}, post, web};
 use anyhow::Context;
 use askama::Template;
 use log::info;
@@ -790,6 +790,7 @@ async fn main() -> anyhow::Result<()> {
 
     HttpServer::new(move || {
         App::new()
+            .wrap(Compress::default())
             .app_data(data.clone())
             .app_data(MultipartFormConfig::default()
                 .total_limit(4_000_000)
